@@ -1,0 +1,78 @@
+-- 061_quote_manual_linebreaks.sql
+-- 名言68件の改行をユーザーが手動確定 (2026-07-31、Docs/quote_linebreaks_2026_07_31.txt が原本)。
+-- text_jp/text_en に改行 (\n) を焼き込む。クライアントの QuoteTypography.displayLines は
+-- \n 入りテキストをそのまま尊重し、フォントは最長行に自動フィットする設計済み。
+-- 一部は改行と同時に文言も微修正されている (ユーザー編集)。
+-- 前提: 060 適用済み (未適用でも壊れないが、削除予定の旧名言は更新されないだけ)。冪等。
+BEGIN;
+
+UPDATE public.quotes SET text_jp = E'目標に向けて動く\n衝動が湧いたら、\n5秒以内に身体を動かせ。\nさもないと脳がそれを殺す。', text_en = E'If you have an impulse to act on a goal, you must physically move within 5 seconds or your brain will kill it.' WHERE id = '049fd4d6-b443-419b-b0e5-1b0b74b90411';
+UPDATE public.quotes SET text_jp = E'失敗しても後悔しないと\n分かっていた。\n後悔することがあるとするならば、\nそれは挑戦しないことだとも\n分かっていた。', text_en = E'I knew that if I failed I wouldn''t regret that. But I knew the one thing I might regret is not trying.' WHERE id = '08e8a8a6-f9c0-46fd-931f-02208d00c297';
+UPDATE public.quotes SET text_jp = E'ワークライフバランスを\n主張する奴がいるが、\n成功者はそんなこと気にしない。\n俺はこれまでの人生で何かに\n全力で取り組んだことを\n一度も後悔したことがない。', text_en = E'There are people who push work-life balance, but those who have succeeded don''t care. I''ve never regretted trying harder at anything ever.' WHERE id = '0c01c57d-c859-46b3-9778-15b9e8a31c85';
+UPDATE public.quotes SET text_jp = E'お前が探している\n夢を叶える魔法は、\nお前が避けている\n作業の中にある。', text_en = E'The magic you''re looking for is in the work you''re avoiding.' WHERE id = '0d071cf7-2704-48d2-9fac-50e3736fb9f2';
+UPDATE public.quotes SET text_jp = E'いつもと\n同じことをすれば、\nいつもと\n同じ結果しか得られない。', text_en = E'If you do what you''ve always done, you''ll get what you''ve always gotten.' WHERE id = '0d0c9369-3048-44fe-bc18-daaa6106b8ac';
+UPDATE public.quotes SET text_jp = E'何かを始めるのに最初から\n優れている必要はない。\nただ、優れた人になるにはまず\n始めなければならない。', text_en = E'You don''t have to be great to get started, but you have to get started to be great.' WHERE id = '19d2a16a-5041-4cf6-8370-66c6f76c364b';
+UPDATE public.quotes SET text_jp = E'唯一の達成不可能な目標は、\n始めない目標だ。', text_en = E'The only impossible journey is the one you never begin.' WHERE id = '227c491c-9405-4d8d-950b-95feebfe5af2';
+UPDATE public.quotes SET text_jp = E'状況が悪くなった時、\n強いやつから動き出す。', text_en = E'When the going gets tough, the tough get going.' WHERE id = '251aa1a5-f330-4936-b9fb-e57e9c44edf2';
+UPDATE public.quotes SET text_jp = E'人は何かを始めるには\n完璧な条件を待つ。\nでも実際は、\n始めることこそが条件を\n完璧にする。', text_en = E'People think they need a perfect condition to start, when in reality, starting is the perfect condition.' WHERE id = '256fc2df-51ac-46f6-84b3-d932cf089011';
+UPDATE public.quotes SET text_jp = E'お前の夢は、お前の規律の\n向こう側にある。', text_en = E'Your dream is on the other side of your discipline.' WHERE id = '268d098f-407a-4c4f-aaf1-e031ee6fec39';
+UPDATE public.quotes SET text_jp = E'誰も見ていない時に\n自分との約束を守れるかが、\n他人が自分を見た時に\n何者であるかを決める。', text_en = E'The commitments we keep to ourselves when no one is watching shape who we become when everyone is.' WHERE id = '34bc9224-c85c-419c-a835-1e053db8d496';
+UPDATE public.quotes SET text_jp = E'最高のリベンジは、\n圧倒的な成功だ。', text_en = E'The best revenge is massive success.' WHERE id = '3685cbb5-3ddd-4111-98f5-cfd7d0a61242';
+UPDATE public.quotes SET text_jp = E'自分に起こることは\nコントロールできない。\nだが、それに対する自分の態度は\nコントロールできる。', text_en = E'You cannot control what happens to you, but you can control your attitude toward what happens to you.' WHERE id = '3a870831-3eb0-47d1-9615-cfb9cb6f22c5';
+UPDATE public.quotes SET text_jp = E'辛い日々こそが、\nいつか、自分が何を\n乗り越えてきたかという\n「物語」を\n作ってくれるんだ。\n辛い日々がなければ、\nその物語はもっとずっと\nダサいものになってしまう。', text_en = E'The bad days create the story that I''m one day going to tell myself about what I got through. Without the bad days, the story would be way more lame.' WHERE id = '3ba69dbc-2d8e-4259-955e-15d3d9f552a2';
+UPDATE public.quotes SET text_jp = E'新しいことを恐れるな。\n覚えておけ、\n方舟を造ったのは素人で、\nタイタニックを造ったのはプロだ。', text_en = E'Never be afraid to do something new. Remember, amateurs built the ark; professionals built the Titanic.' WHERE id = '42e4b239-ab56-4820-80ff-23672164214b';
+UPDATE public.quotes SET text_jp = E'人は「やりたくないこと」を\nやることで\nストレスを感じるわけではない。\n「やるべきだとわかっていること」を\nやらないこと\nによってストレスを感じる。', text_en = E'Stress primarily comes from not taking action over something you can have some control over.' WHERE id = '43cf15c2-609a-48ac-b6ff-5a4f2337c5f8';
+UPDATE public.quotes SET text_jp = E'規律とは、\n嫌いなことをまるで\n愛してるかのようにやることだ。', text_en = E'Discipline is doing what you hate to do, but doing it like you love it.' WHERE id = '47823530-7eb8-499e-84a1-fd9c3f8a524a';
+UPDATE public.quotes SET text_jp = E'自分で人生の計画を\n立てなければ、\n他人の人生の計画に\n組み込まれることになるだろう。\nそしてその計画は\nお前のために\n用意されていると思うか？\nそんなことはない。', text_en = E'If you don''t design your own life plan, chances are you''ll fall into someone else''s plan. And guess what they have planned for you? Not much.' WHERE id = '47f2911a-a4a8-4d1e-94d5-00c553f62f52';
+UPDATE public.quotes SET text_jp = E'苦しい選択をし続ければ\n人生は楽になる。\n楽な選択をし続ければ\n人生は苦しくなる。', text_en = E'Hard choices, easy life. Easy choices, hard life.' WHERE id = '4b541940-eb5d-4181-ab3f-096c78c443a5';
+UPDATE public.quotes SET text_jp = E'夢が叶って欲しいと\n願う者がいて、\n叶うことを\n夢見る者もいる。\nそして夢を叶わせようとする\n者がいる。', text_en = E'Some people want it to happen, some wish it would happen, others make it happen.' WHERE id = '4d22842c-5b9e-4741-b283-402a805eef86';
+UPDATE public.quotes SET text_jp = E'仕事はまだ終わっていない。', text_en = E'The job''s not finished.' WHERE id = '550e8400-e29b-41d4-a716-446655440001';
+UPDATE public.quotes SET text_jp = E'才能が努力を怠れば、\n努力が才能を超える。', text_en = E'Hard work beats talent when talent doesn''t work hard.' WHERE id = '550e8400-e29b-41d4-a716-446655440002';
+UPDATE public.quotes SET text_jp = E'止まりさえしなければ、\nどんなに\nゆっくりでも構わない。', text_en = E'It does not matter how slowly you go as long as you do not stop.' WHERE id = '550e8400-e29b-41d4-a716-446655440004';
+UPDATE public.quotes SET text_jp = E'昨日、お前は明日やると\n言った。', text_en = E'Yesterday you said tomorrow.' WHERE id = '550e8400-e29b-41d4-a716-446655440005';
+UPDATE public.quotes SET text_jp = E'あなたの時間は\n限られている。\n他人の人生を生きて\n無駄にするな。', text_en = E'Your time is limited, don''t waste it living someone else''s life.' WHERE id = '550e8400-e29b-41d4-a716-446655440010';
+UPDATE public.quotes SET text_jp = E'規律とは、「今」最も\n欲しいものと、\n「人生」で最も欲しいものを\n天秤にかけることである。', text_en = E'Discipline is choosing between what you want now and what you want most.' WHERE id = '550e8400-e29b-41d4-a716-446655440016';
+UPDATE public.quotes SET text_jp = E'規律の痛みは、\n後悔の痛みよりはるかに軽い。', text_en = E'The pain of discipline is far less than the pain of regret.' WHERE id = '550e8400-e29b-41d4-a716-446655440017';
+UPDATE public.quotes SET text_jp = E'忙しくするのではなく、\n生産的であることに集中しろ。', text_en = E'Focus on being productive instead of busy.' WHERE id = '550e8400-e29b-41d4-a716-446655440018';
+UPDATE public.quotes SET text_jp = E'やる気なんて\n永遠に湧いてこない。\nモチベーションはゴミだ。', text_en = E'You will never feel like it. Motivation is garbage.' WHERE id = '5544df6f-a850-49e7-964b-5ab4e16814b3';
+UPDATE public.quotes SET text_jp = E'快適な場所から出ろ。\n新しいことに挑戦して\n気まずさや不快さを\n感じる覚悟があってこそ、\n人は成長する。', text_en = E'Move out of your comfort zone. You can only grow if you are willing to feel awkward and uncomfortable when you try something new.' WHERE id = '571475a2-7452-4d0d-a387-8f41bc32e134';
+UPDATE public.quotes SET text_jp = E'成功者はあらゆる失敗に\nチャンスを見出す。\n凡人はあらゆるチャンスに\n失敗を見出す。\nどちらも正しい。\nだが、金持ちになるのは\n片方だけだ。', text_en = E'Successful people see opportunity in every failure. Normal people see failure in every opportunity. Both are right. Only one gets rich.' WHERE id = '57a93d30-1e50-4943-b8f1-b2de048d9a25';
+UPDATE public.quotes SET text_jp = E'「もっと楽ならいいのに」なんて\n思うな。\n「もっと強くなりたい」と思え。', text_en = E'Don''t wish it were easier. Wish you were better.' WHERE id = '58b0ee33-d271-4da4-9f83-9ca002377318';
+UPDATE public.quotes SET text_jp = E'一度サボるのは\nただの失敗。\n二度サボるのは\n新しい習慣の始まりだ。', text_en = E'Missing once is an accident. Missing twice is the start of a new habit.' WHERE id = '5ab1d664-dbb5-4995-a1a1-2a428740db96';
+UPDATE public.quotes SET text_jp = E'足りないより、\n行き過ぎる方がマシだ。', text_en = E'I''d rather go too far than not far enough.' WHERE id = '5baeb2de-74da-4e47-88d5-36bbf6acc03a';
+UPDATE public.quotes SET text_jp = E'お前の夢はお前の気分なんて\n気にしない。\n起きて仕事を始めろ。', text_en = E'Your dreams don''t care how you feel. Get up and go to work.' WHERE id = '604fa0c7-6ddd-4839-a97e-f2120f2d15f5';
+UPDATE public.quotes SET text_jp = E'挑戦のない人生は\nただの存在だ。\nただ存在するな、生きろ。', text_en = E'Life without challenges is just existence. Don''t just exist — go live.' WHERE id = '630cd84c-2bfe-4488-9e52-e0c66929093c';
+UPDATE public.quotes SET text_jp = E'5、4、3、2、1\n— やれ。\n脳に止められる前に動け。', text_en = E'5, 4, 3, 2, 1 — go. Don''t let your brain talk you out of it.' WHERE id = '66b8e16c-d763-469d-bad1-898df9cf162b';
+UPDATE public.quotes SET text_jp = E'お前はたった一つの決断で、\n全く違う人生を\n手に入れられる。', text_en = E'You''re one decision away from a completely different life.' WHERE id = '6f21188d-369c-4c53-b9df-09adc8c8c30c';
+UPDATE public.quotes SET text_jp = E'一時の感情で\n永遠の決断をするな。', text_en = E'Don''t make a permanent decision based on a temporary emotion.' WHERE id = '7578a51b-abb0-48af-ac4e-53295a4ff100';
+UPDATE public.quotes SET text_jp = E'みんなはお前の手にした\n物には嫉妬する。\nだが、\nそれをどう手に入れたか、\nその方法は\n誰もやりたがらない。', text_en = E'Everyone is jealous of what you''ve got. No one is jealous of how you got it.' WHERE id = '769563b9-abc4-4b2f-a6e8-2650f514b4b3';
+UPDATE public.quotes SET text_jp = E'人は1日でやったことを\n過大評価し、\n1年でやり続けることを\n過小評価する。', text_en = E'Most people overestimate what they can do in a day and underestimate what they can do in a year.' WHERE id = '79e7d6bc-b81f-4e55-94a8-e40b46d71c35';
+UPDATE public.quotes SET text_jp = E'失敗していないなら、\n挑戦すらしていない。', text_en = E'If you don''t fail, you''re not even trying.' WHERE id = '81d49d6e-d36c-43ee-979c-6649a36c6629';
+UPDATE public.quotes SET text_jp = E'うまくいくと\n分かっていることだけをやると\n決めた瞬間、\nお前は数多くの\nチャンスを取りこぼす。', text_en = E'If you decide that you''re going to do only the things you know are going to work, you''re going to leave a lot of opportunity on the table.' WHERE id = '8e278d91-dd8a-40d1-bd10-d96fbbc20e1f';
+UPDATE public.quotes SET text_jp = E'木を植えるのに最も良い時は\n20年前だった。\n次に良いのは今だ。', text_en = E'The best time to plant a tree was twenty years ago. The second best time is now.' WHERE id = '8fcf0653-c1f7-4943-a084-7c4dd493dbe4';
+UPDATE public.quotes SET text_jp = E'未来のお前が、\n思い出を通して\n今のお前を見ている。', text_en = E'Your future self is watching you right now through your memories.' WHERE id = '9414cd4e-4396-48e5-990f-0c433d1888ad';
+UPDATE public.quotes SET text_jp = E'今自分のやっていることが\n目標に近づいていないことなら、\nそれは目標から自分を遠ざけている。\nどんな行動も\n現状維持では済まされない。', text_en = E'If what you''re doing isn''t moving you toward your goals, it''s moving you away. Nothing is neutral.' WHERE id = '952b0c25-b38d-4563-99bf-537a8dfd5899';
+UPDATE public.quotes SET text_jp = E'あまりに快適で生ぬるい\n人生を送って本当の自分の\nポテンシャルを知らないまま\n人生を終えることになるぞ。', text_en = E'You are in danger of living a life so comfortable and soft that you will die without ever realizing your true potential.' WHERE id = '9f97aee9-4c60-4ca8-9676-0192fa3dcc75';
+UPDATE public.quotes SET text_jp = E'毎日モチベーションが出ると思うな。\n出ないと思え。\nモチベーションに頼るな。\n規律に頼れ。', text_en = E'Don''t expect to be motivated every day to get out there and make things happen. You won''t be. Don''t count on motivation. Count on discipline.' WHERE id = 'aaa12abd-2b7d-47db-ba8e-91f7da62c51c';
+UPDATE public.quotes SET text_jp = E'呼吸したいのと同じくらい\n成功したくなったとき、\nお前は成功する。', text_en = E'When you want to succeed as bad as you want to breathe, then you''ll be successful.' WHERE id = 'ab7a8e88-925a-4f24-bda2-277b53ed1c6e';
+UPDATE public.quotes SET text_jp = E'訓練で汗を流すほど、\n戦場で血を流す量は減る。', text_en = E'The more you sweat in training, the less you bleed in combat.' WHERE id = 'c26676c6-711f-4f0b-9729-9239a35af1a5';
+UPDATE public.quotes SET text_jp = E'継続が「成功」を\n保証するわけじゃない。\nだが、継続しないことは\n「成功しないこと」を\n保証する。', text_en = E'Consistency doesn''t guarantee that you''ll be successful. But not being consistent guarantees that you won''t be successful.' WHERE id = 'c8043186-ce10-4a87-8931-3777da6f938a';
+UPDATE public.quotes SET text_jp = E'勝者は勝利に集中する。\n敗者は勝者に集中する。', text_en = E'Winners focus on winning. Losers focus on winners.' WHERE id = 'ca148cc6-1002-4071-8a67-02dd59af9808';
+UPDATE public.quotes SET text_jp = E'成功とは、\nいくつかの単純な規律を\n毎日実践すること、\nそれだけだ。', text_en = E'Success is nothing more than a few simple disciplines, practiced every day.' WHERE id = 'cf0ee24e-06c7-4701-b20c-58d60783478b';
+UPDATE public.quotes SET text_jp = E'本当にやりたいなら、\n勝率が低くてもやる。', text_en = E'When something is important enough, you do it even if the odds are not in your favor.' WHERE id = 'd43d499a-da9d-4c5b-b258-8683a4039dd9';
+UPDATE public.quotes SET text_jp = E'規律は毎日の\n小さな選択から始まる。', text_en = E'Discipline starts with the small choices you make every single day.' WHERE id = 'd676110a-1326-417c-bfac-7ddf0610df9d';
+UPDATE public.quotes SET text_jp = E'自分が映画の主人公だと\n想像してみろ。\nそしてその映画は\n今始まった。\n主人公なら今、何をする？', text_en = E'Imagine you''re the hero of a movie. And the movie begins now. What would the hero do right now?' WHERE id = 'dbcb4b45-4117-4f3e-aa06-6b6811f95042';
+UPDATE public.quotes SET text_jp = E'今の友人関係を\n卒業しつつあるあの\nもどかしさは孤独じゃない。\nお前の野心が、\n平凡なグループに対する\n所属欲求より\n大きな声で語り始めただけだ。', text_en = E'That annoying feeling when you realize you''ve outgrown your social circle isn''t loneliness — it''s your ambition finally speaking louder than your need to belong.' WHERE id = 'dc77bebb-38fb-422b-9776-e7898ba2c120';
+UPDATE public.quotes SET text_jp = E'月を狙え。\n外しても、\n星々の中に\n着陸できる。', text_en = E'Shoot for the moon. Even if you miss, you''ll land among the stars.' WHERE id = 'deb480d9-b80f-40a8-b858-4ac3d68973c4';
+UPDATE public.quotes SET text_jp = E'望んだものは手に入らない。\n専念したものが手に入る。', text_en = E'You don''t get what you want. You get what you''re committed to.' WHERE id = 'df5d5b4e-0791-442e-b2fe-b57f009d484c';
+UPDATE public.quotes SET text_jp = E'一日を支配するか、一日に\n支配されるか、どちらか選べ。', text_en = E'Either you run the day, or the day runs you.' WHERE id = 'e64662dd-44ca-4357-8ac1-f2f3b31520ad';
+UPDATE public.quotes SET text_jp = E'最良の場合は勝つ。\n最悪の場合？\nそんなことはどうでもいい。', text_en = E'Best case you win. Worst case it won''t matter.' WHERE id = 'ea141cf2-cd86-43ab-8b7f-276537731721';
+UPDATE public.quotes SET text_jp = E'疲れた時に\n止まるんじゃない。\n終わった時に止まれ。', text_en = E'Don''t stop when you''re tired. Stop when you''re done.' WHERE id = 'f0f175c6-1658-42d8-97f8-1dc9b4400ff6';
+UPDATE public.quotes SET text_jp = E'規律は世界で\n最も重要なものだ。\nそれなしには何もない。', text_en = E'Discipline is the most important thing in the world. Without it, you have nothing.' WHERE id = 'f191432e-acde-4573-a8ae-ab011931a81c';
+UPDATE public.quotes SET text_jp = E'他人と比べるな。\n昨日の自分と比べろ。', text_en = E'Compare yourself to who you were yesterday, not to who someone else is today.' WHERE id = 'f465c48d-e044-4204-852c-7826d914a628';
+UPDATE public.quotes SET text_jp = E'始めるのに\n一番良かったのは昨日。\n次にいいのは今だ。', text_en = E'The best time to start was yesterday. The next best time is now.' WHERE id = 'fb306959-28b7-4f16-a67a-8e771a08b3cd';
+UPDATE public.quotes SET text_jp = E'正しいタイミングを待つな。\nそんなものは存在しない。', text_en = E'Stop waiting for the right moment. There is no such thing.' WHERE id = 'fbf039a7-80ce-425d-b6b7-19dc406bf6a3';
+UPDATE public.quotes SET text_jp = E'厳しい辛い時期に\n直面しているとき、\n暗い土の中に\n埋められているように\n感じるかもしれない。\nだが本当は芽吹くために\n植えられているだけだ。', text_en = E'Sometimes when you''re in a dark place, you think you''ve been buried. But actually, you''ve been planted.' WHERE id = 'ed40d62a-f15c-4879-984d-af004f11d606';
+UPDATE public.quotes SET text_jp = E'敵に慈悲をかけるのは\n神だけでいい。\n俺は容赦しない。', text_en = E'May God have mercy upon my enemies, because I won''t.' WHERE id = 'bdba9a09-77a0-4b09-9702-b533dcad15de';
+
+COMMIT;

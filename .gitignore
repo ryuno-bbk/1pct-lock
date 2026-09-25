@@ -1,0 +1,33 @@
+# Xcode
+DerivedData/
+build/
+xcuserdata/
+*.xcuserstate
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
+
+# Secrets: never commit these
+.env
+.env.*
+*.p8
+*.p12
+*.mobileprovision
+*.xcconfig
+GoogleService-Info.plist
+
+# Supabase CLI local state
+supabase/.temp/
+Supabase/.temp/
+supabase/.branches/
+Supabase/.branches/
+
+# Archives
+*.ipa
+*.xcarchive
+*.dSYM
+*.dSYM.zip

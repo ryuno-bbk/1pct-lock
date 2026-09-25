@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  App Extension 用プライバシーマニフェスト (2026-08-04 追加)。
+  2026-07-31 の ITMS-91053 対応で 6 ターゲット中この Extension だけ抜けていた
+  (提出前レビューで発見)。
+
+  この Extension は ManagedSettings の store 操作のみで、UserDefaults を含む
+  Required Reason API を一切呼ばない (ShieldConfigurationExtension とは違い
+  App Group の読み書きも無い)。よって NSPrivacyAccessedAPITypes は空。
+  データ収集も行わない (端末外への送信経路を持たない)。
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array/>
+</dict>
+</plist>

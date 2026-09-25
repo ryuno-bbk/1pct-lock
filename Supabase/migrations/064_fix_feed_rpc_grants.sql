@@ -1,0 +1,53 @@
+-- 064_fix_feed_rpc_grants.sql
+--
+-- 🔴 出荷ブロッカーの修正 (2026-07-31 出荷前セキュリティ差分チェックで発見)
+--
+-- 【何が起きていたか】
+-- 063 は fetch_mixed_feed_random(integer) を DROP して、新しいシグネチャ
+-- fetch_mixed_feed_random(integer, text) で作り直している (063:32-34)。
+-- ところが末尾の REVOKE/GRANT の再設定が抜けていた。
+--
+-- PostgreSQL は CREATE FUNCTION 時に暗黙で PUBLIC へ EXECUTE を与えるため
+-- (015_security_audit.sql:136 に同じ記述あり)、063 適用後のこの関数は
+-- **未認証 (anon) から実行可能な状態**になっていた。
+--
+-- 【影響】
+-- アプリバイナリから取れる publishable キーだけで、ログインせずに
+--   POST /rest/v1/rpc/fetch_mixed_feed_random
+-- を叩き、直近30日の全投稿 (本文/タイトル/image_path/author_id/display_name/
+-- avatar_url) を seed を変えながら全件スクレイプできた。
+-- さらに SECURITY DEFINER 下で auth.uid() が NULL になるため、063:154-158 の
+-- ブロック除外サブクエリが空集合となり NOT IN が常に真 =
+-- **ブロック機能ごと無効化された全件**が返っていた。
+-- 加えて本関数は全行に md5() を計算する全走査で、046/047 のレート制限も
+-- かからないため、未認証者が無制限に DB CPU を消費できる状態でもあった。
+--
+-- 【再発防止】
+-- 029:41 に「DROP すると既存の GRANT/REVOKE も消えるため末尾で再設定する」と
+-- 明記されているのに 063 で漏れた。今後 DROP FUNCTION を書いたら、同じファイルの
+-- 末尾に必ず REVOKE/GRANT をセットで書くこと。
+-- 052/054/057/062 は CREATE OR REPLACE のみ (DROP なし) なので権限は維持されており
+-- 影響なし。058/059 は DROP しているが両方とも REVOKE/GRANT を正しく再設定済み。
+-- 052〜063 を横断確認した結果、権限が抜けているのは 063 のこの1本のみ。
+
+-- ---------------------------------------------------------------------------
+-- 修正本体
+-- ---------------------------------------------------------------------------
+REVOKE EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer, text) FROM anon;
+GRANT  EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer, text) TO authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 検証: 実行後にこれを流し、proacl に anon= が無く authenticated=X が有ることを確認する。
+-- 併せて他のフィード系 RPC も同じ状態か見比べること。
+-- ---------------------------------------------------------------------------
+-- SELECT p.proname,
+--        pg_get_function_identity_arguments(p.oid) AS args,
+--        p.proacl
+-- FROM pg_proc p
+-- JOIN pg_namespace n ON n.oid = p.pronamespace
+-- WHERE n.nspname = 'public'
+--   AND p.proname IN ('fetch_mixed_feed_random',
+--                     'fetch_following_feed',
+--                     'fetch_tag_feed')
+-- ORDER BY p.proname;

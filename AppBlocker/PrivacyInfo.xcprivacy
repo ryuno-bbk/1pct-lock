@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  プライバシーマニフェスト (2026-07-31 追加)。
+
+  ⚠️ これが無いと App Store Connect へのアップロード時に ITMS-91053
+  (Missing API declaration) が返り、配信が止まる。本アプリは UserDefaults を
+  Required Reason API として使用しているため申告が必須。
+
+  理由コードの使い分け (Apple 公式定義):
+    CA92.1 = アプリ自身からのみアクセスできる UserDefaults の読み書き
+             (UserDefaults.standard: mainLanguage / hasCompletedOnboarding 等)
+    1C8F.1 = 同一 App Group に属するアプリ/App Extension/App Clip からのみ
+             アクセスできる UserDefaults の読み書き
+             (AppGroupStorage: Shield 用の名言・夢、遮断設定ミラー、
+              ロックセッションのキュー等を Extension と共有している)
+  本アプリは両方を使うため両方を宣言する。
+
+  NSPrivacyCollectedDataTypes は App Store Connect の「App のプライバシー」
+  申告と一致させること。片方だけ更新すると不整合になる。
+  AdMob / RevenueCat / Supabase が収集する分は各 SDK 同梱のマニフェストが
+  申告するため、ここには重複して書かない。
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+				<string>1C8F.1</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array>
+		<!-- Sign in with Apple で取得し Supabase Auth に保管される (中継アドレス含む) -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeEmailAddress</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<!-- users.display_name (ユーザーが自分で入力する表示名。Apple の fullName は要求していない) -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeName</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<!-- アプリ発行のユーザーID (users.id)。RevenueCat の appUserID にも使用 -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeUserID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<!-- 投稿画像 (post-images) / アバター (avatars) -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePhotosorVideos</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<!-- 投稿本文・コメント・夢/目標の宣言文・自己紹介・ハンドル -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherUserContent</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<!-- RevenueCat 経由の購入・更新・解約状態 -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePurchaseHistory</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<!-- いいね/フォロー/投稿の閲覧記録 (post_views) / ロックセッション記録 (block_sessions)。
+		     ProductPersonalization を含めるのは、おすすめフィード (029 のスコアリング) が
+		     各ユーザーの post_views を w_seen ペナルティの信号として並び順を変えているため
+		     = Apple の定義「ユーザに表示される内容をカスタマイズ」に該当する。
+		     ⚠️ ASC の App Privacy 側では、これに加えて AdMob が同種のデータを収集するぶんの
+		     「サードパーティ広告」も選ぶこと (そちらは GoogleMobileAds のマニフェストが宣言) -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeProductInteraction</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+				<string>NSPrivacyCollectedDataTypePurposeProductPersonalization</string>
+			</array>
+		</dict>
+		<!-- オンボーディング診断の回答 (生年月日/性別/自己申告の使用時間/依存年数/流入元)
+		     = user_onboarding_profiles。⚠️ProductPersonalization は入れない —
+		     OnboardingProfileService には push (upsert) しか無く select が存在しないため、
+		     このデータをアプリが読み戻して表示を出し分けている経路は無い (2026-07-31 コードで確認)。
+		     用途は 13歳要件の裏付けとコホート分析に限られる -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherDataTypes</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  App Extension 用プライバシーマニフェスト (2026-07-31 追加)。
+  この Extension は App Group 共有の UserDefaults (AppGroupStorage) のみを使い、
+  UserDefaults.standard は使わない。よって理由は 1C8F.1 のみ
+  (= 同一 App Group のアプリ/Extension からのみアクセスできる情報の読み書き)。
+  データ収集は行わない (端末外への送信経路を持たない) ため
+  NSPrivacyCollectedDataTypes は空。
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>1C8F.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
