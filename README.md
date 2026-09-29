@@ -81,6 +81,31 @@ Supabase/functions/                Edge Functions
 Supabase/seed_quotes.sql           the 68 quotes that ship with the app
 ```
 
+## Where to look in the code
+
+| What | Where |
+|---|---|
+| Block screen that shows your own goal | `ShieldConfigurationExtension/ShieldConfigurationExtension.swift` |
+| Scheduled locks while the app is closed, including the Pro check | `DeviceActivityMonitorExtension/DeviceActivityMonitorExtension.swift` |
+| Unlock methods | `AppBlocker/Core/Models/UnlockChallenge.swift` |
+| Feed unlock and the "Actually, keep working" button | `AppBlocker/Features/BlockMode/Challenges/ScrollChallengeView.swift` |
+| Onboarding Screen Time report (the measured data stays inside the extension) | `UsageReportExtension/TotalActivityReport.swift` |
+| Feed ranking | `Supabase/migrations/076_feed_official_and_lang_exclusive.sql` |
+| Lock time ranking (lists the top 10% only) | `Supabase/migrations/082_block_ranking.sql` |
+| AI moderation: Haiku first, Sonnet only when Haiku is unsure | `Supabase/functions/moderate-post/index.ts`, `Supabase/migrations/055_haiku_cascade.sql`, rubric in `074_ethos_aesthetic_pass.sql` |
+| Daily limits that stop one account from running up the AI bill | `Supabase/migrations/066_cost_attack_hardening.sql` |
+| RevenueCat login with the Supabase user ID | `AppBlocker/Core/Services/PurchaseService.swift` |
+| Paywall, including the trial eligibility check | `AppBlocker/Features/Paywall/ProPaywallView.swift` |
+| RevenueCat webhook that updates `users.is_pro` | `Supabase/functions/revenuecat-webhook/index.ts` |
+| Users cannot set `is_pro` themselves | `protect_users_is_pro()` in `Supabase/migrations/015_security_audit.sql` |
+| Guard against webhooks arriving out of order | `Supabase/migrations/040_revenuecat_event_ordering.sql` |
+
+## What broke, and what changed
+
+- **Buying Pro did not unlock anything (found in sandbox testing, before launch).** The code checked for an entitlement called `pro`, but the one in the RevenueCat dashboard was named `1% Pro`. The purchase went through, nothing unlocked, and the webhook skipped every event without an error. Entitlement IDs cannot be renamed, so the app and the webhook now both use `1% Pro` (`RevenueCatConfig.swift`, `revenuecat-webhook/index.ts`).
+- **Webhooks can arrive out of order.** RevenueCat does not guarantee the order, so a late `EXPIRATION` could arrive after a newer `INITIAL_PURCHASE` and switch Pro off. The database now stores the timestamp of the last event it applied and ignores anything older (`040_revenuecat_event_ordering.sql`).
+- **One account could run up the AI bill.** Every post triggers an AI check, and the first limit was 100 posts a day. It is now 5 posts a day, with separate daily limits for comments, reports and appeals (`066_cost_attack_hardening.sql`, `057_post_limit_5_ethos_stage_quote.sql`).
+
 ## Trying the app
 
 The fastest way is the App Store build: https://apps.apple.com/app/id6792271074. It is iPhone only and supports English and Japanese. The yearly plan includes a 3-day free trial that unlocks all Pro features.
