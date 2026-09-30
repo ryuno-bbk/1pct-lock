@@ -2,13 +2,14 @@
 //  LegalLinks.swift
 //  AppBlocker
 //
-//  利用規約 / プライバシーポリシー / サポート連絡先の定数 (M6/M15/M26 対応、2026-07-22)。
-//  参照箇所: AppleSignInStepView (同意文言) / SettingsListView (About セクション) /
-//  RevenueCatConfig.Legal (ペイウォールの規約・プライバシー行)。
+//  Constants for the terms of service / privacy policy / support contact (for M6/M15/M26,
+//  2026-07-22). Used in: AppleSignInStepView (consent text) / SettingsListView (About section) /
+//  RevenueCatConfig.Legal (terms and privacy rows on the paywall).
 //
-//  2026-07-30 本番公開済み (ソースは LegalSite/、Vercel プロジェクト onepercent-legal)。
-//  文面を変えたいときは LegalSite/ を編集して `vercel deploy --prod` — URL は不変。
-//  英語版は /en/terms・/en/privacy (アプリ内リンクは日本語版に固定、ページ上部で EN 切替可)。
+//  Live in production since 2026-07-30 (source in LegalSite/, Vercel project onepercent-legal).
+//  To change the text, edit LegalSite/ and run `vercel deploy --prod`. The URLs do not change.
+//  English versions are /en/terms and /en/privacy (in-app links are fixed to the Japanese version,
+//  EN can be switched at the top of the page).
 //  Public repository: replace supportEmail with your own support address.
 //
 
@@ -16,16 +17,16 @@ import Foundation
 
 enum LegalLinks {
 
-    /// 利用規約の公開 URL
+    /// Public URL of the terms of service
     static let termsURL = URL(string: "https://onepercent-legal.vercel.app/terms")!
 
-    /// プライバシーポリシーの公開 URL
+    /// Public URL of the privacy policy
     static let privacyURL = URL(string: "https://onepercent-legal.vercel.app/privacy")!
 
-    /// サポート用メールアドレス (設定 > お問い合わせ の mailto: 先)
+    /// Support email address (mailto: target of "設定 > お問い合わせ" ("Settings > Contact"))
     static let supportEmail = "support@example.com"
 
-    /// お問い合わせ行で開く mailto: URL (件名なしのプレーンな新規メール)
+    /// mailto: URL opened from the contact row (a plain new mail with no subject)
     static var supportMailURL: URL? {
         URL(string: "mailto:\(supportEmail)")
     }

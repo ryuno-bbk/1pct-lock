@@ -2,20 +2,21 @@
 //  OnboardingSignature.swift
 //  AppBlocker
 //
-//  署名ステップ (2026-07-17 追加、dream の直後・nameInput の前)。
-//  宣言した目標文をもう一度見せた上で、指で署名させる「儀式」の画面。
-//  旧 CommitmentStepView (OnboardingView.swift に未使用のまま残置) と近い発想だが、
-//  あちらは夢の宣言そのものが未実装だった頃の名残。こちらは夢が既に確定した後に
-//  再度コミットメントを刻ませる位置づけ (サンクコスト強化)。
+//  Signature step (added 2026-07-17, right after dream and before nameInput).
+//  A "ritual" screen that shows the declared goal text again and has the user sign it with a finger.
+//  Similar in idea to the old CommitmentStepView (left unused in OnboardingView.swift), but that one
+//  is a leftover from when the dream declaration itself was not implemented yet. This one is meant to
+//  make the user engrave the commitment again after the dream is already fixed (sunk cost
+//  reinforcement).
 //
 
 import SwiftUI
 
-/// 署名ストローク1本分の点列
+/// Point list for one signature stroke
 private typealias SignatureStroke = [CGPoint]
 
 struct SignatureStepView: View {
-    /// DreamStepView で宣言した目標文。鍵括弧書きで再掲する
+    /// Goal text declared in DreamStepView. Shown again inside quotation brackets
     let dreamText: String
     let onContinue: () -> Void
 
@@ -28,7 +29,8 @@ struct SignatureStepView: View {
         AppLanguage(rawValue: mainLanguageRaw) ?? .english
     }
 
-    /// 1画以上書いていれば true (ストローク確定済み、またはドラッグ中で2点以上動いている)
+    /// true if at least one stroke has been drawn (a finished stroke, or a stroke in progress that has moved
+    /// 2 or more points)
     private var hasSignature: Bool {
         !strokes.isEmpty || currentStroke.count > 1
     }
@@ -37,10 +39,11 @@ struct SignatureStepView: View {
         VStack(spacing: 0) {
             Spacer().frame(height: 72)
 
-            // 2026-07-17 第2FB: 「誓いを立てる」路線をやめ、目標を主役として上に大きく置き、
-            // 指示は素直に「サインしてください」にする (ユーザー指定)
+            // 2026-07-17 feedback round 2: dropped the "make a vow" direction; the goal is the main element, placed
+            // large at the top, and the instruction is simply "please sign" (user-specified)
 
-            // 文言はユーザー添削待ち (「あなたの目標」は Shield / セッション終了画面と同じ語)
+            // Text waiting for user review ("あなたの目標" ("Your goal") is the same word as on the Shield / session
+            // end screen)
             Text(lang == .japanese ? "あなたの目標" : "Your goal")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(AppColors.textTertiary)
@@ -53,7 +56,7 @@ struct SignatureStepView: View {
                 .padding(.horizontal, 28)
                 .padding(.top, 10)
 
-            // 文言はユーザー添削待ち
+            // Text waiting for user review
             Text(lang == .japanese ? "この目標にサインしてください" : "Sign your name to it.")
                 .font(.system(size: 15))
                 .foregroundColor(AppColors.textSecondary)
@@ -67,7 +70,7 @@ struct SignatureStepView: View {
             Spacer()
 
             PrimaryButton(
-                // 2026-07-17 第2FB: サイン路線に戻す // 文言はユーザー添削待ち
+                // 2026-07-17 feedback round 2: back to the signing direction // Text waiting for user review
                 lang == .japanese ? "サインして進む" : "Sign and continue",
                 icon: "checkmark",
                 isDisabled: !hasSignature
@@ -93,7 +96,7 @@ struct SignatureStepView: View {
                 .frame(height: 180)
 
             Canvas { context, size in
-                // ベースライン (署名欄らしさを出す点線)
+                // Baseline (a dotted line to make it look like a signature field)
                 var baseline = Path()
                 let baselineY = size.height - 36
                 baseline.move(to: CGPoint(x: 24, y: baselineY))
@@ -104,7 +107,7 @@ struct SignatureStepView: View {
                     style: StrokeStyle(lineWidth: 1, dash: [4, 4])
                 )
 
-                // 確定済みストローク + 描画中のストローク
+                // Finished strokes + the stroke being drawn
                 for stroke in strokes + [currentStroke] {
                     guard let first = stroke.first else { continue }
                     var path = Path()
@@ -121,8 +124,8 @@ struct SignatureStepView: View {
             }
             .frame(height: 180)
             .contentShape(Rectangle())
-            // minimumDistance: 0 で描き始めの1点目から即座に拾う。親の画面遷移スワイプ等は
-            // このカード領域の外側にしかないため干渉しない
+            // minimumDistance: 0 picks up the very first point immediately. The parent's screen-transition swipe
+            // etc. only exist outside this card area, so they do not interfere
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
@@ -136,9 +139,9 @@ struct SignatureStepView: View {
                     }
             )
             .overlay(alignment: .center) {
-                // 書き始めたら消えるヒント文字
+                // Hint text that disappears once you start writing
                 if !hasSignature {
-                    // 文言はユーザー添削待ち
+                    // Text waiting for user review
                     Text(lang == .japanese ? "ここに指でサイン" : "Sign here with your finger")
                         .font(.system(size: 13))
                         .foregroundColor(AppColors.textTertiary)
@@ -146,13 +149,13 @@ struct SignatureStepView: View {
                 }
             }
 
-            // 書き直す (署名がある時だけ表示)
+            // Redo (shown only when there is a signature)
             if hasSignature {
                 Button {
                     strokes.removeAll()
                     currentStroke = []
                 } label: {
-                    // 文言はユーザー添削待ち
+                    // Text waiting for user review
                     Text(lang == .japanese ? "書き直す" : "Clear")
                         .font(.system(size: 13))
                         .foregroundColor(AppColors.textTertiary)
@@ -160,8 +163,8 @@ struct SignatureStepView: View {
                 .padding(10)
             }
         }
-        // 署名画像そのものの保存はしない (行為そのものが目的の儀式)。
-        // 将来サムネイル等で使いたくなった場合は ImageRenderer(content: signatureCanvas) で
-        // Canvas を書き出せる (DreamStepView 周辺の他の保存処理を参考に)
+        // The signature image itself is not saved (a ritual where the act itself is the purpose).
+        // If we want to use it later for a thumbnail etc., ImageRenderer(content: signatureCanvas) can
+        // export the Canvas (see the other save logic around DreamStepView)
     }
 }

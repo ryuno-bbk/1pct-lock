@@ -2,12 +2,12 @@
 //  SharedQuote.swift
 //  AppBlocker
 //
-//  App Group経由で共有する名言モデル
+//  Quote model shared through the App Group
 //
 
 import Foundation
 
-/// Shield Extensionと共有するための軽量な名言モデル（英語・日本語対応 + 著者プロフィール）
+/// A lightweight quote model for sharing with the Shield Extension (English/Japanese + author profile)
 struct SharedQuote: Codable, Equatable {
     let textEn: String
     let textJp: String
@@ -36,7 +36,7 @@ struct SharedQuote: Codable, Equatable {
     }
 }
 
-/// Shield UIの背景スタイル
+/// Background style of the Shield UI
 enum BackgroundStyle: String, Codable, CaseIterable {
     case solidBlack = "solidBlack"
     case solidDark = "solidDark"
@@ -53,7 +53,7 @@ enum BackgroundStyle: String, Codable, CaseIterable {
     }
 }
 
-/// 共有設定
+/// Shared settings
 struct SharedSettings: Codable {
     var backgroundStyle: BackgroundStyle
     var customImageName: String?
@@ -70,7 +70,7 @@ struct SharedSettings: Codable {
     }
 }
 
-/// 名言テキストサイズ
+/// Quote text size
 enum QuoteTextSize: String, Codable, CaseIterable {
     case medium = "medium"
     case large = "large"

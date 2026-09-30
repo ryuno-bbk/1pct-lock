@@ -2,17 +2,19 @@
 //  ScrollChallengeView.swift
 //  AppBlocker
 //
-//  解除課題「みんなの進捗を見る」「自分で決めた画像を見る」の共通部品。
+//  Shared component for the unlock challenges "みんなの進捗を見る" ("See everyone's progress") and
+//  "自分で決めた画像を見る" ("See the images you chose").
 //
-//  🔴 この画面の肝は「やっぱり作業を続ける」ボタン (2026-08-29 ユーザー発案):
-//    いまの解除は「解除する or 何もしない」の二択で、**「やめる」が画面に存在しない**。
-//    人は目の前にある選択肢しか選ばない。強制的に見せている最中に「やめる」を
-//    常に置いておくことで、摩擦を**決断の機会**に変える。
+//  🔴 The key part of this screen is the "やっぱり作業を続ける" ("Actually, keep working") button
+//  (user idea, 2026-08-29):
+//    The current unlock is a choice between "unlock or do nothing", and **"stop" does not exist on
+//    the screen**. People only choose the options in front of them. By always showing "stop"
+//    while they are forced to watch, the friction becomes **a chance to decide**.
 //
-//  🔴 投稿モードは本物のフィードUIをそのまま使う。
-//    このアプリは AI モデレーションで規律エトス以外を弾いており、流れてくるのは
-//    他人を鼓舞する投稿だけ。**コメントを読むこと自体が目的に合致する**ので
-//    いいねもコメントも塞がない (2026-08-29 ユーザー判断)。
+//  🔴 Post mode uses the real feed UI as is.
+//    This app uses AI moderation to reject anything outside the discipline ethos, so everything that
+//    flows by is posts that encourage others. **Reading comments itself fits the purpose**, so
+//    likes and comments are not blocked (user decision 2026-08-29).
 //
 
 import SwiftUI
@@ -33,37 +35,37 @@ struct ScrollChallengeView: View {
     }
 
     let pages: [Page]
-    /// 何件見たら解除できるようになるか (指定値)
+    /// How many items must be viewed before unlocking is allowed (given value)
     let requiredCount: Int
     let lang: AppLanguage
     let onCompleted: () -> Void
-    /// 🔴 やっぱり作業を続ける (= 解除をやめてロックに戻る)
+    /// 🔴 Actually keep working (= stop unlocking and go back to the lock)
     let onKeepWorking: () -> Void
 
-    /// 十分に見たと認めたページ
+    /// Pages accepted as viewed long enough
     @State private var seen: Set<String> = []
-    /// いま画面に半分以上見えているページ
+    /// Pages currently more than half visible on screen
     @State private var visibleIds: Set<String> = []
-    /// 🔴 1件たまったあと、次を数える前にスクロールを要求するフラグ。
-    ///    最初から2枚とも50%以上見えていると、指を動かさなくても2件進んでしまう
-    ///    (2026-08-29 実機報告)。ユーザーの診断どおり
+    /// 🔴 Flag that requires a scroll after one item is counted, before counting the next.
+    ///    If 2 cards are both over 50% visible from the start, 2 items advance without moving a finger
+    ///    (2026-08-29 real device report). The user's diagnosis was correct
     @State private var awaitingScroll = false
-    /// いま計測しているページ
+    /// Page currently being measured
     @State private var currentId: String?
-    /// メーターの表示値 (0...1)
+    /// Displayed meter value (0...1)
     @State private var meterProgress: Double = 0
     @State private var dwellTask: Task<Void, Never>?
 
     @AppStorage("showOriginal") private var showOriginal = false
 
-    /// 1ページを「見た」と認めるまでの秒数。⚠️ 実機で調整する値
+    /// Seconds before a page counts as "viewed". ⚠️ Value to tune on a real device
     private static let dwellSeconds: Double = 3.0
 
     private var ja: Bool { lang == .japanese }
 
-    /// 🔴 手持ちのページ数を超える件数は要求しない。
-    ///    画像が3枚しか無いのに5件要求すると**永久に解除できなくなる**
-    ///    (2026-08-29 実機で「あと2件から進まない」として発現)
+    /// 🔴 Never require more items than the number of pages available.
+    ///    Requiring 5 when there are only 3 images makes **unlocking impossible forever**
+    ///    (2026-08-29 on a real device, it showed up as "stuck at 2 remaining")
     private var required: Int { max(1, min(requiredCount, pages.count)) }
 
     private var progress: Int { min(seen.count, required) }
@@ -88,9 +90,9 @@ struct ScrollChallengeView: View {
                         items: postItems,
                         recordsViews: false,
                         topContentInset: 40,
-                        // 🔴 onAppear/onDisappear は判定が厳しすぎた。少し動かしただけで
-                        //    メーターがリセットされる (2026-08-29 実機報告)。
-                        //    「50%見えていれば見ているとみなす」に変える
+                        // 🔴 onAppear/onDisappear was too strict. Moving slightly
+                        //    reset the meter (2026-08-29 real device report).
+                        //    Changed to "50% visible counts as viewing"
                         onItemVisibilityChanged: { item, isVisible in
                             setVisible("post-\(item.id)", isVisible)
                         }
@@ -102,8 +104,8 @@ struct ScrollChallengeView: View {
                     imagePager
                 }
 
-                // 🔴 上のヘッダーは廃止 (2026-08-29 ユーザー指示)。
-                //    メーターは下の解除ボタン自体に統合した = 部品が1つ減る
+                // 🔴 The top header is removed (2026-08-29 user instruction).
+                //    The meter is merged into the unlock button at the bottom = one less component
                 VStack(spacing: 0) {
                     Spacer()
                     if !pages.isEmpty {
@@ -113,25 +115,25 @@ struct ScrollChallengeView: View {
                     }
                 }
             }
-            // ヘッダーの黒い背景を出さない (マイページと同じ見た目に揃える)
+            // Do not show the black header background (match the look of My page)
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
         }
         .onDisappear { stopMeasuring() }
     }
 
-    // MARK: - 画像ページャ
+    // MARK: - Image pager
 
-    /// 🔴 1枚ずつ吸い付く縦ページ (YouTube Shorts 風) はやめた。
-    ///    フィードと同じ**自由にスクロールできるカード列**にする (2026-08-29 ユーザー指示)。
-    ///    止まる位置を作らず、比率も投稿と同じ 4:5 に揃える
+    /// 🔴 Dropped the vertical pages that snap one at a time (YouTube Shorts style).
+    ///    Use a **freely scrolling list of cards**, same as the feed (2026-08-29 user instruction).
+    ///    No snap positions, and the aspect ratio matches posts at 4:5
     private var imagePager: some View {
         ScrollView {
             LazyVStack(spacing: 28) {
                 ForEach(pages) { page in
                     pageView(page)
                         .id(page.id)
-                        // 50%見えていれば「見ている」とみなす (投稿モードと同じ基準)
+                        // 50% visible counts as "viewing" (same rule as post mode)
                         .onScrollVisibilityChange(threshold: 0.5) { isVisible in
                             setVisible(page.id, isVisible)
                         }
@@ -156,8 +158,8 @@ struct ScrollChallengeView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 18))
                 .padding(.horizontal, 20)
         case .image(_, let image):
-            // 投稿カードと同じ 4:5 の枠。はみ出す比率は同じ画像のぼかしで埋める
-            // (FeedFitBlurImage と同じ方式。本体は絶対にクロップしない)
+            // Same 4:5 frame as post cards. Other aspect ratios are filled with a blurred copy of the same image
+            // (same method as FeedFitBlurImage. The image itself is never cropped)
             Color.clear
                 .aspectRatio(4.0 / 5.0, contentMode: .fit)
                 .overlay {
@@ -179,27 +181,28 @@ struct ScrollChallengeView: View {
         }
     }
 
-    // MARK: - 滞在時間の計測
+    // MARK: - Dwell time measurement
     //
-    // 🔴 「取り消して再開始」方式は壊れやすかった (2026-08-29 実機で多発)。
-    //    見えているページの集合を持ち、そこから計測対象を選び直す方式にする。
-    //    離れたら毎回0から数え直す (2026-08-29 ユーザー指示で累積は廃止)。
+    // 🔴 The "cancel and restart" approach was fragile (happened often on a real device, 2026-08-29).
+    //    Instead, keep the set of visible pages and re-pick the measured page from it.
+    //    Leaving a page restarts the count from 0 every time (accumulation removed by user instruction
+    //    2026-08-29).
 
     private func setVisible(_ id: String, _ isVisible: Bool) {
         if isVisible { visibleIds.insert(id) } else { visibleIds.remove(id) }
         syncCurrent()
     }
 
-    /// 見えているページの中から「まだ見終わっていない最初のもの」を計測対象にする
+    /// Among the visible pages, measure "the first one not yet fully viewed"
     private func syncCurrent() {
-        // 🔴 必要数に達したらもう数えない。数え続けると「ロックを解除する」と出ている
-        //    緑のボタンの裏でメーターが満ちていく矛盾した見た目になる
+        // 🔴 Stop counting once the required number is reached. If it keeps counting, the meter fills up
+        //    behind the green "ロックを解除する" ("Unlock") button, which looks contradictory
         guard !canUnlock else {
             stopMeasuring()
             currentId = nil
             return
         }
-        // 1件たまった直後は、指が動くまで次を数え始めない
+        // Right after one item is counted, do not start counting the next until the finger moves
         guard !awaitingScroll else { return }
         let next = pages.first { visibleIds.contains($0.id) && !seen.contains($0.id) }?.id
         guard next != currentId else { return }
@@ -214,10 +217,11 @@ struct ScrollChallengeView: View {
     }
 
     private func startMeasuring(_ id: String) {
-        // 🔴 途中まで見た分は引き継がない。離れたら毎回0から (2026-08-29 ユーザー指示)
+        // 🔴 Partial viewing is not carried over. Leaving restarts from 0 every time (2026-08-29 user
+        // instruction)
         meterProgress = 0
 
-        // 🔴 状態更新は1回だけ。間の描画は Core Animation に任せる (カクつき対策)
+        // 🔴 Update the state only once. Leave the in-between drawing to Core Animation (fixes stutter)
         withAnimation(.linear(duration: Self.dwellSeconds)) { meterProgress = 1 }
 
         dwellTask = Task { @MainActor in
@@ -225,10 +229,11 @@ struct ScrollChallengeView: View {
             guard !Task.isCancelled, currentId == id else { return }
             seen.insert(id)
             UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-            // 次を数える前に必ずスクロールさせる
+            // Always require a scroll before counting the next
             awaitingScroll = true
             currentId = nil
-            // 満タンから0へ瞬間的に戻ると進捗が消えたように見えるので、少しだけ見せてから畳む
+            // Snapping instantly from full to 0 looks like the progress vanished, so show it briefly before
+            // collapsing
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.25)) { meterProgress = 0 }
@@ -240,14 +245,14 @@ struct ScrollChallengeView: View {
         dwellTask = nil
     }
 
-    /// 指が動いたら次の計測を解禁する
+    /// When the finger moves, allow the next measurement
     private func handleScroll() {
         guard awaitingScroll else { return }
         awaitingScroll = false
         syncCurrent()
     }
 
-    // MARK: - 下部の常駐コントロール
+    // MARK: - Always-visible controls at the bottom
 
     private var bottomControls: some View {
         VStack(spacing: 10) {
@@ -257,18 +262,19 @@ struct ScrollChallengeView: View {
         }
     }
 
-    /// 🔴 これが本体。常に押せる状態で置いておく。
-    ///    iOS 26 ならネイティブの Liquid Glass ボタン (下限が 18.6 なので分岐が要る)
+    /// 🔴 This is the core. Keep it always tappable.
+    ///    On iOS 26, a native Liquid Glass button (the minimum is 18.6, so a branch is needed)
     @ViewBuilder
     private var keepWorkingButton: some View {
-        // ⚠️ 文言はユーザー添削待ち
+        // ⚠️ Wording is waiting for the user's review
         let label = Text(ja ? "やっぱり作業を続ける" : "Actually, keep working")
             .font(.system(size: 15, weight: .bold))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 15)
 
-        // 🔴 ガラスにしたら文字が背景と同化して読めなくなった (2026-08-29 実機報告)。
-        //    ここは一番押してほしいボタンなので、読みやすさを優先して塗りに戻す
+        // 🔴 With glass, the text blended into the background and was unreadable (2026-08-29 real device
+        //    report). This is the button we most want pressed, so readability comes first: back to a solid
+        //    fill
         Button(action: onKeepWorking) {
             label
                 .foregroundColor(.black)
@@ -277,14 +283,15 @@ struct ScrollChallengeView: View {
         .buttonStyle(.plain)
     }
 
-    /// 🔴 解除ボタン自体がメーターを兼ねる (2026-08-29 ユーザー案)。
-    ///    見ている間はボタンの中が満ちていき、満ちると残り件数が1つ減る。
-    ///    別途メーターを置かなくて済むので画面の部品が1つ減る
+    /// 🔴 The unlock button itself doubles as the meter (user idea 2026-08-29).
+    ///    While viewing, the inside of the button fills up, and when full the remaining count goes down
+    ///    by 1. No separate meter is needed, so the screen has one less component
     private var unlockButton: some View {
         Button(action: onCompleted) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    // 溜まりは薄水緑。全部たまったら通常の緑 (2026-08-29 ユーザー指定)
+                    // The filling part is light aqua green. When everything is filled, the normal green (user
+                    // instruction 2026-08-29)
                     Rectangle()
                         .fill(canUnlock ? AppColors.success.opacity(0.85) : Self.fillingGreen)
                         .frame(width: canUnlock ? geo.size.width : geo.size.width * meterProgress)
@@ -293,7 +300,7 @@ struct ScrollChallengeView: View {
                         .font(.system(size: 14, weight: .bold))
                         .monospacedDigit()
                         .foregroundColor(.white)
-                        // 薄い塗りの上でも読めるように影を敷く
+                        // Add a shadow so it stays readable on the light fill
                         .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
@@ -309,7 +316,7 @@ struct ScrollChallengeView: View {
         .animation(.easeOut(duration: 0.25), value: canUnlock)
     }
 
-    // ⚠️ 文言はユーザー添削待ち
+    // ⚠️ Wording is waiting for the user's review
     private var unlockLabel: String {
         if canUnlock { return ja ? "ロックを解除する" : "Unlock" }
         let left = required - progress
@@ -319,13 +326,14 @@ struct ScrollChallengeView: View {
         return ja ? "残り \(left) 件 自分の画像を見る" : "See \(left) more of your images"
     }
 
-    /// 溜まっている途中の色 (薄水緑)
+    /// Color while filling (light aqua green)
     private static let fillingGreen = Color(red: 0.55, green: 0.90, blue: 0.78).opacity(0.45)
 
-    /// 🔴 ガラスは透過しすぎると文字が読めない (2026-08-29 実機報告)。
-    ///    暗い下地を敷いた上に載せてコントラストを確保する。
-    ///    ⚠️ タブバーや戻るボタンのような「背後が屈折して映り込み、長押しで伸びる」
-    ///    挙動はシステム部品専用で、公開APIでは再現できない
+    /// 🔴 If the glass is too transparent, the text cannot be read (2026-08-29 real device report).
+    ///    Put it on a dark base to keep contrast.
+    ///    ⚠️ The behavior of the tab bar and back button ("the background refracts and shows through, and
+    ///    it stretches on long press") is only for system components and cannot be reproduced with public
+    ///    APIs
     @ViewBuilder
     private var glassBackground: some View {
         ZStack {
@@ -338,12 +346,12 @@ struct ScrollChallengeView: View {
         }
     }
 
-    // MARK: - 空
+    // MARK: - Empty
 
-    /// 🔴 見せるものが無い時に詰ませない。解除だけはできるようにする
+    /// 🔴 Do not leave the user stuck when there is nothing to show. At least allow unlocking
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Text(ja ? "見せるものがありません" : "Nothing to show") // 文言はユーザー添削待ち
+            Text(ja ? "見せるものがありません" : "Nothing to show") // Wording is waiting for the user's review
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(.white.opacity(0.7))
             Button(action: onCompleted) {

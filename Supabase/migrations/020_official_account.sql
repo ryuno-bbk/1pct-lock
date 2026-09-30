@@ -1,30 +1,31 @@
 -- ============================================================
 -- 020_official_account.sql
--- 偉人(著者)アカウント廃止 → 「1%」公式アカウントへの付け替え
+-- Remove historical figure (author) accounts → reassign to the "1%" official account
 -- ============================================================
--- 背景:
---   実在偉人の「著者アカウント」風の見せ方を全廃する。名言 (quotes) の投稿主体は
---   すべて「1%」公式アカウント1本になり、著者名はカード上のテキスト表記
---   (— Marcus Aurelius) に降格する。目的は偉人実名の法的リスク回避
---   (存命人物の公認誤認防止)。
+-- Background:
+--   Remove all presentation that looks like "author accounts" of real historical figures. The poster
+--   of every quote (quotes) becomes the single "1%" official account, and the author name is demoted
+--   to text on the card (a dash + Marcus Aurelius). The goal is avoiding the legal risk of using real
+--   names of historical figures (preventing people from mistakenly thinking living people endorse it).
 --
--- やること:
---   1. authors へ 1% sentinel 行を追加 (id 固定 UUID)
---   2. 既存の「著者フォロー」をしていたユーザーを 1% への フォローに移行
---      (既存の user_follows 行は削除しない。単に 1% への行を追加するだけ)
---   3. fetch_following_feed の quote 側 WHERE を「1% をフォローしていれば全公式名言」に変更
---      (fetch_mixed_feed_random / fetch_tag_feed は変更なし)
+-- What to do:
+--   1. Add a 1% sentinel row to authors (fixed UUID id)
+--   2. Migrate users who had "author follows" to following 1%
+--      (existing user_follows rows are not deleted. Only a row for 1% is added)
+--   3. Change the quote-side WHERE of fetch_following_feed to "all official quotes if you follow 1%"
+--      (fetch_mixed_feed_random / fetch_tag_feed are unchanged)
 --
--- 適用方法:
---   019_post_v2.sql とあわせて、Supabase Dashboard の SQL Editor で貼り付け実行、
---   または `NEW_DB_URL=... bash apply_sql.sh supabase/migrations/020_official_account.sql`
---   のいずれか。まだ未適用 (2026-07-05 時点)。
+-- How to apply:
+--   Together with 019_post_v2.sql, either paste and run in the SQL Editor of Supabase Dashboard,
+--   or `NEW_DB_URL=... bash apply_sql.sh supabase/migrations/020_official_account.sql`.
+--   Not applied yet (as of 2026-07-05).
 --
--- 実行順序: 019 完了後。何度実行しても安全 (ON CONFLICT DO NOTHING / DROP FUNCTION IF EXISTS で冪等)
+-- Execution order: after 019 is done. Safe to run any number of times (idempotent via ON CONFLICT DO
+-- NOTHING / DROP FUNCTION IF EXISTS)
 -- ============================================================
 
 -- ============================================
--- 1. authors へ 1% sentinel 行を追加
+-- 1. Add a 1% sentinel row to authors
 -- ============================================
 INSERT INTO public.authors (id, name, bio_jp, bio_en, is_official)
 VALUES (
@@ -37,11 +38,11 @@ VALUES (
 ON CONFLICT (id) DO NOTHING;
 
 -- ============================================
--- 2. 既存の著者フォローを 1% フォローへ移行 (既存行は削除しない)
+-- 2. Migrate existing author follows to following 1% (existing rows are not deleted)
 -- ============================================
--- user_follows の一意制約は (follower_id, author_id) WHERE author_id IS NOT NULL
--- (002_a_user_id.sql の user_follows_follower_author_unique) なので、これをそのまま
--- ON CONFLICT のターゲットに使う。
+-- The unique constraint of user_follows is (follower_id, author_id) WHERE author_id IS NOT NULL
+-- (user_follows_follower_author_unique in 002_a_user_id.sql), so it is used as is as the
+-- ON CONFLICT target.
 INSERT INTO public.user_follows (follower_id, author_id)
 SELECT DISTINCT uf.follower_id, '11111111-1111-1111-1111-111111111111'::uuid
 FROM public.user_follows uf
@@ -50,10 +51,10 @@ WHERE uf.author_id IS NOT NULL
 ON CONFLICT (follower_id, author_id) WHERE author_id IS NOT NULL DO NOTHING;
 
 -- ============================================
--- 3. fetch_following_feed の quote 側を sentinel フォロー基準に変更
+-- 3. Change the quote side of fetch_following_feed to be based on following the sentinel
 -- ============================================
--- RETURNS TABLE の列リストは 019_post_v2.sql と完全に同一 (title / image_path を含む)。
--- post 側の分岐は無変更。
+-- The RETURNS TABLE column list is exactly the same as in 019_post_v2.sql (including title /
+-- image_path). The post-side branch is unchanged.
 
 DROP FUNCTION IF EXISTS public.fetch_following_feed(integer);
 
@@ -97,7 +98,8 @@ AS $$
             NULL::text    AS image_path
         FROM public.quotes q
         JOIN public.authors a ON a.id = q.author_id
-        -- 「著者をフォロー」ではなく「1% 公式アカウントをフォロー」していれば全公式名言が対象
+        -- If the user follows "the official 1% account" (not "follows the author"), all official quotes are
+        -- included
         WHERE EXISTS (
             SELECT 1 FROM public.user_follows
             WHERE follower_id = auth.uid()

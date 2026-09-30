@@ -1,13 +1,13 @@
 -- ============================================================
 -- 018_b_notifications_quote_target.sql
--- fetch_notifications に target_quote_id を追加 (017 の補完)
+-- Add target_quote_id to fetch_notifications (complement to 017)
 -- ============================================================
--- 017 で公式名言へのコメント返信通知が生まれたが、014 の
--- fetch_notifications は target_quote_id を返しておらず、
--- 通知タップ時にどの名言へ飛べばよいか分からない。
--- RETURNS TABLE の列追加は CREATE OR REPLACE 不可のため DROP → CREATE。
+-- 017 introduced comment reply notifications on official quotes, but 014's
+-- fetch_notifications does not return target_quote_id, so
+-- when a notification is tapped, it is unknown which quote to go to.
+-- Adding a RETURNS TABLE column is not possible with CREATE OR REPLACE, so DROP → CREATE.
 --
--- 実行順序: 017 完了後。何度実行しても安全
+-- Execution order: after 017 is done. Safe to run any number of times
 -- ============================================
 
 DROP FUNCTION IF EXISTS public.fetch_notifications(integer);

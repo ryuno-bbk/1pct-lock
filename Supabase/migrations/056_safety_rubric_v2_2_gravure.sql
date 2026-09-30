@@ -1,18 +1,20 @@
 -- ============================================================
 -- 056_safety_rubric_v2_2_gravure.sql
--- 層1改定: グラビア判定の締め直し (2026-07-30 Haikuバッテリーで発覚)
+-- Layer 1 revision: tighten the gravure check (found with the Haiku battery on 2026-07-30)
 -- ============================================================
--- 背景: プール×水着のグラビア構図を Haiku が approve した。048 の「競技用水着は
--- スポーツ文脈なら fail にしない」例外が逃げ道になった疑いが濃い (プール=スポーツ文脈と
--- 誤読)。例外の適用条件を「競技・練習を実際にしている場面」に限定し、ポーズ・カメラ目線・
--- 身体の提示が主目的の構図は場所を問わず fail と明文化する。
+-- Background: Haiku approved a gravure-style composition of a pool × swimsuit. The exception in 048,
+-- "competition swimsuits are not a fail in a sports context", very likely became a loophole (it misread
+-- pool = sports context). The exception is limited to "scenes where competition/practice is actually
+-- happening", and it is written explicitly that compositions whose main purpose is posing, looking at
+-- the camera or presenting the body are a fail regardless of location.
 --
--- セットの非対称エスカレーション (moderate-post v14): Haiku が露出系を fail にするのは
--- 一発で確定 (Sonnet 不要)、露出系を pass にする時だけ低 confidence を強制して
--- Sonnet の再確認に回す。
+-- Paired asymmetric escalation (moderate-post v14): when Haiku marks exposure content as fail, that is
+-- final in one step (no Sonnet needed). Only when it marks exposure content as pass is low confidence
+-- forced so Sonnet re-checks it.
 --
--- 方式: safety_rubric の全文書き換え (048 の内容を内包、冪等)。ethos_rubric には触れない。
--- 適用: SQL Editor で実行するだけ、デプロイ不要。ロールバック: 048 を再実行。
+-- Method: full rewrite of safety_rubric (includes the content of 048, idempotent). ethos_rubric is not
+-- touched.
+-- Apply: just run it in the SQL Editor, no deploy needed. Rollback: re-run 048.
 -- ============================================================
 
 UPDATE public.moderation_config

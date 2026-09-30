@@ -2,9 +2,10 @@
 //  PurchaseService.swift
 //  AppBlocker
 //
-//  RevenueCat SDK のラッパー。entitlement "pro" はUI即時反映用のクライアント側シグナルで、
-//  is_pro のサーバー真実は Supabase users.is_pro (RevenueCat webhook → Edge Function 経由で更新)。
-//  ProAccess が両者を OR で合成して最終的な Pro 判定にする (このファイルは単体では判定を確定しない)。
+//  Wrapper for the RevenueCat SDK. The entitlement "pro" is a client-side signal for instant UI
+//  updates, and the server truth for is_pro is Supabase users.is_pro (updated via RevenueCat webhook
+//  → Edge Function).
+//  ProAccess combines both with OR for the final Pro decision (this file alone does not decide it).
 //
 
 import Foundation
@@ -15,11 +16,11 @@ import RevenueCat
 final class PurchaseService: NSObject, ObservableObject {
     static let shared = PurchaseService()
 
-    @Published private(set) var entitlementIsPro = false      // RC entitlement "pro" の即時状態
-    @Published private(set) var packages: [Package] = []       // current offering の availablePackages
+    @Published private(set) var entitlementIsPro = false      // Instant state of the RC entitlement "pro"
+    @Published private(set) var packages: [Package] = []       // availablePackages of the current offering
     @Published private(set) var isLoadingOfferings = false
     @Published private(set) var offeringsLoadFailed = false
-    @Published private(set) var yearlyTrialEligible = false    // yearly のイントロ資格 (.eligible のときのみ true)
+    @Published private(set) var yearlyTrialEligible = false    // Intro offer eligibility for yearly (true only when .eligible)
     @Published private(set) var isPurchasing = false
 
     private override init() {
@@ -28,9 +29,9 @@ final class PurchaseService: NSObject, ObservableObject {
 
     // MARK: - Configure
 
-    /// アプリ起動時に一度だけ呼ぶ。Purchases.shared に触れるのはここが最初。
-    /// (ProAccess の init はここより前に走ることがあるが、ProAccess は
-    /// PurchaseService.shared.$entitlementIsPro を購読するだけで Purchases.shared には触れないので安全)
+    /// Call only once at app launch. This is the first place that touches Purchases.shared.
+    /// (ProAccess's init may run before this, but ProAccess only subscribes to
+    /// PurchaseService.shared.$entitlementIsPro and does not touch Purchases.shared, so it is safe)
     static func configure() {
         guard !Purchases.isConfigured else { return }
         #if DEBUG
@@ -44,14 +45,14 @@ final class PurchaseService: NSObject, ObservableObject {
 
     // MARK: - Identity
 
-    /// RevenueCat の appUserID を Supabase users.id (小文字UUID文字列) に揃える。
-    /// webhook が users.id と突き合わせるため小文字統一が必須。
+    /// Align RevenueCat's appUserID with Supabase users.id (lowercase UUID string).
+    /// The webhook matches it against users.id, so lowercase is required.
     func logIn(userId: UUID) async {
         guard Purchases.isConfigured else { return }
         let targetAppUserID = userId.uuidString.lowercased()
         guard Purchases.shared.appUserID != targetAppUserID else {
-            // 既に同一ユーザーで紐付け済み。delegate の発火タイミングに頼らず、
-            // キャッシュ済み CustomerInfo を明示的に反映しておく (2回目以降の起動経路)
+            // Already linked with the same user. Do not rely on when the delegate fires;
+            // explicitly apply the cached CustomerInfo (the path for the 2nd launch onward)
             if let info = try? await Purchases.shared.customerInfo() {
                 apply(info)
             }
@@ -62,12 +63,12 @@ final class PurchaseService: NSObject, ObservableObject {
             let (customerInfo, _) = try await Purchases.shared.logIn(targetAppUserID)
             apply(customerInfo)
         } catch {
-            // 起動をブロックしない。次回 apply() のタイミング (delegate 経由等) で再同期される
+            // Do not block launch. It resyncs at the next apply() (via the delegate, etc.)
             print("⚠️ PurchaseService.logIn failed: \(error)")
         }
     }
 
-    /// サインアウト時に RevenueCat の紐付けも解除。既に匿名なら何もしない。
+    /// On sign-out, also unlink RevenueCat. Do nothing if already anonymous.
     func logOut() async {
         guard Purchases.isConfigured else { return }
         if !Purchases.shared.isAnonymous {
@@ -78,7 +79,7 @@ final class PurchaseService: NSObject, ObservableObject {
 
     // MARK: - Offerings
 
-    /// current offering の availablePackages をロードし、yearly のトライアル資格を確認する。
+    /// Load availablePackages of the current offering and check yearly trial eligibility.
     func loadOfferings() async {
         guard Purchases.isConfigured else { return }
         isLoadingOfferings = true
@@ -98,7 +99,8 @@ final class PurchaseService: NSObject, ObservableObject {
                 let eligibilities = await Purchases.shared.checkTrialOrIntroDiscountEligibility(
                     productIdentifiers: [productID]
                 )
-                // .unknown は false のまま (誇張より控えめに倒す方針): トライアル資格が確証できないときは表示しない
+                // .unknown stays false (policy: lean conservative rather than overstating): do not show the trial
+                // when eligibility cannot be confirmed
                 yearlyTrialEligible = eligibilities[productID]?.status == .eligible
             } else {
                 yearlyTrialEligible = false
@@ -131,7 +133,7 @@ final class PurchaseService: NSObject, ObservableObject {
             }
             apply(result.customerInfo)
 
-            // webhook が Supabase users.is_pro を更新するのを取り込むための突き合わせ (fire-and-forget)
+            // Reconciliation to pick up the webhook updating Supabase users.is_pro (fire-and-forget)
             Task {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 await UserAuthService.shared.refreshProfile()
@@ -169,9 +171,9 @@ final class PurchaseService: NSObject, ObservableObject {
 
     // MARK: - Fresh Entitlement Check (C1)
 
-    /// C1: キャッシュを使わず RevenueCat サーバーから CustomerInfo を取得して entitlement を確定する。
-    /// 成功時は apply() で entitlementIsPro にも反映して値を返し、
-    /// 失敗 (オフライン等) は nil を返して「未確定」を呼び出し側に伝える
+    /// C1: get CustomerInfo from the RevenueCat server without the cache to confirm the entitlement.
+    /// On success, also apply it to entitlementIsPro with apply() and return the value;
+    /// on failure (offline etc.) return nil to tell the caller it is "undetermined"
     func fetchEntitlementIsProFresh() async -> Bool? {
         guard Purchases.isConfigured else { return nil }
         do {
@@ -189,7 +191,8 @@ final class PurchaseService: NSObject, ObservableObject {
     private func apply(_ info: CustomerInfo) {
         entitlementIsPro = info.entitlements[RevenueCatConfig.proEntitlementID]?.isActive == true
 
-        // サーバー真実 (users.is_pro) との突き合わせログ。動作は ProAccess 側の OR に任せる
+        // Log comparing with the server truth (users.is_pro). Behavior is left to the OR on the ProAccess
+        // side
         let serverIsPro = UserAuthService.shared.isPro
         if serverIsPro != entitlementIsPro {
             print("⚠️ is_pro mismatch: server=\(serverIsPro) rc=\(entitlementIsPro)")
@@ -220,7 +223,7 @@ final class PurchaseService: NSObject, ObservableObject {
 
 extension PurchaseService: PurchasesDelegate {
     nonisolated func purchases(_ purchases: Purchases, receivedUpdated customerInfo: CustomerInfo) {
-        // CustomerInfo は Sendable なのでそのまま MainActor へ受け渡せる
+        // CustomerInfo is Sendable, so it can be passed to the MainActor as is
         Task { @MainActor in
             self.apply(customerInfo)
         }

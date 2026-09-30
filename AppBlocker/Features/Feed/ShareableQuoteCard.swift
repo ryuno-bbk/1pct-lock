@@ -2,9 +2,9 @@
 //  ShareableQuoteCard.swift
 //  AppBlocker
 //
-//  画像保存専用の 9:16 縦長カード。
-//  FeedItemCard とほぼ同じレイアウトだが、アクション UI (いいね/フォロー/…) を一切含まず、
-//  ImageRenderer で 1080×1920 にレンダリングする想定で固定サイズ。
+//  9:16 vertical card only for saving images.
+//  Almost the same layout as FeedItemCard, but it contains no action UI (like/follow/...) at all,
+//  and has a fixed size, assuming it is rendered at 1080×1920 with ImageRenderer.
 //
 
 import SwiftUI
@@ -14,14 +14,14 @@ struct ShareableQuoteCard: View {
     let lang: AppLanguage
     let showOriginal: Bool
 
-    /// 1080×1920 (Instagram Story / Reels / TikTok 標準サイズ)
+    /// 1080×1920 (standard size for Instagram Story / Reels / TikTok)
     static let renderSize = CGSize(width: 1080, height: 1920)
 
     var body: some View {
         ZStack {
             if item.kind == .quote {
-                // 2026-07-30: 公式名言はフィードと同じ紙×タイポのテンプレ描画
-                // (サイズはカード幅比なので 1080×1920 でも相似形にスケール)
+                // 2026-07-30: official quotes use the same paper × typography template drawing as the feed
+                // (sizes are ratios of the card width, so it scales proportionally at 1080×1920 too)
                 QuoteCardView(
                     primary: item.displayPrimary(lang: lang, showOriginal: showOriginal),
                     secondary: item.displaySecondary(lang: lang, showOriginal: showOriginal),
@@ -30,11 +30,11 @@ struct ShareableQuoteCard: View {
             } else {
                 QuoteBackgroundView(quoteId: item.itemId, backgroundIndex: item.backgroundId)
 
-                // 中央: メイン + (任意) サブテキスト
+                // Center: main + (optional) sub text
                 VStack(spacing: 0) {
                     Spacer()
 
-                    // フィードカードと同じ詩的改行 (QuoteTypography、2026-07-30)
+                    // Same poetic line breaks as the feed card (QuoteTypography, 2026-07-30)
                     Text("\"\(QuoteTypography.poeticText(item.displayPrimary(lang: lang, showOriginal: showOriginal)))\"")
                         .font(.system(size: 64, weight: .bold))
                         .foregroundColor(.white)
@@ -58,7 +58,8 @@ struct ShareableQuoteCard: View {
                 }
             }
 
-            // 左下: 投稿者名 + 公式チェック (匿名著者の名言は行ごと非表示 — 2026-07-30 名言監査)
+            // Bottom left: author name + official check (for quotes by the anonymous author the whole line is
+            // hidden; 2026-07-30 quote audit)
             if let authorName = item.authorName, !Quote.isAnonymousAuthor(authorName) {
                 VStack(alignment: .leading, spacing: 0) {
                     Spacer()
@@ -84,8 +85,8 @@ struct ShareableQuoteCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            // 右下: ブランドマーク (将来差し替え予定 → AreteWatermark に分離)。
-            // 紙テンプレの名言 (明背景) では暗色バリアントに切り替える
+            // Bottom right: brand mark (planned to be replaced later → split out into AreteWatermark).
+            // For paper-template quotes (light background), switch to the dark variant
             VStack(spacing: 0) {
                 Spacer()
                 HStack {
@@ -102,18 +103,18 @@ struct ShareableQuoteCard: View {
     }
 }
 
-/// 保存画像右下のブランド表記。
-/// B1 マーク (縦棒 + 対角ドット2つ) + 「1%」テキスト。
-/// ImageExportService (投稿v2 の焼き込み画像への合成) からも使うため internal。
+/// Brand mark at the bottom right of saved images.
+/// B1 mark (vertical bar + 2 diagonal dots) + "1%" text.
+/// internal because ImageExportService (compositing onto the baked images of posts v2) also uses it.
 struct AreteWatermark: View {
-    /// 紙テンプレ (明背景) 用の暗色バリアント (2026-07-30 名言カード刷新)。
-    /// 写真の上に載せる従来用途は白のまま
+    /// Dark variant for paper templates (light background) (2026-07-30 quote card renewal).
+    /// The original use on top of photos stays white
     var dark: Bool = false
 
     private var tint: Color { dark ? Color.black.opacity(0.55) : Color.white.opacity(0.7) }
 
     var body: some View {
-        // B1 マークが主役、「1%」はおまけの添え字 (ユーザー指定 2026-07-06)
+        // The B1 mark is the main element; "1%" is a small extra subscript (user-specified 2026-07-06)
         HStack(alignment: .bottom, spacing: 7) {
             b1Mark
             Text("1%")
@@ -124,7 +125,7 @@ struct AreteWatermark: View {
         .shadow(color: .black.opacity(dark ? 0 : 0.6), radius: 6, x: 0, y: 2)
     }
 
-    /// B1 マーク。viewBox 100 換算 (棒 x44 y20 w12 h60 rx6 / ドット r9.5 中心 (26,31),(74,69))。
+    /// B1 mark. In viewBox 100 units (bar x44 y20 w12 h60 rx6 / dots r9.5 centers (26,31),(74,69)).
     private var b1Mark: some View {
         let size: CGFloat = 52
         let scale = size / 100

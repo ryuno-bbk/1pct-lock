@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  App Extension 用プライバシーマニフェスト (2026-08-04 追加)。
-  2026-07-31 の ITMS-91053 対応で 6 ターゲット中この Extension だけ抜けていた
-  (提出前レビューで発見)。
+  App Extension privacy manifest (added 2026-08-04).
+  In the 2026-07-31 ITMS-91053 fix, this was the only one of the 6 targets that was missed
+  (found in the pre-submission review).
 
-  この Extension は ManagedSettings の store 操作のみで、UserDefaults を含む
-  Required Reason API を一切呼ばない (ShieldConfigurationExtension とは違い
-  App Group の読み書きも無い)。よって NSPrivacyAccessedAPITypes は空。
-  データ収集も行わない (端末外への送信経路を持たない)。
+  This extension only operates on ManagedSettings stores and never calls a
+  Required Reason API, including UserDefaults (unlike ShieldConfigurationExtension,
+  it does not read or write the App Group either). So NSPrivacyAccessedAPITypes is empty.
+  It collects no data either (it has no way to send anything off the device).
 -->
 <plist version="1.0">
 <dict>

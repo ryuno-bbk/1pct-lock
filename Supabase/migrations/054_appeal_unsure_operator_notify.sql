@@ -1,22 +1,22 @@
 -- ============================================================
 -- 054_appeal_unsure_operator_notify.sql
--- unsure 申し立ての運営向け通知 (2026-07-30 ユーザー要望
--- 「unsureが出たら本人には知らせず俺に通知、俺が見て判断する」)
+-- Operator notification for unsure appeals (2026-07-30 user request:
+-- "when unsure comes up, do not tell the user; notify me, and I will look and decide")
 -- ============================================================
--- 仕組み: review-appeal v4 が decision='unsure' を書いた直後に
--- create_notification RPC で moderation_config.operator_user_id 宛に
--- kind='appeal_unsure' のアプリ内通知 (ベル) を作る。
--- 申し立て本人には何も送られない (本人の表示は「審査中」のまま)。
+-- How it works: right after review-appeal v4 writes decision='unsure', it creates an in-app
+-- notification (bell) of kind='appeal_unsure' addressed to moderation_config.operator_user_id with
+-- the create_notification RPC.
+-- Nothing is sent to the person who appealed (their display stays "審査中" ("Under review")).
 --
--- ⚠️ 適用後にユーザー作業が1つ: operator_user_id に自分のアカウントを設定
---   (下の「運営アカウント設定」参照)。未設定の間は通知が作られないだけで
---   他の動作に影響なし (fail-soft)。
+-- ⚠️ One user task after applying: set your own account in operator_user_id
+--   (see "Operator account setup" below). While unset, notifications are simply not created and
+--   nothing else is affected (fail-soft).
 --
--- 冪等: DROP IF EXISTS → ADD / IF NOT EXISTS / CREATE OR REPLACE パターン。
--- ロールバック: operator_user_id を NULL にすれば通知は止まる。
+-- Idempotent: DROP IF EXISTS → ADD / IF NOT EXISTS / CREATE OR REPLACE pattern.
+-- Rollback: set operator_user_id to NULL and the notifications stop.
 -- ============================================================
 
--- 1. kind 許可リストに appeal_unsure を追加 (039 の10種 + 1)
+-- 1. Add appeal_unsure to the kind allow list (the 10 kinds in 039 + 1)
 ALTER TABLE public.user_notifications
     DROP CONSTRAINT IF EXISTS user_notifications_kind_check;
 
@@ -29,9 +29,9 @@ ALTER TABLE public.user_notifications
         )
     );
 
--- 2. 自己参照の許可リストにも追加
---    (通常は recipient=運営 ≠ actor=申し立て者 だが、運営自身の投稿で
---     テストする場合に recipient=actor になるため)
+-- 2. Also add it to the self-reference allow list
+--    (normally recipient=operator ≠ actor=appellant, but when testing with the operator's own post,
+--     recipient=actor)
 ALTER TABLE public.user_notifications
     DROP CONSTRAINT IF EXISTS user_notifications_no_self;
 
@@ -42,8 +42,8 @@ ALTER TABLE public.user_notifications
                     'appeal_unsure')
     );
 
--- 3. create_notification の自己アクション弾きにも同じ例外を追加
---    (039 定義から変更箇所は IF 条件の kind リストのみ)
+-- 3. Add the same exception to the self-action filter of create_notification
+--    (the only change from the 039 definition is the kind list in the IF condition)
 CREATE OR REPLACE FUNCTION public.create_notification(
     p_recipient_user_id uuid,
     p_actor_user_id     uuid,
@@ -65,7 +65,7 @@ BEGIN
     IF p_recipient_user_id = p_actor_user_id
        AND p_kind NOT IN ('content_rejected', 'content_flagged', 'appeal_approved', 'appeal_rejected',
                           'appeal_unsure') THEN
-        RETURN;  -- 自分発は通知しない (システム通知系 kind は自己参照を許可)
+        RETURN;  -- Do not notify about your own actions (system notification kinds allow self-reference)
     END IF;
     INSERT INTO public.user_notifications (
         recipient_user_id, actor_user_id, kind,
@@ -78,7 +78,7 @@ BEGIN
 END;
 $$;
 
--- 4. 運営アカウントの設定列
+-- 4. Setting column for the operator account
 ALTER TABLE public.moderation_config
     ADD COLUMN IF NOT EXISTS operator_user_id uuid
         REFERENCES public.users(id) ON DELETE SET NULL;
@@ -88,10 +88,10 @@ COMMENT ON COLUMN public.moderation_config.operator_user_id IS
     'review-appeal v4 が参照';
 
 -- ============================================================
--- 運営アカウント設定 (ユーザー作業、適用後に1回だけ):
---   ① 自分の id を確認:
+-- Operator account setup (user task, only once after applying):
+--   ① Check your own id:
 --        SELECT id, handle, display_name FROM public.users
 --        ORDER BY created_at LIMIT 10;
---   ② 設定:
---        UPDATE public.moderation_config SET operator_user_id = '<自分のid>';
+--   ② Set it:
+--        UPDATE public.moderation_config SET operator_user_id = '<your_id>';
 -- ============================================================

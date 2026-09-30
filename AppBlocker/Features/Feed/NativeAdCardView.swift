@@ -2,23 +2,25 @@
 //  NativeAdCardView.swift
 //  AppBlocker
 //
-//  フィード内スポンサー投稿カード (AdMob ネイティブ広告、2026-07-31 広告v1)。
-//  FeedListCard と同じ骨格 (ヘッダ: アイコン+名前 / 本文行 / 角丸メディア / 下部CTA) に合わせ、
-//  「広告」バッジを必ず表示する (景表法ステマ規制 2023-10 施行の法的義務。絶対に外さない)。
+//  Sponsored post card in the feed (AdMob native ad, 2026-07-31 ads v1).
+//  Matches the same skeleton as FeedListCard (header: icon + name / body line / rounded media / CTA
+//  at the bottom), and always shows the "広告" ("Ad") badge (a legal obligation under Japan's
+//  stealth marketing rule of the Premiums and Representations Act, in force 2023-10. Never remove it).
 //
-//  タップ計測とアセット登録の制約上、カード全体を GoogleMobileAds の NativeAdView (UIKit) で
-//  組む必要がある。SwiftUI 側は UIViewRepresentable で包み、systemLayoutSizeFitting で
-//  高さを提案幅から算出する。AdChoices アイコンは SDK が右上に自動配置する (adChoicesView 未指定時)。
+//  Because of the constraints of tap tracking and asset registration, the whole card must be built
+//  with GoogleMobileAds' NativeAdView (UIKit). The SwiftUI side wraps it with UIViewRepresentable and
+//  computes the height from the proposed width with systemLayoutSizeFitting. The SDK places the
+//  AdChoices icon at the top right automatically (when adChoicesView is not set).
 //
 
 import SwiftUI
 import UIKit
 import GoogleMobileAds
 
-// MARK: - SwiftUI スロット (在庫が無ければ何も描画しない = 枠ごと消える)
+// MARK: - SwiftUI slot (draws nothing if there is no inventory = the whole slot disappears)
 
 struct FeedAdSlot: View {
-    /// フィード内で何番目の広告枠か (0,1,2…)。スロット→広告の対応を安定させる
+    /// Which ad slot in the feed this is (0,1,2...). Keeps the slot → ad mapping stable
     let slot: Int
 
     @ObservedObject private var adService = NativeAdService.shared
@@ -50,25 +52,26 @@ private struct NativeAdCardRepresentable: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: FeedNativeAdView, context: Context) -> CGSize? {
-        // LazyVStack から提案される幅 (画面幅) に対する高さを AutoLayout に解かせる。
-        // 幅未確定の初回パスでは画面幅で仮計算する (カードは常に全幅のため実質同値)
+        // Let AutoLayout solve the height for the width proposed by LazyVStack (screen width).
+        // On the first pass, where the width is not fixed yet, compute provisionally with the screen width
+        // (the card is always full width, so it is effectively the same)
         let width = proposal.width ?? UIScreen.main.bounds.width
         let size = uiView.systemLayoutSizeFitting(
             CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
             withHorizontalFittingPriority: .required,
             verticalFittingPriority: .fittingSizeLevel
         )
-        // ceil が必須: AutoLayout の解は小数点付きで返り、SwiftUI 側の丸めで 1pt 未満だけ
-        // 低い高さが割り当てられると、下端の CTA がビュー境界からサブピクセルはみ出す。
-        // AdMob の native ad validator はこれを "Advertiser assets outside native ad view"
-        // として検出する (2026-07-31 実機で実際に指摘された)。切り上げて必ず収める
+        // ceil is required: AutoLayout's solution comes back with decimals, and if SwiftUI's rounding assigns
+        // a height lower by less than 1pt, the CTA at the bottom sticks out of the view bounds by a subpixel.
+        // AdMob's native ad validator detects this as "Advertiser assets outside native ad view"
+        // (it was actually flagged on a real device on 2026-07-31). Round up so it always fits
         return CGSize(width: width, height: ceil(size.height))
     }
 }
 
-// MARK: - UIKit カード本体
+// MARK: - UIKit card body
 
-/// FeedListCard の見た目の写し (UIKit)。配色は AppColors と同値のハードコード
+/// Copy of FeedListCard's look (UIKit). Colors are hardcoded with the same values as AppColors
 /// (background #000000 / textPrimary #F2EFE7 / textSecondary #97928A / textTertiary #6E6A63)
 final class FeedNativeAdView: NativeAdView {
 
@@ -97,7 +100,7 @@ final class FeedNativeAdView: NativeAdView {
     private func buildLayout() {
         backgroundColor = .black
 
-        // ヘッダ: アイコン (34pt 丸) + 見出し (投稿者名の位置) + 「広告」バッジ
+        // Header: icon (34pt circle) + headline (in the author name position) + "広告" ("Ad") badge
         iconImageView.translatesAutoresizingMaskIntoConstraints = false
         iconImageView.layer.cornerRadius = 17
         iconImageView.clipsToBounds = true
@@ -120,19 +123,20 @@ final class FeedNativeAdView: NativeAdView {
         adBadgeLabel.setContentHuggingPriority(.required, for: .horizontal)
         adBadgeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        // 本文行 (投稿タイトル行の位置、最大2行)
+        // Body line (in the position of the post title row, max 2 lines)
         bodyLabel.translatesAutoresizingMaskIntoConstraints = false
         bodyLabel.font = .systemFont(ofSize: 13)
         bodyLabel.textColor = Self.textPrimary.withAlphaComponent(0.92)
         bodyLabel.numberOfLines = 2
 
-        // メディア (角丸 18 = 他カードの画像と同じ。高さはメディア実比率から可変)
+        // Media (rounded corners 18 = same as the images of other cards. Height varies with the media's real
+        // ratio)
         mediaContainerView.translatesAutoresizingMaskIntoConstraints = false
         mediaContainerView.layer.cornerRadius = 18
         mediaContainerView.clipsToBounds = true
         mediaContainerView.backgroundColor = .black
 
-        // CTA: フォローピルと同系の白カプセル (全幅)
+        // CTA: a white capsule in the same family as the follow pill (full width)
         ctaLabel.translatesAutoresizingMaskIntoConstraints = false
         ctaLabel.font = .systemFont(ofSize: 14, weight: .bold)
         ctaLabel.textColor = .black
@@ -149,7 +153,7 @@ final class FeedNativeAdView: NativeAdView {
         addSubview(ctaLabel)
 
         NSLayoutConstraint.activate([
-            // ヘッダ (FeedListCard: leading 14 / top 9 / bottom 8)
+            // Header (FeedListCard: leading 14 / top 9 / bottom 8)
             iconImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             iconImageView.topAnchor.constraint(equalTo: topAnchor, constant: 9),
             iconImageView.widthAnchor.constraint(equalToConstant: 34),
@@ -164,42 +168,46 @@ final class FeedNativeAdView: NativeAdView {
             adBadgeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 40),
             adBadgeLabel.heightAnchor.constraint(equalToConstant: 20),
 
-            // 本文行 (horizontal 14、ヘッダ下 8 / メディア上 9 = titleRow の余白感)
+            // Body line (horizontal 14, 8 below the header / 9 above the media = the spacing feel of titleRow)
             bodyLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             bodyLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             bodyLabel.topAnchor.constraint(equalTo: iconImageView.bottomAnchor, constant: 8),
 
-            // メディア (全幅・角丸のみ = カードレス構成)
+            // Media (full width, rounded corners only = cardless layout)
             mediaContainerView.leadingAnchor.constraint(equalTo: leadingAnchor),
             mediaContainerView.trailingAnchor.constraint(equalTo: trailingAnchor),
             mediaContainerView.topAnchor.constraint(equalTo: bodyLabel.bottomAnchor, constant: 9),
 
-            // CTA (メディア下 12、下端で高さを閉じる)
+            // CTA (12 below the media, closes the height at the bottom edge)
             ctaLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             ctaLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             ctaLabel.topAnchor.constraint(equalTo: mediaContainerView.bottomAnchor, constant: 12),
             ctaLabel.heightAnchor.constraint(equalToConstant: 42),
             {
-                // 下端だけ優先度を1段落とす: SwiftUI が AutoLayout の理想高さと僅かに違う高さを
-                // 割り当てた場合でも、他の制約 (上からのチェーン) を壊して CTA をビュー外へ
-                // 押し出すのではなく、この制約が静かに緩んで全アセットが境界内に残るようにする
+                // Lower the priority of only the bottom constraint by one step: even if SwiftUI assigns a height
+                // slightly different from AutoLayout's ideal height, instead of breaking the other constraints (the
+                // chain from the top) and pushing the CTA out of the view, this constraint quietly loosens and all
+                // assets stay inside the bounds
                 let bottom = ctaLabel.bottomAnchor.constraint(equalTo: bottomAnchor)
                 bottom.priority = UILayoutPriority(999)
                 return bottom
             }(),
         ])
 
-        // SDK へのアセット登録 (これが無いとタップ/インプレッションが計測されず規約違反)
+        // Register the assets with the SDK (without this, taps/impressions are not tracked, which violates the
+        // policy)
         iconView = iconImageView
         headlineView = nameLabel
         bodyView = bodyLabel
         mediaView = mediaContainerView
         callToActionView = ctaLabel
-        // adChoicesView は未指定 = SDK がメディア右上に AdChoices アイコンを自動配置する
+        // adChoicesView is not set = the SDK places the AdChoices icon at the top right of the media
+        // automatically
     }
 
     func configure(with ad: NativeAd, isJapanese: Bool) {
-        // 「広告」表示は法的義務 (景表法ステマ規制)。ローカライズはするが非表示条件は作らない
+        // Showing "広告" ("Ad") is a legal obligation (Japan's stealth marketing rule). It is localized, but
+        // no condition to hide it is ever added
         adBadgeLabel.text = isJapanese ? " 広告 " : " Ad "
 
         nameLabel.text = ad.headline
@@ -213,8 +221,9 @@ final class FeedNativeAdView: NativeAdView {
 
         mediaContainerView.mediaContent = ad.mediaContent
 
-        // メディア高さ = 実アスペクト比 (w/h)。フィードのリズムを壊さないよう 4:5 (縦長上限) 〜
-        // 1.91:1 (横長下限) にクランプ。比率 0 (未取得) は 1.91:1 (ネイティブ広告の標準横長) 扱い
+        // Media height = real aspect ratio (w/h). Clamped between 4:5 (tallest) and
+        // 1.91:1 (widest) so the feed rhythm is not broken. A ratio of 0 (not fetched) is treated as 1.91:1
+        // (the standard wide native ad)
         let rawRatio = ad.mediaContent.aspectRatio
         let ratio = rawRatio > 0 ? min(max(rawRatio, 0.8), 1.91) : 1.91
         mediaAspectConstraint?.isActive = false
@@ -224,12 +233,12 @@ final class FeedNativeAdView: NativeAdView {
         aspect.isActive = true
         mediaAspectConstraint = aspect
 
-        // タッチは NativeAdView 自身がハンドリングする (子ビューが奪うと計測されない)
+        // Touches are handled by NativeAdView itself (if child views take them, they are not tracked)
         for view in [iconImageView, nameLabel, bodyLabel, ctaLabel] as [UIView] {
             view.isUserInteractionEnabled = false
         }
 
-        // 最後に nativeAd を差す (アセット登録が済んでから、が SDK の要求順序)
+        // Set nativeAd last (the SDK requires this order: only after the assets are registered)
         nativeAd = ad
     }
 }

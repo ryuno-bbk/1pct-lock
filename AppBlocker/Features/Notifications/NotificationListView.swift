@@ -2,8 +2,8 @@
 //  NotificationListView.swift
 //  AppBlocker
 //
-//  アプリ内通知一覧 (いいね / フォロー / コメント / 返信 / コメントいいね)
-//  画面に入った時点で全件既読化、未読バッジを 0 にする
+//  In-app notification list (like / follow / comment / reply / comment like)
+//  Marks everything as read on entering the screen and sets the unread badge to 0
 //
 
 import SwiftUI
@@ -18,9 +18,9 @@ struct NotificationListView: View {
     @State private var jumpToUserId: UUID?
     @State private var showUserProfile: Bool = false
     @State private var commentPageRequest: CommentPageRequest?
-    /// システム通知 (モデレーション結果/異議申し立て結果) タップ時の異議申し立てシート対象
+    /// Target of the appeal sheet when a system notification (moderation result/appeal result) is tapped
     @State private var appealSheetTarget: AppealTarget?
-    /// 週次レポート通知をタップした時の遷移 (081)
+    /// Navigation when a weekly report notification is tapped (081)
     @State private var showWeeklyReport: Bool = false
 
     private var lang: AppLanguage {
@@ -57,33 +57,35 @@ struct NotificationListView: View {
         }
         .navigationTitle(L.notificationsTitle(lang))
         .navigationBarTitleDisplayMode(.inline)
-        // 実機FB#6系 緩和策 (2026-07-22、未検証): この画面は MyProfileView (ヒーロー用に
-        // toolbarBackground(.hidden)) から push される。可視な不透明バーを明示しないと、
-        // 「リスト先頭が上に食い込み、最新の通知が引っ張らないと見えない」症状が出た
-        // (投稿直後トリガーの疑い)。バーを明示的に不透明可視化してレイアウトを確定させる
+        // Mitigation for the real device feedback #6 family (2026-07-22, not verified): this screen is pushed
+        // from MyProfileView (toolbarBackground(.hidden) for the hero). Without an explicitly visible opaque bar,
+        // the symptom "the top of the list is pushed up under the bar and the latest notification cannot be
+        // seen without pulling" appeared (suspected to be triggered right after posting). Make the bar
+        // explicitly opaque and visible to fix the layout
         .toolbarBackground(AppColors.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
-        // 実機FB#6: インセット崩壊の実測補正 (SafeAreaCollapseFix.swift 参照)
+        // Real device feedback #6: measured correction for the inset collapse (see SafeAreaCollapseFix.swift)
         .safeAreaCollapseFix()
         .task {
             await notifService.loadNotifications()
             await notifService.markAllRead()
-            // 通知を見に来ている人に聞くのが一番自然な瞬間 (起動直後に唐突に聞くと
-            // 拒否されやすく、一度拒否されるとアプリ内から復帰できない)。
-            // 既に決定済みなら何も起きない
+            // The most natural moment to ask is when someone came to look at notifications (asking suddenly right
+            // after launch tends to get denied, and once denied it cannot be recovered from inside the app).
+            // If already decided, nothing happens
             await PushNotificationService.shared.requestAuthorizationIfNeeded()
         }
-        // 2026-07-22 実機FB: fullScreenCover だと戻る手段が無く詰む (カバー内の新規 NavigationStack には
-        // 戻るボタンが出ない)。この画面自体が MyProfileView の NavigationStack 内に push されているので、
-        // 投稿ジャンプも push に統一する (戻るボタン+右スワイプバックが自然に付く)
+        // 2026-07-22 real device feedback: with fullScreenCover there is no way back and you get stuck (a new
+        // NavigationStack inside the cover has no back button). This screen itself is pushed inside
+        // MyProfileView's NavigationStack, so the post jump is also unified to push (the back button +
+        // swipe-right-to-go-back come naturally)
         .navigationDestination(isPresented: $showWeeklyReport) {
             WeeklyReportView()
         }
         .navigationDestination(item: $jumpToPost) { jump in
-            // ⚠️ 投稿者情報と canDelete を必ず渡すこと。省略すると MyPostsFeedView が
-            //    「自分の投稿フィード」だと解釈して、他人の投稿に自分の名前/アバター/
-            //    Pro バッジを出す (2026-08-28 ユーザー報告のバグ)
+            // ⚠️ Always pass the author info and canDelete. If omitted, MyPostsFeedView interprets it as
+            //    "my own post feed" and shows my name/avatar/
+            //    Pro badge on another user's post (bug reported by the user on 2026-08-28)
             MyPostsFeedView(
                 posts: [jump.post],
                 startIndex: 0,
@@ -114,8 +116,8 @@ struct NotificationListView: View {
             jumpToUserId = notif.actorUserId
             showUserProfile = true
         case .like, .comment, .reply, .commentLike, .newPost:
-            // 公式名言への返信通知 (target_quote_id あり) は最小実装としてコメントページを直接開く
-            // (画像ヘッダー用の FeedItem は持っていないため nil = プレーン表示)
+            // A reply notification on an official quote (has target_quote_id) opens the comment page directly as a
+            // minimal implementation (we do not have a FeedItem for the image header, so nil = plain display)
             if let quoteId = notif.targetQuoteId {
                 commentPageRequest = CommentPageRequest(item: nil, target: .quote(quoteId), postOwnerId: nil)
                 return
@@ -123,9 +125,10 @@ struct NotificationListView: View {
             guard let postId = notif.targetPostId else { return }
             openPost(postId, from: notif)
         case .contentRejected, .contentFlagged, .appealApproved, .appealRejected:
-            // コメントは rejected/flagged になるとコメント一覧 RPC から本人にも出なくなる仕様のため、
-            // 通知から直接 AppealSheetView (状態表示 or 申し立て入力) を開く。
-            // 投稿は RLS (037) で本人の rejected/flagged 投稿も取得可能なので既存の fetchPost 経路を使う
+            // By spec, once a comment is rejected/flagged it no longer appears even to its author in the comment
+            // list RPC, so open AppealSheetView (status display or appeal input) directly from the notification.
+            // For posts, RLS (037) lets the author fetch their own rejected/flagged posts, so use the existing
+            // fetchPost path
             if let commentId = notif.targetCommentId {
                 appealSheetTarget = .comment(commentId)
                 return
@@ -133,24 +136,24 @@ struct NotificationListView: View {
             guard let postId = notif.targetPostId else { return }
             openPost(postId, from: notif)
         case .weeklyReport:
-            // 081: タップでその週のレポートを開く (直近の完了週 = offset 1)
+            // 081: Tap opens that week's report (the most recent completed week = offset 1)
             showWeeklyReport = true
         case .appealUnsure:
-            // 運営専用: 裁定は当面 SQL Editor で行う (管理コンソールはリリース後バックログ)。
-            // 対象は他ユーザーの flagged コンテンツで RLS 上開けないため遷移しない
+            // Operators only: rulings are done in the SQL Editor for now (an admin console is in the post-release
+            // backlog). The target is another user's flagged content, which RLS does not let us open, so no navigation
             break
         case .unknown:
             break
         }
     }
 
-    /// post_id から投稿を取得してフィード全画面 (MyPostsFeedView) へジャンプする。
+    /// Fetch the post by post_id and jump to the full-screen feed (MyPostsFeedView).
     ///
-    /// 🔴 投稿者が誰かは post.userId で決まる。通知の actor とは限らない:
-    ///   - new_post          → actor = 投稿者 (他人の投稿を見に行く)
-    ///   - like/comment 等   → actor = 行動した人で、投稿は自分のもの
-    /// actor と投稿者が一致するときだけ通知が持っている表示情報を使い、
-    /// そうでなければ渡さない (MyPostsFeedView 側が自分の情報で埋める)
+    /// 🔴 Who the author is is decided by post.userId. It is not necessarily the notification's actor:
+    ///   - new_post          → actor = author (going to see someone else's post)
+    ///   - like/comment etc. → actor = the person who acted, and the post is mine
+    /// Use the display info the notification carries only when the actor and the author match;
+    /// otherwise do not pass it (MyPostsFeedView fills it with my own info)
     private func openPost(_ postId: UUID, from notification: UserNotification) {
         Task {
             guard let post = await UserPostService.shared.fetchPost(id: postId) else { return }
@@ -187,14 +190,14 @@ struct NotificationListView: View {
 
 // MARK: - PostJump
 
-/// 通知から投稿を開くときの遷移データ。投稿だけでなく「その投稿者は誰か」を
-/// 一緒に運ぶ (投稿単体では表示名/アバター/Pro を持っていないため)
+/// Navigation data for opening a post from a notification. Carries not only the post but also "who its
+/// author is" (the post alone does not have the display name/avatar/Pro)
 private struct PostJump: Identifiable, Hashable {
     let post: UserPost
     let authorName: String?
     let authorAvatarUrl: String?
     let authorIsPro: Bool
-    /// 自分の投稿か。削除メニューの可否になる
+    /// Whether it is my post. Decides whether the delete menu is available
     let isMine: Bool
 
     var id: UUID { post.id }
@@ -212,8 +215,8 @@ private struct NotificationRow: View {
             HStack(alignment: .top, spacing: 12) {
                 ZStack(alignment: .bottomTrailing) {
                     if notification.kind.isSystemKind {
-                        // システム通知 (自己参照方式で actor が本人自身になってしまうため、
-                        // 本人のアバターではなく中立なシステムアイコンを出す)
+                        // System notification (with the self-reference approach the actor becomes the user themselves, so
+                        // show a neutral system icon instead of the user's own avatar)
                         ZStack {
                             Circle()
                                 .fill(Color.white.opacity(0.08))
@@ -239,8 +242,8 @@ private struct NotificationRow: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {
-                        // システム通知は自己参照方式のため actorName が「自分の名前」になってしまう。
-                        // アプリ名 "1%" 固定で表示する (両言語共通、OnePercentAccount.name を再利用)
+                        // System notifications use the self-reference approach, so actorName would be "your own name".
+                        // Show the fixed app name "1%" (same for both languages, reusing OnePercentAccount.name)
                         Text(notification.kind.isSystemKind ? OnePercentAccount.name : (notification.actorName ?? L.notificationsAnonymous(lang)))
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(AppColors.textPrimary)
@@ -268,7 +271,7 @@ private struct NotificationRow: View {
                     }
                 }
 
-                // 未読インジケータ
+                // Unread indicator
                 if notification.isUnread {
                     Circle()
                         .fill(AppColors.accent)
@@ -296,39 +299,39 @@ private struct NotificationRow: View {
         case .newPost:     return L.notificationNewPostMessage(actor, lang)
         case .contentRejected:
             return isComment
-                ? (lang == .japanese ? "コメントがガイドライン違反と判定され、非表示になりました" : "Your comment was found to violate the guidelines and has been hidden")  // 文言はユーザー添削待ち
-                : (lang == .japanese ? "投稿がガイドライン違反と判定され、非表示になりました" : "Your post was found to violate the guidelines and has been hidden")  // 文言はユーザー添削待ち
+                ? (lang == .japanese ? "コメントがガイドライン違反と判定され、非表示になりました" : "Your comment was found to violate the guidelines and has been hidden")  // Wording pending user review
+                : (lang == .japanese ? "投稿がガイドライン違反と判定され、非表示になりました" : "Your post was found to violate the guidelines and has been hidden")  // Wording pending user review
         case .contentFlagged:
             return isComment
-                ? (lang == .japanese ? "コメントの表示が制限されました" : "Your comment's visibility has been limited")  // 文言はユーザー添削待ち
-                : (lang == .japanese ? "投稿の表示が制限されました" : "Your post's visibility has been limited")  // 文言はユーザー添削待ち
+                ? (lang == .japanese ? "コメントの表示が制限されました" : "Your comment's visibility has been limited")  // Wording pending user review
+                : (lang == .japanese ? "投稿の表示が制限されました" : "Your post's visibility has been limited")  // Wording pending user review
         case .appealApproved:
-            return lang == .japanese ? "異議申し立てが承認され、コンテンツが復元されました" : "Your appeal was approved and your content has been restored"  // 文言はユーザー添削待ち
+            return lang == .japanese ? "異議申し立てが承認され、コンテンツが復元されました" : "Your appeal was approved and your content has been restored"  // Wording pending user review
         case .appealRejected:
-            return lang == .japanese ? "異議申し立ては承認されませんでした" : "Your appeal was not approved"  // 文言はユーザー添削待ち
+            return lang == .japanese ? "異議申し立ては承認されませんでした" : "Your appeal was not approved"  // Wording pending user review
         case .appealUnsure:
-            // 運営アカウントにしか届かない kind (054)。preview_text に申し立て理由の冒頭が入る
+            // A kind delivered only to the operator account (054). preview_text holds the start of the appeal reason
             return lang == .japanese
                 ? "\(actor)さんの異議申し立てが審査待ちです (AIは判定を保留)"
                 : "\(actor)'s appeal is awaiting your review (AI deferred)"
         case .weeklyReport:
-            // preview_text にその週のロック秒数が入る (081)。0秒の人にも届く
+            // preview_text holds that week's lock seconds (081). It is also sent to people with 0 seconds
             let secs = Int(notification.previewText ?? "") ?? 0
             if secs <= 0 {
-                return lang == .japanese ? "先週のレポートができました" : "Your weekly report is ready"  // 文言はユーザー添削待ち
+                return lang == .japanese ? "先週のレポートができました" : "Your weekly report is ready"  // Wording pending user review
             }
             let h = secs / 3600, m = (secs % 3600) / 60
             let dur = lang == .japanese
                 ? (h > 0 ? "\(h)時間\(m)分" : "\(m)分")
                 : (h > 0 ? "\(h)h \(m)m" : "\(m)m")
             return lang == .japanese
-                ? "先週のレポートができました。ロックした時間は\(dur)"   // 文言はユーザー添削待ち
+                ? "先週のレポートができました。ロックした時間は\(dur)"   // Wording pending user review
                 : "Your weekly report is ready. You locked \(dur)"
         case .unknown:     return ""
         }
     }
 
-    /// isSystemKind の4種のみで参照される (それ以外は到達しない)
+    /// Referenced only by the 4 isSystemKind kinds (the others never reach here)
     private var systemIconName: String {
         switch notification.kind {
         case .contentRejected: return "eye.slash.fill"

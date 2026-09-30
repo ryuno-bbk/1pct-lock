@@ -1,32 +1,33 @@
 -- ============================================================
 -- 015_security_audit.sql
--- 実装順序2: セキュリティ監査 (2026-07-04) で発見した問題の修正
+-- Implementation order 2: fixes for problems found in the security audit (2026-07-04)
 -- ============================================================
--- 発見と修正内容:
---   1. 【致命】user_reports の重複防止制約が UNIQUE NULLS NOT DISTINCT のため
---      NULL 同士が衝突し、1 ユーザーが実質生涯 2 件しか通報できない
---      (2 件目の投稿通報すら target_quote_id NULL 同士で弾かれる)
---      → 002 の user_likes と同じ部分ユニークインデックス方式に置換
---   2. 【高】users_update_own ポリシーが行全体の UPDATE を許すため、
---      認証ユーザーが自分の is_pro を直接 true にできる (Pro バッジ自己付与)
---      → rolbypassrls 判定の protect trigger で is_pro を読み取り専用化
---   3. 【高】block_sessions が完全クライアント申告制で、任意の
---      duration_seconds を insert できる (上位%機能のデータ源改ざん)
---      → 妥当性 trigger で明らかな異常値を拒否 (根本対策は上位%実装時に検討)
---   4. 【中】REVOKE FROM anon は関数の暗黙 PUBLIC grant を消さないため
---      意図した「anon から呼べない」が保証されない → REVOKE FROM PUBLIC に統一
---   5. 【低】protect_user_posts_like_count が comment_count を守っていない
---      (投稿者が自分の投稿の comment_count を任意値に更新可能)
---      → like_count と同じ扱いで保護
---   6. 【低】user_comment_likes の直 INSERT/DELETE ポリシーが like_count と
---      不整合を作れる (アプリは toggle_comment_like RPC のみ使用、直接続なし)
---      → ポリシーを閉じて RPC 専用化
+-- Findings and fixes:
+--   1. [Critical] The duplicate-prevention constraint of user_reports is UNIQUE NULLS NOT DISTINCT,
+--      so NULLs collide with each other, and one user can in effect report only 2 times in a lifetime
+--      (even a 2nd post report is rejected because of target_quote_id NULL vs NULL)
+--      → replaced with a partial unique index, the same approach as user_likes in 002
+--   2. [High] The users_update_own policy allows UPDATE of the whole row, so
+--      an authenticated user can set their own is_pro to true directly (self-granting the Pro badge)
+--      → make is_pro read-only with a protect trigger that uses the rolbypassrls check
+--   3. [High] block_sessions is entirely self-reported by the client, and any
+--      duration_seconds can be inserted (tampering with the data source of the top percentile feature)
+--      → a validity trigger rejects obvious outliers (the root fix is to be considered when the top
+--        percentile feature is implemented)
+--   4. [Medium] REVOKE FROM anon does not remove the function's implicit PUBLIC grant, so
+--      the intended "cannot be called by anon" is not guaranteed → unified to REVOKE FROM PUBLIC
+--   5. [Low] protect_user_posts_like_count does not protect comment_count
+--      (an author can update comment_count of their own post to any value)
+--      → protected the same way as like_count
+--   6. [Low] The direct INSERT/DELETE policies of user_comment_likes can create inconsistency with
+--      like_count (the app only uses the toggle_comment_like RPC, no direct access)
+--      → close the policies and make it RPC only
 --
--- 実行順序: 014 完了後。何度実行しても安全 (DROP IF EXISTS パターン)
+-- Execution order: after 014. Safe to run any number of times (DROP IF EXISTS pattern)
 -- ============================================================
 
 -- ============================================
--- 1. user_reports 重複防止制約の修正
+-- 1. Fix the duplicate-prevention constraint of user_reports
 -- ============================================
 ALTER TABLE public.user_reports
     DROP CONSTRAINT IF EXISTS user_reports_unique_per_post;
@@ -34,7 +35,7 @@ ALTER TABLE public.user_reports
 ALTER TABLE public.user_reports
     DROP CONSTRAINT IF EXISTS user_reports_unique_per_quote;
 
--- 同じ人が同じ対象を 2 回通報できない (NULL 行は対象外 = 部分インデックス)
+-- The same person cannot report the same target twice (NULL rows are excluded = partial index)
 CREATE UNIQUE INDEX IF NOT EXISTS user_reports_reporter_post_unique
     ON public.user_reports(reporter_id, target_post_id)
     WHERE target_post_id IS NOT NULL;
@@ -48,11 +49,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS user_reports_reporter_user_unique
     WHERE target_user_id IS NOT NULL;
 
 -- ============================================
--- 2. users.is_pro の自己付与防止 trigger
+-- 2. Trigger to prevent self-granting users.is_pro
 -- ============================================
--- users_update_own ポリシーは display_name / avatar_url 編集用だが
--- 列単位の制限ができないため、is_pro は trigger で保護する。
--- 課金実装 (StoreKit 検証) 後は service_role / SECURITY DEFINER RPC のみが変更できる
+-- The users_update_own policy is for editing display_name / avatar_url, but
+-- it cannot restrict by column, so is_pro is protected with a trigger.
+-- After purchases are implemented (StoreKit verification), only service_role / SECURITY DEFINER RPCs
+-- can change it
 CREATE OR REPLACE FUNCTION public.protect_users_is_pro()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -78,15 +80,15 @@ CREATE TRIGGER users_protect_is_pro
     EXECUTE FUNCTION public.protect_users_is_pro();
 
 -- ============================================
--- 3. block_sessions 妥当性 trigger
+-- 3. block_sessions validity trigger
 -- ============================================
--- クライアント申告制自体は維持しつつ、明らかな異常値を拒否する:
---   - 未来の started_at / ended_at (時計ずれ許容 5 分)
---   - started_at より前の ended_at
---   - started_at/ended_at と矛盾する duration_seconds (丸め許容 2 秒)
---   - 7 日超の単一セッション (最長は location モードの連続滞在を想定)
--- 注: started_at/ended_at ごと偽装する改ざんは防げない。
---     上位%機能の実装時に RPC でのサーバー側タイムスタンプ化を検討する
+-- Keep client self-reporting itself, but reject obvious outliers:
+--   - started_at / ended_at in the future (5 minutes allowed for clock skew)
+--   - ended_at before started_at
+--   - duration_seconds that contradicts started_at/ended_at (2 seconds allowed for rounding)
+--   - a single session over 7 days (the longest expected is a continuous stay in location mode)
+-- Note: tampering that fakes started_at/ended_at as well cannot be prevented.
+--     When implementing the top percentile feature, consider server-side timestamps via an RPC
 CREATE OR REPLACE FUNCTION public.validate_block_session()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -131,12 +133,12 @@ CREATE TRIGGER block_sessions_validate
     EXECUTE FUNCTION public.validate_block_session();
 
 -- ============================================
--- 4. RPC の実行権限を PUBLIC からも剥奪
+-- 4. Revoke RPC execute permission from PUBLIC as well
 -- ============================================
--- CREATE FUNCTION は暗黙で PUBLIC に EXECUTE を与える。
--- 既存の REVOKE FROM anon は anon への直接 grant がない場合は効果がなく、
--- anon は PUBLIC 経由で実行できてしまう。PUBLIC ごと剥奪して
--- authenticated だけに明示 grant し直す
+-- CREATE FUNCTION implicitly grants EXECUTE to PUBLIC.
+-- The existing REVOKE FROM anon has no effect when there is no direct grant to anon,
+-- and anon can still execute via PUBLIC. Revoke it from PUBLIC entirely and
+-- grant it again explicitly only to authenticated
 REVOKE EXECUTE ON FUNCTION public.toggle_quote_like(uuid)                    FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.toggle_post_like(uuid)                     FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.toggle_comment_like(uuid)                  FROM PUBLIC, anon;
@@ -167,14 +169,14 @@ GRANT EXECUTE ON FUNCTION public.fetch_comments_for_post(uuid, integer) TO authe
 GRANT EXECUTE ON FUNCTION public.fetch_notifications(integer)           TO authenticated;
 GRANT EXECUTE ON FUNCTION public.fetch_unread_notification_count()      TO authenticated;
 GRANT EXECUTE ON FUNCTION public.mark_all_notifications_read()          TO authenticated;
--- create_notification は SECURITY DEFINER RPC / trigger 内部からのみ呼ぶ (grant なし)
+-- create_notification is called only from inside SECURITY DEFINER RPCs / triggers (no grant)
 
 -- ============================================
--- 5. protect_user_posts_like_count を comment_count も保護するよう拡張
+-- 5. Extend protect_user_posts_like_count to also protect comment_count
 -- ============================================
--- comment_count は sync_post_comment_count trigger (SECURITY DEFINER) だけが
--- 変更できる denormalize 列。user_posts_update_own ポリシーは行全体を許すので
--- trigger 側で読み取り専用化する
+-- comment_count is a denormalized column that only the sync_post_comment_count trigger (SECURITY
+-- DEFINER) can change. The user_posts_update_own policy allows the whole row, so
+-- make it read-only on the trigger side
 CREATE OR REPLACE FUNCTION public.protect_user_posts_like_count()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -197,22 +199,23 @@ END;
 $$;
 
 -- ============================================
--- 6. user_comment_likes を RPC 専用化
+-- 6. Make user_comment_likes RPC only
 -- ============================================
--- アプリは toggle_comment_like RPC のみ使用 (直 INSERT/DELETE は Swift 側に存在しない)。
--- 直操作を許すと like_count と実レコードの不整合を作れるため閉じる。
--- SELECT own は将来の is_liked 確認用に残す
+-- The app only uses the toggle_comment_like RPC (no direct INSERT/DELETE exists on the Swift side).
+-- Allowing direct operations could create inconsistency between like_count and the real records, so
+-- they are closed.
+-- SELECT own is kept for a future is_liked check
 DROP POLICY IF EXISTS "user_comment_likes_insert_own" ON public.user_comment_likes;
 DROP POLICY IF EXISTS "user_comment_likes_delete_own" ON public.user_comment_likes;
 
 -- ============================================
--- 7. 動作確認用クエリ (実行不要、コメント)
+-- 7. Queries for checking behavior (no need to run, comments only)
 -- ============================================
--- 通報が複数回できることの確認 (別々の post を 2 回通報 → 両方成功すること):
+-- Check that reporting works more than once (report 2 different posts → both must succeed):
 --   INSERT INTO user_reports (reporter_id, target_post_id, reason) VALUES (auth.uid(), '<post1>', 'spam');
 --   INSERT INTO user_reports (reporter_id, target_post_id, reason) VALUES (auth.uid(), '<post2>', 'spam');
--- is_pro 自己付与が拒否されることの確認 (authenticated で実行 → エラーになること):
+-- Check that self-granting is_pro is rejected (run as authenticated → must be an error):
 --   UPDATE users SET is_pro = true WHERE id = auth.uid();
--- 異常な block_session が拒否されることの確認 (authenticated で実行 → エラーになること):
+-- Check that an abnormal block_session is rejected (run as authenticated → must be an error):
 --   INSERT INTO block_sessions (user_id, mode, started_at, ended_at, duration_seconds, status)
 --   VALUES (auth.uid(), 'timer', now() - interval '1 hour', now(), 999999, 'completed');

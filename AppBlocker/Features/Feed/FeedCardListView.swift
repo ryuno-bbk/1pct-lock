@@ -2,14 +2,14 @@
 //  FeedCardListView.swift
 //  AppBlocker
 //
-//  FeedListCard を縦に並べる共通の詳細フィード (2026-07-10 確定仕様)。
-//  プロフィールのグリッドタップ / いいね一覧 / 著者トピック / タグフィードが
-//  すべてこの 1 つの View を使う (旧: FeedItemCard の全画面 TikTok スクロール群)。
+//  Shared detail feed that stacks FeedListCard vertically (spec finalized 2026-07-10).
+//  Profile grid tap / likes list / author topic / tag feed
+//  all use this one View (old: the full-screen TikTok-style scroll views of FeedItemCard).
 //
-//  - startItemKey (FeedItem.id) までスクロールした状態で開く
-//  - post カードが表示されたら record_post_view で閲覧計上 (タップ数の実体)
-//  - コメントは CommentPageView へ push (シート廃止)
-//  - canDeletePosts = true (自分の投稿) なら … メニューに削除、rejected バッジ表示
+//  - Opens already scrolled to startItemKey (FeedItem.id)
+//  - When a post card is shown, count a view with record_post_view (this is what the tap count is)
+//  - Comments are pushed to CommentPageView (sheet removed)
+//  - If canDeletePosts = true (own posts), show delete in the … menu and show the rejected badge
 //
 
 import SwiftUI
@@ -17,39 +17,44 @@ import SwiftUI
 struct FeedCardListView: View {
 
     let items: [FeedItem]
-    /// このリストが「投稿詳細が開かれた」タップとして record_post_view を計上すべきか。
-    /// ホームフィード (おすすめ/フォロー中) やタグ/著者/いいね一覧などの「スクロールで通り過ぎるだけ」の
-    /// 面では false にする (029 の w_seen ペナルティが読む post_views をスクロール通過で汚染しないため)。
-    /// デフォルトを設けず全呼び出し元に明示させる
+    /// Whether this list should count record_post_view as a tap that "opened the post detail".
+    /// Set false on surfaces where posts are only scrolled past, such as the home feed
+    /// (Recommended/Following) and the tag/author/likes lists (so scrolling past does not pollute
+    /// post_views, which the w_seen penalty in 029 reads). No default, so every caller must set it
+    /// explicitly
     let recordsViews: Bool
-    /// 開いた時にスクロールしておく位置 (FeedItem.id)。nil なら先頭
+    /// Position to scroll to when opened (FeedItem.id). nil means the top
     var startItemKey: String? = nil
-    /// 自分の投稿フィードか (… メニューに削除を出す / rejected バッジ表示)
+    /// Whether this is your own post feed (show delete in the … menu / show the rejected badge)
     var canDeletePosts: Bool = false
-    /// AI モデレーション rejected の投稿 id (自分の投稿のみバッジ表示)
+    /// Post ids rejected by AI moderation (badge shown only on your own posts)
     var rejectedPostIds: Set<UUID> = []
-    /// AI モデレーション flagged の投稿 id (自分の投稿のみ上端バナー表示。039 以降は本人に可視化する方針)
+    /// Post ids flagged by AI moderation (top banner shown only on your own posts. Since 039 the policy
+    /// is to make it visible to the owner)
     var flaggedPostIds: Set<UUID> = []
-    /// タグフィード内でのタグタップ無効化など、親が挙動を差し替えたい時に指定
+    /// Set this when the parent wants to replace the behavior, e.g. disabling tag taps inside a tag feed
     var onTagTapOverride: ((String) -> Void)? = nil
-    /// 著者トピックフィード自身の中では「— 著者名」タップを無効化する (既にその著者の一覧のため)
+    /// Inside the author topic feed itself, disable the tap on "- author name" (it is already that
+    /// author's list)
     var disableTopicTap: Bool = false
-    /// いいねトグル後に親へ通知 (いいね一覧のグリッド同期など)。(item, いいね後の状態)
+    /// Notify the parent after a like toggle (e.g. to sync the likes list grid). (item, state after the
+    /// like)
     var onLikeToggled: ((FeedItem, Bool) -> Void)? = nil
-    /// ブロック実行後に親へ通知 (リスト再取得など)
+    /// Notify the parent after blocking a user (e.g. to reload the list)
     var onBlocked: (() -> Void)? = nil
-    /// pull-to-refresh (nil なら無効)。ホームフィードのおすすめ/フォロー中用
+    /// pull-to-refresh (disabled if nil). For the home feed Recommended/Following
     var onRefresh: (() async -> Void)? = nil
-    /// 上部の追加余白 (ホームのセグメントバーぶんなど)
+    /// Extra top padding (e.g. for the home segment bar)
     var topContentInset: CGFloat = 0
-    /// AdMob ネイティブ広告をN件ごとに差し込むか (2026-07-31 広告v1)。
-    /// ホームフィード (おすすめ/フォロー中) だけ true。プロフィール/タグ/いいね一覧などの
-    /// 派生フィードには一切出さない (ユーザー指定「フィード画面以外には出さない」)。
-    /// items 配列には混ぜず描画側で差し込む = 062/063 のスコアリング/キャップに影響しない
+    /// Whether to insert an AdMob native ad every N items (2026-07-31 ads v1).
+    /// true only for the home feed (Recommended/Following). Never shown in derived feeds such as the
+    /// profile/tag/likes lists (user instruction: "do not show them anywhere except the feed screen").
+    /// They are inserted at render time, not mixed into the items array = no effect on the scoring/caps
+    /// of 062/063
     var showsAds: Bool = false
-    /// カードが「画面に半分以上見えているか」が変わったら親に伝える
-    /// (解除課題の滞在時間計測に使う)。nil なら何もしない = 通常のフィードには影響しない。
-    /// 🔴 onAppear/onDisappear だと判定が厳しすぎて、少し動かしただけで計測が切れる
+    /// Tell the parent when "is the card more than half visible on screen" changes
+    /// (used to measure dwell time for the unlock challenge). nil does nothing = no effect on normal feeds.
+    /// 🔴 onAppear/onDisappear is too strict: moving the view slightly stops the measurement
     var onItemVisibilityChanged: ((FeedItem, Bool) -> Void)? = nil
 
     @ObservedObject private var likeService = LikeService.shared
@@ -66,7 +71,7 @@ struct FeedCardListView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var scrollTargetKey: String?
-    /// 指が画面に触れている間 true (引き下げ更新を「離した瞬間」に走らせるために使う)
+    /// true while a finger is touching the screen (used to run pull-to-refresh "at the moment of release")
     @State private var isFingerDown = false
     @State private var showOfficialProfile = false
     @State private var selectedTopicAuthor: Author?
@@ -79,14 +84,15 @@ struct FeedCardListView: View {
     @State private var selectedTag: String?
     @State private var showTagFeed = false
     @State private var commentPageRequest: CommentPageRequest?
-    /// commentPageRequest が nil に戻った瞬間に extras キャッシュを無効化するため、
-    /// 直近に開いたコメントページの対象アイテムキーを保持する (F6)
+    /// Holds the item key of the most recently opened comment page, so the extras cache can be
+    /// invalidated the moment commentPageRequest goes back to nil (F6)
     @State private var lastCommentItemKey: String?
     @State private var reportTarget: ReportSheetView.Target?
-    /// 異議申し立てシートの対象 (rejected スクリムの「異議申し立て」ボタン / flagged バナーの「異議申し立て」ボタンから)
+    /// Target of the appeal sheet (from the "異議申し立て" ("Appeal") button on the rejected scrim or on
+    /// the flagged banner)
     @State private var appealTarget: AppealTarget?
-    /// 審査中 (pending) の異議申し立てがある自分の投稿 id (制限オーバーレイのピルを
-    /// 「異議申し立て中」表示に切り替える。2026-07-23 実機FB)
+    /// Ids of your own posts with a pending appeal under review (switches the pill on the restriction
+    /// overlay to "異議申し立て中" ("Appeal under review"). 2026-07-23 real device feedback)
     @State private var appealPendingPostIds: Set<UUID> = []
     @State private var blockCandidateUserId: UUID?
     @State private var showBlockConfirm = false
@@ -94,9 +100,9 @@ struct FeedCardListView: View {
     @State private var saveToastMessage: String?
     @State private var saveAlert: SaveImageAlert?
     @State private var deleteCandidatePostId: UUID?
-    /// いいねした人一覧シートの対象 (スタックタップで開く)
+    /// Target of the likers list sheet (opened by tapping the stack)
     @State private var likersSheetItem: FeedItem?
-    /// このビュー内で削除した投稿 (親の配列は let なのでローカルで除外)
+    /// Posts deleted inside this view (the parent's array is a let, so exclude them locally)
     @State private var deletedPostIds: Set<UUID> = []
 
     private var lang: AppLanguage {
@@ -110,32 +116,33 @@ struct FeedCardListView: View {
     var body: some View {
         if let onRefresh {
             scrollBody
-                // 指が画面に触れているかを見る (下の refreshable が「離すまで待つ」ために使う)。
-                // simultaneousGesture なのでスクロールもタップも従来どおり動く
+                // Watches whether a finger is touching the screen (the refreshable below uses it to "wait until
+                // release"). It is a simultaneousGesture, so scrolling and taps work as before
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 1)
                         .onChanged { _ in if !isFingerDown { isFingerDown = true } }
                         .onEnded { _ in isFingerDown = false }
                 )
                 .refreshable {
-                    // ① 指を離すまで待つ (2026-07-31 実機FB)。
-                    // SwiftUI の refreshable は「引き下げ量が閾値を越えた瞬間」に発火するため、
-                    // 何もしないと指を下ろしたまま内容が入れ替わってしまう。離してから取りに行く。
-                    // 保険で最大2秒 (ジェスチャが中断されて onEnded が来ない場合に固まらないよう)
+                    // ① Wait until the finger is released (2026-07-31 real device feedback).
+                    // SwiftUI's refreshable fires "the moment the pull distance crosses the threshold", so
+                    // without this the content would be replaced while the finger is still down. Fetch after release.
+                    // Safety cap of 2 seconds (so it does not hang if the gesture is interrupted and onEnded never comes)
                     let waitStarted = Date()
                     while isFingerDown, Date().timeIntervalSince(waitStarted) < 2.0 {
                         try? await Task.sleep(nanoseconds: 40_000_000)
                     }
 
                     let fetchStarted = Date()
-                    // ② 取得はビューの寿命から切り離した非構造化 Task で行う。
-                    // SwiftUI は refreshable のアクションを「そのビューに紐づくタスク」として
-                    // 実行するため、取得中にビューが再構成されるとタスクごとキャンセルされ、
-                    // URLSession のリクエストも道連れで中断される (実機で -999 を確認)。
-                    // Task { } は囲みのキャンセルを継承しないので取得は必ず走り切る
+                    // ② Fetch in an unstructured Task detached from the view's lifetime.
+                    // SwiftUI runs the refreshable action as "a task tied to that view", so
+                    // if the view is rebuilt during the fetch, the task is cancelled and the
+                    // URLSession request is aborted with it (-999 confirmed on a real device).
+                    // Task { } does not inherit the enclosing cancellation, so the fetch always runs to completion
                     await Task { await onRefresh() }.value
 
-                    // ③ 取得が速すぎるとくるくるが瞬きのように消えるので、最低 0.5 秒は見せる
+                    // ③ If the fetch is too fast the spinner disappears almost instantly, so show it for at least
+                    // 0.5 seconds
                     let elapsed = Date().timeIntervalSince(fetchStarted)
                     if elapsed < 0.5 {
                         try? await Task.sleep(nanoseconds: UInt64((0.5 - elapsed) * 1_000_000_000))
@@ -148,7 +155,8 @@ struct FeedCardListView: View {
 
     private var rawScroll: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            // カードレス構成のため投稿間はゆったり空ける (境界線が無いぶん余白が区切りになる)
+            // The layout has no cards, so leave generous space between posts (with no border lines, the spacing
+            // is the separator)
             LazyVStack(spacing: 28) {
                 if topContentInset > 0 {
                     Color.clear.frame(height: topContentInset)
@@ -157,11 +165,11 @@ struct FeedCardListView: View {
                 ForEach(Array(visibleItems.enumerated()), id: \.element.id) { index, item in
                     card(item: item)
                         .id(item.id)
-                        // 2026-07-22 実機FB改: flagged の上端小バナーは (1) 著者ヘッダーに被る
-                        // (2) 文字部分のタップが下のアバターへ素通りする (3) 制限中と分かりにくい、
-                        // で却下 → rejected/flagged とも同じ「暗幕+中央表示」に統一。
-                        // overlayPreferenceValue なのはゴミ箱を「画像の右上」(FeedMediaBoundsKey) に
-                        // 合わせるため (2026-07-25 実機FB)
+                        // 2026-07-22 real device feedback, revised: the small top banner for flagged was rejected because
+                        // (1) it overlaps the author header (2) taps on the text pass through to the avatar below (3) it is
+                        // unclear that the post is restricted → rejected/flagged now both use the same "dark overlay +
+                        // centered content". overlayPreferenceValue is used to place the trash can at "the top right of the
+                        // image" (FeedMediaBoundsKey) (2026-07-25 real device feedback)
                         .overlayPreferenceValue(FeedMediaBoundsKey.self) { mediaAnchor in
                             if canDeletePosts, item.kind == .post,
                                rejectedPostIds.contains(item.itemId) || flaggedPostIds.contains(item.itemId) {
@@ -183,30 +191,34 @@ struct FeedCardListView: View {
                             onItemVisibilityChanged?(item, isVisible)
                         }
 
-                    // 広告枠: 10件に1件 (NativeAdService.adInterval)。在庫が無ければ FeedAdSlot が
-                    // 空を返し枠ごと消える (空白は残らない)。スロット番号は「何番目の枠か」で安定させ、
-                    // スクロール往復で同じ位置に同じ広告を出す
+                    // Ad slot: 1 in 10 items (NativeAdService.adInterval). With no inventory, FeedAdSlot returns
+                    // empty and the whole slot disappears (no blank space left). The slot number is kept stable as
+                    // "which slot it is", so the same ad shows in the same position when scrolling back and forth
                     if showsAds, (index + 1) % NativeAdService.adInterval == 0 {
                         FeedAdSlot(slot: (index + 1) / NativeAdService.adInterval - 1)
                     }
                 }
             }
-            // カードは画面幅いっぱい (横余白なし)。角丸だけでカードを表現する (ユーザー指定 2026-07-10)
+            // Cards are full screen width (no side padding). Only rounded corners mark a card (user instruction
+            // 2026-07-10)
             .padding(.vertical, 16)
             .scrollTargetLayout()
         }
     }
 
-    /// スクロール位置の束縛は「N件目から開く」用途 (グリッド/通知からの遷移) の時だけ行う。
+    /// Bind the scroll position only for the "open at item N" use case (navigation from the
+    /// grid/notifications).
     ///
-    /// 2026-07-31 実機バグの真因 (ユーザー複数回報告「引き下げ更新しても内容が変わらない」):
-    /// scrollPosition(id:) を束縛すると、SwiftUI はスクロールのたびに「今いちばん上に見えて
-    /// いるカードの ID」をバインディングへ書き戻し、データが差し替わってもその ID のカードを
-    /// 探して画面上端に留め続ける。つまり並び順は新しくなっているのに、先頭には常に同じ
-    /// カードが座り「1件も変わっていない」ように見えていた。
-    /// (アプリ再起動ではバインディングが nil から始まるので新しい並びが見える = 症状と一致)
+    /// Root cause of the 2026-07-31 real device bug (user reported several times: "pull-to-refresh does
+    /// not change the content"): when scrollPosition(id:) is bound, on every scroll SwiftUI writes "the
+    /// ID of the card currently visible at the top" back to the binding, and even after the data is
+    /// replaced it looks for the card with that ID and keeps it at the top of the screen. So the order
+    /// was new, but the same card always sat at the top, and it looked as if "nothing had changed".
+    /// (After an app restart the binding starts from nil, so the new order is visible = matches the
+    /// symptom)
     ///
-    /// ホームフィード (startItemKey == nil) では位置を覚える必要がないので、束縛ごと外す。
+    /// The home feed (startItemKey == nil) does not need to remember the position, so the binding is
+    /// removed entirely.
     @ViewBuilder
     private var positionedScroll: some View {
         if startItemKey == nil {
@@ -219,58 +231,61 @@ struct FeedCardListView: View {
     private var scrollBody: some View {
         positionedScroll
         .overlay {
-            // 空状態 (例: いいね一覧の最後の1件を解除した、投稿削除で0件になった等)。
-            // ローディング判定は呼び出し元 (MixedFeedView 等) が持つため、ここは単純に
-            // 「表示対象が0件」で判定する
+            // Empty state (e.g. the last item of the likes list was unliked, or deleting a post left 0 items).
+            // The caller (MixedFeedView etc.) owns the loading state, so here the check is simply
+            // "0 items to show"
             if visibleItems.isEmpty {
                 emptyStateView
             }
         }
         .background(AppColors.background.ignoresSafeArea())
         .toolbarBackground(AppColors.background, for: .navigationBar)
-        // 実機FB#6 緩和策 (2026-07-22、未検証): 親 (MyProfileView 等) はヒーロー用に
-        // toolbarBackground(.hidden) を使っており、push 先が可視性を明示しないとバー周りの
-        // レイアウトが親の透過状態を引きずる疑いがある。スタイル指定に加えて可視を明示する
+        // Mitigation for real device feedback #6 (2026-07-22, unverified): the parent (MyProfileView etc.)
+        // uses toolbarBackground(.hidden) for the hero, and we suspect that unless the pushed screen sets
+        // the visibility explicitly, the layout around the bar inherits the parent's transparent state.
+        // Set visible explicitly in addition to the style
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbarRole(.editor)
         .onAppear {
-            // 実機FB#6 緩和策 (2026-07-22、未検証): 開始位置が先頭アイテムの場合はアンカー設定を
-            // スキップする。リストは元々先頭表示なのでスクロールは本来不要だが、scrollPosition の
-            // 初期アンカーがセーフエリア確定前に適用されると「先頭カードのヘッダーがナビバーの
-            // 上に食い込み、引っ張っても離すと戻る」症状 (#6 スクショの状況 = 通知/グリッド先頭
-            // タップの1件表示) を作り得る。先頭以外へのジャンプ (グリッド2件目以降) は従来どおり
+            // Mitigation for real device feedback #6 (2026-07-22, unverified): skip setting the anchor when the
+            // start position is the first item. The list already shows the top, so no scrolling is needed, but
+            // if the initial anchor of scrollPosition is applied before the safe area is settled, it can cause
+            // the symptom "the first card's header goes under the nav bar, and snaps back after pulling and
+            // releasing" (the situation in the #6 screenshot = a single item shown from a notification / a tap
+            // on the first grid item). Jumps to other items (grid item 2 and later) work as before
             if scrollTargetKey == nil, let startItemKey,
                startItemKey != visibleItems.first?.id {
                 scrollTargetKey = startItemKey
             }
         }
         .task {
-            // 広告はホームフィード表示が最初のトリガー (起動シーケンスには混ぜない)
+            // The first trigger for ads is the home feed appearing (not mixed into the launch sequence)
             if showsAds {
-                // ATT の可否を先に確定させてからロードする。順序が逆だと初回ぶんが
-                // 非パーソナライズで確定してしまう。AdTrackingConsent.isEnabled == false
-                // (既定) なら即 return するので、従来と同じタイミングで preload が走る
+                // Load only after the ATT decision is settled. In the reverse order, the first load
+                // is fixed as non-personalized. If AdTrackingConsent.isEnabled == false
+                // (the default) it returns immediately, so preload runs at the same timing as before
                 await AdTrackingConsent.shared.requestIfNeeded()
                 NativeAdService.shared.preloadIfNeeded()
             }
             await extrasService.loadExtras(for: items)
         }
-        // 制限中 (rejected/flagged) の自分の投稿に審査中の申し立てがあるかを一括取得し、
-        // オーバーレイのピルを「異議申し立て中」に切り替える (2026-07-23 実機FB)。
-        // id: に union を渡すことでフィード再読み込みで制限対象が変わった時だけ再取得する
+        // Fetch in one call whether your restricted (rejected/flagged) posts have a pending appeal, and
+        // switch the overlay pill to "異議申し立て中" ("Appeal under review") (2026-07-23 real device
+        // feedback). Passing the union to id: refetches only when the restricted set changes after a feed
+        // reload
         .task(id: rejectedPostIds.union(flaggedPostIds)) {
             guard canDeletePosts else { return }
             let moderatedIds = rejectedPostIds.union(flaggedPostIds)
             guard !moderatedIds.isEmpty else { return }
             appealPendingPostIds = await AppealService.shared.fetchPendingAppealPostIds(for: moderatedIds)
         }
-        // フィード再読み込み (refresh 等) で items が変わったら extras も追従。
-        // items ([FeedItem]) 全体の Equatable 比較は更新のたびにフルウォークになるため、
-        // 変化検知は軽量な id 配列だけで行う (中身の並び/件数が変われば id 配列も変わる)
+        // When items change on a feed reload (refresh etc.), extras follow.
+        // An Equatable comparison of the whole items ([FeedItem]) walks everything on every update, so
+        // change detection uses only a light id array (if the order/count changes, the id array changes too)
         .onChange(of: items.map(\.id)) { _, _ in
-            // items の中身が実際に変わった (= pull-to-refresh 等の真の再読み込み) 場合は
-            // TTL キャッシュを無視して確実に最新のいいね/コメント数を取り直す
+            // If the items really changed (= a real reload such as pull-to-refresh),
+            // ignore the TTL cache and always refetch the latest like/comment counts
             Task { await extrasService.loadExtras(for: items, force: true) }
         }
         .navigationDestination(isPresented: $showOfficialProfile) {
@@ -298,9 +313,9 @@ struct FeedCardListView: View {
         .navigationDestination(item: $commentPageRequest) { request in
             CommentPageView(request: request)
         }
-        // コメントページを閉じて戻ってきたら、そのアイテムの extras (コメントプレビュー) を
-        // TTL 無視で再取得対象にする。自分が投稿したコメントが最大60秒プレビューに
-        // 出ないという regression を防ぐ (F6)
+        // When the comment page is closed and the user comes back, mark that item's extras (comment
+        // preview) for refetch, ignoring the TTL. Prevents a regression where your own new comment does not
+        // appear in the preview for up to 60 seconds (F6)
         .onChange(of: commentPageRequest) { _, newValue in
             if newValue == nil, let key = lastCommentItemKey {
                 extrasService.invalidate(key: key)
@@ -311,7 +326,8 @@ struct FeedCardListView: View {
             ReportSheetView(target: target, onSubmitted: { showReportThanks = true })
         }
         .sheet(item: $appealTarget) { target in
-            // 送信成功したらフィードを再読み込みせずともピルを即「異議申し立て中」へ
+            // On a successful submit, switch the pill to "異議申し立て中" ("Appeal under review") right away,
+            // without reloading the feed
             AppealSheetView(target: target, onFiled: {
                 if case .post(let pid) = target {
                     appealPendingPostIds.insert(pid)
@@ -355,8 +371,9 @@ struct FeedCardListView: View {
         } message: {
             Text(saveAlert?.message ?? "")
         }
-        // 2026-07-22 実機FB: confirmationDialog (画面端のシート) は押したボタンから遠く「吹き出し」に
-        // 見えて違和感 → コメント削除と同じ画面中央の標準 alert に統一
+        // 2026-07-22 real device feedback: confirmationDialog (a sheet at the screen edge) is far from the
+        // pressed button and looks like a "speech bubble", which felt wrong → use the standard alert in the
+        // center of the screen, same as comment deletion
         .alert(
             L.postsDeleteConfirmTitle(lang),
             isPresented: Binding(
@@ -375,7 +392,7 @@ struct FeedCardListView: View {
                         if success {
                             if visibleItems.isEmpty { dismiss() }
                         } else {
-                            // 失敗したのでカードを復活させる (dismiss は成功時のみ)
+                            // It failed, so bring the card back (dismiss only on success)
                             deletedPostIds.remove(pid)
                         }
                     }
@@ -433,7 +450,7 @@ struct FeedCardListView: View {
         )
     }
 
-    // MARK: - Handlers (MixedFeedView と同じ流儀)
+    // MARK: - Handlers (same style as MixedFeedView)
 
     private func isLikedItem(_ item: FeedItem) -> Bool {
         switch item.kind {
@@ -461,8 +478,8 @@ struct FeedCardListView: View {
             }
         }
         onLikeToggled?(item, willLike)
-        // 自分のいいねが likers スタックに即座に反映されるよう、この項目の TTL キャッシュだけ
-        // 無効化する (60秒 TTL のまま remount すると自分のいいねが消えて見える regression 対策、F6)
+        // Invalidate the TTL cache for this item only, so your own like shows in the likers stack right away
+        // (fixes a regression where, on remount within the 60-second TTL, your own like seems to vanish, F6)
         extrasService.invalidate(key: item.id)
     }
 
@@ -490,7 +507,7 @@ struct FeedCardListView: View {
         }
     }
 
-    /// 「— 著者名」タップ → 著者の名言一式を取得し著者トピックフィードへ
+    /// Tap on "- author name" → fetch all quotes by that author and go to the author topic feed
     private func handleTopicTap(item: FeedItem) {
         guard item.kind == .quote, let authorId = item.authorId else { return }
         guard let author = QuoteService.shared.authors.first(where: { $0.id == authorId }) else { return }
@@ -511,7 +528,8 @@ struct FeedCardListView: View {
 
     // MARK: - Menu
 
-    /// 共通: 共有 / ダウンロード。他人 UGC: 通報 + ブロック。公式名言: 通報。自分 UGC (canDeletePosts): 削除
+    /// Common: share / download. Other users' UGC: report + block. Official quotes: report.
+    /// Own UGC (canDeletePosts): delete
     private func moderationMenu(for item: FeedItem) -> AnyView {
         let shareText = L.feedMenuShareText(item, lang, showOriginal)
         let isMine: Bool = {
@@ -609,18 +627,20 @@ struct FeedCardListView: View {
         .allowsHitTesting(false)
     }
 
-    // MARK: - AI Moderation Overlay (rejected/flagged 共通、自分の投稿のみ)
+    // MARK: - AI Moderation Overlay (shared by rejected/flagged, own posts only)
 
-    /// 制限中投稿の全面オーバーレイ (2026-07-22 実機FB改で rejected/flagged を統一)。
-    /// 暗幕はタップを通さない = 制限中投稿への いいね/コメント等の操作をまとめて封じる (ユーザー指定
-    /// 「バグの原因になるなら消して大丈夫」)。そのぶん下の「…」メニューに到達できなくなるため、
-    /// 削除はオーバーレイ内のボタンで代替する。判定理由の全文と異議申し立ては
-    /// 「詳細・異議申し立て」→ AppealSheetView に集約 (通知プレビューの2行では全文が読めないため)。
+    /// Full overlay for restricted posts (rejected/flagged unified in the 2026-07-22 real device feedback
+    /// revision). The dark overlay does not let taps through = it blocks all likes/comments etc. on
+    /// restricted posts at once (user instruction: "fine to remove them if they cause bugs"). Because of
+    /// this the "…" menu below can no longer be reached, so delete is offered by a button inside the
+    /// overlay. The full verdict reason and the appeal are gathered in "詳細・異議申し立て" ("Details &
+    /// appeal") → AppealSheetView (the 2-line notification preview cannot show the full text).
     private func moderationStateOverlay(postId: UUID, isRejected: Bool, mediaFrame: CGRect? = nil) -> some View {
-        // 審査中の申し立てがある投稿はピル/CTA を申し立て済み表示に切り替える (2026-07-23 実機FB)
+        // For posts with a pending appeal, switch the pill/CTA to the "appeal filed" display (2026-07-23
+        // real device feedback)
         let isAppealPending = appealPendingPostIds.contains(postId)
         return ZStack {
-            // hit-testable のまま置く = 下のカード操作 (いいね/コメント/アバター遷移) を遮断する
+            // Left hit-testable = blocks interaction with the card below (like/comment/avatar navigation)
             Color.black.opacity(0.6)
 
             VStack(spacing: 12) {
@@ -631,10 +651,10 @@ struct FeedCardListView: View {
                     .foregroundColor(.white)
 
                 Text(isAppealPending
-                     ? (lang == .japanese ? "異議申し立て中" : "Appeal under review")  // 文言はユーザー添削待ち
+                     ? (lang == .japanese ? "異議申し立て中" : "Appeal under review")  // Wording is waiting for the user's review
                      : isRejected
                      ? L.postsModerationRejectedBadge(lang)
-                     : (lang == .japanese ? "表示が制限されています" : "Visibility limited"))  // 文言はユーザー添削待ち
+                     : (lang == .japanese ? "表示が制限されています" : "Visibility limited"))  // Wording is waiting for the user's review
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.white)
                     .padding(.horizontal, 16)
@@ -645,8 +665,8 @@ struct FeedCardListView: View {
                     appealTarget = .post(postId)
                 } label: {
                     Text(isAppealPending
-                         ? (lang == .japanese ? "詳細を見る" : "View details")  // 文言はユーザー添削待ち
-                         : (lang == .japanese ? "詳細・異議申し立て" : "Details & appeal"))  // 文言はユーザー添削待ち
+                         ? (lang == .japanese ? "詳細を見る" : "View details")  // Wording is waiting for the user's review
+                         : (lang == .japanese ? "詳細・異議申し立て" : "Details & appeal"))  // Wording is waiting for the user's review
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(AppColors.background)
                         .padding(.horizontal, 18)
@@ -656,15 +676,16 @@ struct FeedCardListView: View {
                 .buttonStyle(.plain)
             }
         }
-        // 2026-07-22 実機FB: 中央のピル過多で見にくい → 削除は右上のゴミ箱アイコンに分離
-        // (ぼかし付きの半透明円背景、ユーザー指定)。
-        // 2026-07-25 実機FB: 位置は「カードの右上 (ヘッダー横)」でなく「画像の右上」に固定
+        // 2026-07-22 real device feedback: too many pills in the center made it hard to read → delete moved
+        // to a trash icon at the top right (semi-transparent circle background with blur, user instruction).
+        // 2026-07-25 real device feedback: position fixed to "top right of the image", not "top right of the
+        // card (next to the header)"
         .overlay {
             if let mediaFrame {
                 trashButton(for: postId)
-                    .position(x: mediaFrame.maxX - 31, y: mediaFrame.minY + 31)  // 画像の角から余白12pt (ボタン38pt の半径19)
+                    .position(x: mediaFrame.maxX - 31, y: mediaFrame.minY + 31)  // 12pt margin from the image corner (button is 38pt, radius 19)
             } else {
-                // 枠が取れなかった場合のフォールバック (従来のカード右上)
+                // Fallback when the frame could not be obtained (the old top right of the card)
                 trashButton(for: postId)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .padding(12)

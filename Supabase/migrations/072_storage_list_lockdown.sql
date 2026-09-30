@@ -1,67 +1,66 @@
 -- ============================================================================
--- 072: Storage (post-images / avatars) の SELECT ポリシーを自分のフォルダのみに絞る
+-- 072: restrict the SELECT policies of Storage (post-images / avatars) to your own folder only
 --
--- 背景: post-images / avatars バケットの SELECT ポリシー
---   (019_post_v2.sql の post_images_public_read、013_b_profile_edit.sql の
---    avatars_public_read) は、どちらもロール無指定 (既定 = PUBLIC、anon を
---    含む) かつ `USING (bucket_id = ...)` のみだった。そのため publishable
---    キーだけで `POST /storage/v1/object/list/{bucket}` を叩くと、
---    全ユーザーの UUID (= フォルダ名) と配下の全ファイル名を列挙できる状態
---    だった。
+-- Background: the SELECT policies of the post-images / avatars buckets
+--   (post_images_public_read in 019_post_v2.sql and
+--    avatars_public_read in 013_b_profile_edit.sql) both had no role specified (default = PUBLIC,
+--    including anon) and only `USING (bucket_id = ...)`. So with only the publishable
+--    key, calling `POST /storage/v1/object/list/{bucket}` could
+--    list the UUIDs (= folder names) of all users and every file name under them.
 --
--- 一次情報で確認済みの前提 (Supabase 公式ドキュメント、Buckets Fundamentals):
+-- Premises confirmed with primary sources (Supabase official docs, Buckets Fundamentals):
 --   "When a bucket is designated as 'Public,' it effectively bypasses access
 --    controls for both retrieving and serving files within the bucket."
 --   "Access control is still enforced for other types of operations including
 --    uploading, deleting, moving, and copying."
 --   → https://supabase.com/docs/guides/storage/buckets/fundamentals
---   → つまり public バケットの public URL 経由のダウンロード (画像表示) は
---     RLS を通らないため、SELECT ポリシーを絞ってもフィード等の画像表示は
---     壊れない。
+--   → In other words, downloads through the public URL of a public bucket (showing images) do not
+--     go through RLS, so restricting the SELECT policy does not break image display in the feed
+--     etc.
 --
---   list 操作 (フォルダ内一覧) は storage.objects の SELECT ポリシーを通る。
+--   The list operation (listing a folder) goes through the SELECT policy of storage.objects.
 --   → https://supabase.com/docs/guides/storage/security/access-control
 --
--- やること (採用方式 = 自分のフォルダのみ read 可):
---   post_images_public_read / avatars_public_read (SELECT, ロール無指定) を、
+-- What to do (chosen approach = read only your own folder):
+--   post_images_public_read / avatars_public_read (SELECT, no role specified) are replaced with
 --   post_images_owner_read / avatars_owner_read (SELECT, TO authenticated,
---   自分の uid フォルダ配下のみ) へ差し替える。
+--   only under your own uid folder).
 --
--- 触らないもの:
---   - バケットの `public = true` は変更しない。変更すると getPublicURL() が
---     発行する公開URLそのものが失効する (署名URL方式への切り替えが別途
---     必要になり、既存のフィード画像表示が全滅する)。上記ドキュメントの通り、
---     public URL 経由のダウンロードは本ファイルの SELECT ポリシー変更と
---     無関係に動き続けるため、バケット設定側は変更不要。
---   - INSERT / UPDATE / DELETE ポリシーには一切触れない。特に
---     post_images_owner_update (019_post_v2.sql の元ポリシーに対して、
---     067_moderation_hardening.sql §4 が `AND NOT public.post_image_is_locked(name)`
---     ガードを追加したもの) を本ファイルで DROP/CREATE し直すと、067 の変更を
---     消してしまう致命的な事故になる。本ファイルが対象にするのは SELECT
---     ポリシー2本 (post-images 用・avatars 用) のみ。
+-- Not touched:
+--   - The bucket's `public = true` is not changed. Changing it would invalidate the public URLs
+--     issued by getPublicURL() themselves (a separate switch to signed URLs would be
+--     needed, and all existing feed image display would break). As the docs above say,
+--     downloads through the public URL keep working regardless of the SELECT policy change
+--     in this file, so the bucket settings do not need to change.
+--   - INSERT / UPDATE / DELETE policies are not touched at all. In particular, if
+--     post_images_owner_update (the original policy in 019_post_v2.sql, to which
+--     067_moderation_hardening.sql §4 added the `AND NOT public.post_image_is_locked(name)`
+--     guard) were DROPped/CREATEd again in this file, it would erase the change from 067,
+--     a critical accident. This file only targets the 2 SELECT
+--     policies (one for post-images, one for avatars).
 --
--- クライアント影響の確認 (実測: grep で全 Swift ファイルを確認済み):
---   アプリ内で Storage の `.list()` を呼んでいる箇所は0件。実際に使っている
---   Storage API は以下の3種類のみで、いずれも自分の uid フォルダ配下のパスに
---   対してのみ呼ばれている:
---     - getPublicURL (ネットワーク不要のURL文字列生成、RLSと無関係に動く):
+-- Checking the client impact (measured: all Swift files checked with grep):
+--   There are 0 places in the app that call Storage `.list()`. The Storage APIs actually used
+--   are only the 3 kinds below, and all of them are called only on paths under your own uid
+--   folder:
+--     - getPublicURL (builds a URL string without the network, works regardless of RLS):
 --       FeedItem.swift / UserPost.swift / UserAuthService.swift
---     - upload (投稿画像アップロード・アバターアップロード、パスは
---       "{uid}/..." 固定): UserPostService.swift / UserAuthService.swift
---     - remove (アップロード失敗時のロールバック・アバター削除、同じく
---       自分の uid フォルダ配下のパスのみ):
+--     - upload (post image upload, avatar upload, the path is fixed to
+--       "{uid}/..."): UserPostService.swift / UserAuthService.swift
+--     - remove (rollback on upload failure, avatar deletion, likewise
+--       only paths under your own uid folder):
 --       UserPostService.swift / UserAuthService.swift
---   したがって本ファイルの SELECT ポリシー変更によるクライアント側の
---   デグレードは無い想定。
+--   So no client-side regression is expected from the SELECT policy change
+--   in this file.
 -- ============================================================================
 
 BEGIN;
 
 -- ----------------------------------------------------------------------------
--- 1. post-images: SELECT ポリシーを自分のフォルダのみに差し替え
+-- 1. post-images: replace the SELECT policy with own-folder-only
 -- ----------------------------------------------------------------------------
-DROP POLICY IF EXISTS "post_images_public_read" ON storage.objects;  -- 旧名 (019 が作成)
-DROP POLICY IF EXISTS "post_images_owner_read"  ON storage.objects;  -- 新名 (再実行に備えて)
+DROP POLICY IF EXISTS "post_images_public_read" ON storage.objects;  -- Old name (created by 019)
+DROP POLICY IF EXISTS "post_images_owner_read"  ON storage.objects;  -- New name (in case of a rerun)
 
 CREATE POLICY "post_images_owner_read"
     ON storage.objects
@@ -73,10 +72,10 @@ CREATE POLICY "post_images_owner_read"
     );
 
 -- ----------------------------------------------------------------------------
--- 2. avatars: SELECT ポリシーを自分のフォルダのみに差し替え
+-- 2. avatars: replace the SELECT policy with own-folder-only
 -- ----------------------------------------------------------------------------
-DROP POLICY IF EXISTS "avatars_public_read" ON storage.objects;  -- 旧名 (013 が作成)
-DROP POLICY IF EXISTS "avatars_owner_read"  ON storage.objects;  -- 新名 (再実行に備えて)
+DROP POLICY IF EXISTS "avatars_public_read" ON storage.objects;  -- Old name (created by 013)
+DROP POLICY IF EXISTS "avatars_owner_read"  ON storage.objects;  -- New name (in case of a rerun)
 
 CREATE POLICY "avatars_owner_read"
     ON storage.objects
@@ -90,22 +89,22 @@ CREATE POLICY "avatars_owner_read"
 COMMIT;
 
 -- ============================================================================
--- 検証クエリ (適用後にこれを流して結果を確認する)
+-- Verification queries (run these after applying and check the results)
 -- ============================================================================
 
--- (A) storage.objects の全ポリシー一覧。
---     post_images_owner_read / avatars_owner_read の roles が {authenticated}
---     になっていること、かつ INSERT/UPDATE/DELETE の6本
+-- (A) List of all policies on storage.objects.
+--     Check that the roles of post_images_owner_read / avatars_owner_read are {authenticated},
+--     and that the 6 INSERT/UPDATE/DELETE policies
 --     (post_images_owner_insert/update/delete, avatars_owner_insert/update/delete)
---     が本ファイル適用前後で変化していないこと (特に post_images_owner_update の
---     qual に post_image_is_locked が含まれたままであること) を確認する。
+--     did not change before and after applying this file (in particular, that the qual of
+--     post_images_owner_update still contains post_image_is_locked).
 SELECT policyname, cmd, roles, qual
 FROM pg_policies
 WHERE schemaname = 'storage' AND tablename = 'objects'
 ORDER BY policyname;
 
--- (B) バケットの public 列が true のままであることを確認 (画像表示が生きているか)。
+-- (B) Check that the bucket's public column is still true (is image display still working).
 SELECT id, public, file_size_limit
 FROM storage.buckets
 WHERE id IN ('post-images', 'avatars');
--- 期待結果: 両方とも public = true
+-- Expected: both public = true

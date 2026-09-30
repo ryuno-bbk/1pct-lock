@@ -1,26 +1,28 @@
 -- ============================================================================
 -- 068_post_quota_rpc.sql
--- 残り投稿枠の表示をサーバーの数え方に合わせる (2026-08-01)
+-- Make the remaining post quota display match the way the server counts (2026-08-01)
 -- ============================================================================
--- 【何が起きていたか】
--- 066 で投稿レート制限を「user_posts の現存行カウント」から「rate_events 台帳カウント」へ
--- 変更したが、クライアント側の残数表示 (UserPostService.remainingDailyPostSlots) は
--- 旧方式のまま user_posts を数えていた。結果:
---   投稿を削除する → user_posts の行が減る → 表示上の「今日はあと N 件」は増える
---   → しかしサーバーは rate_events (削除しても減らない) で数えるので投稿は弾かれる
--- = 「残り枠があると表示されているのに投稿できない」という食い違いが発生した。
--- (2026-08-01 実機テストでユーザーが発見)
+-- [What was happening]
+-- 066 changed the post rate limit from "counting existing rows in user_posts" to "counting the
+-- rate_events ledger", but the client-side remaining count display
+-- (UserPostService.remainingDailyPostSlots) still counted user_posts the old way. Result:
+--   delete a post → fewer rows in user_posts → the displayed "今日はあと N 件" ("N more today")
+--   goes up
+--   → but the server counts rate_events (which does not go down on delete), so the post is rejected
+-- = a mismatch where "it shows slots remaining but you cannot post".
+-- (found by the user in real device testing on 2026-08-01)
 --
--- 【なぜクライアントが直接数えられないか】
--- rate_events は 066 で RLS 有効 + ポリシー0本 + REVOKE ALL FROM anon, authenticated
--- にしてある (クライアントから台帳を消してレート制限を迂回されないため)。
--- したがって残数取得には SECURITY DEFINER の RPC が要る。
+-- [Why the client cannot count directly]
+-- In 066, rate_events was set to RLS enabled + 0 policies + REVOKE ALL FROM anon, authenticated
+-- (so the client cannot delete the ledger to bypass the rate limit).
+-- So getting the remaining count requires a SECURITY DEFINER RPC.
 --
--- 【なぜ「残り」ではなく「使用済み」を返すか】
--- 上限値 5 をこのファイルにも書くと、enforce_post_rate_limit (066) と
--- UserPostService.dailyPostLimit (Swift) に加えて3箇所目の定義になり、
--- 同期漏れの事故が起きやすくなる。使用済み件数だけを返し、上限との引き算は
--- 既に定数を持っているクライアント側に任せることで、定義箇所を増やさない。
+-- [Why it returns "used" and not "remaining"]
+-- Writing the limit value 5 in this file too would make it a 3rd definition, in addition to
+-- enforce_post_rate_limit (066) and UserPostService.dailyPostLimit (Swift), and accidents from
+-- them getting out of sync become more likely. Returning only the used count and leaving the
+-- subtraction from the limit to the client, which already has the constant, avoids adding
+-- another definition.
 -- ============================================================================
 
 BEGIN;
@@ -32,8 +34,8 @@ SECURITY DEFINER
 SET search_path = public
 STABLE
 AS $$
-    -- 呼び出し元自身の直近24時間の投稿回数 (削除済みを含む)。
-    -- auth.uid() 固定なので他人の値は取得できない。
+    -- The caller's own post count in the last 24 hours (including deleted ones).
+    -- It is fixed to auth.uid(), so other people's values cannot be fetched.
     SELECT count(*)::int
     FROM public.rate_events
     WHERE user_id = auth.uid()
@@ -46,18 +48,18 @@ COMMENT ON FUNCTION public.get_post_quota_used() IS
     'PostConfirmView の残り枠表示用。上限との引き算はクライアント側 '
     '(UserPostService.dailyPostLimit) で行う';
 
--- クライアントから直接呼ぶ関数なので権限を明示的に締める。
--- ⚠️ FROM anon だけでは効かない (CREATE FUNCTION は暗黙で PUBLIC に EXECUTE を付与し、
--- anon は PUBLIC のメンバーなので anon 名指しの REVOKE では剥がれない。063/050 の教訓)。
+-- This function is called directly from the client, so tighten its permissions explicitly.
+-- ⚠️ FROM anon alone does not work (CREATE FUNCTION implicitly grants EXECUTE to PUBLIC, and
+-- anon is a member of PUBLIC, so a REVOKE naming anon does not remove it. Lesson from 063/050).
 REVOKE EXECUTE ON FUNCTION public.get_post_quota_used() FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.get_post_quota_used() TO authenticated;
 
 COMMIT;
 
 -- ============================================================================
--- 検証クエリ
+-- Verification query
 -- ============================================================================
--- 未認証から実行できないこと (✅ 閉じている が出れば正常)
+-- Must not be executable without authentication (normal if "✅ 閉じている" ("closed") appears)
 SELECT p.proname,
        CASE
          WHEN EXISTS (SELECT 1 FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a

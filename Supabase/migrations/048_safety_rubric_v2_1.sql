@@ -1,14 +1,16 @@
 -- ============================================================
 -- 048_safety_rubric_v2_1.sql
--- 層1改定: 性的な文脈づけを「人物写真との複合」限定から拡張 (2026-07-25)
+-- Layer 1 revision: extend sexual framing beyond the "combined with a photo of a person" case only
+-- (2026-07-25)
 -- ============================================================
--- 背景: 044 の「性的な文脈づけ」は人物写真+性的テキストの複合を条件にしていたため、
--- 黒背景に「エロい」の文字だけ、のような人物なし投稿が素通りする (実弾テストで確認)。
--- 文字だけでも性的な提示・誘引を掲げた投稿は fail に倒す。
+-- Background: "sexual framing" in 044 required a combination of a photo of a person + sexual text, so
+-- posts without a person, such as just the word "エロい" ("sexy") on a black background, slipped through
+-- (confirmed in a live test).
+-- Posts that present or solicit something sexual, even with text only, are now a fail.
 --
--- 前提: 044 適用済み (safety_rubric の全文書き換え。045 のステージ衣装文言も本文に内包済み
--- のため、045 の safety 側 UPDATE は適用済みでも未適用でも整合する)。
--- 適用順: 044 → (045) → 048。ethos_rubric には触れない。
+-- Assumes: 044 is applied (full rewrite of safety_rubric. The stage costume wording from 045 is also
+-- included in the text, so it is consistent whether or not the safety-side UPDATE in 045 was applied).
+-- Apply order: 044 → (045) → 048. ethos_rubric is not touched.
 -- ============================================================
 
 UPDATE public.moderation_config

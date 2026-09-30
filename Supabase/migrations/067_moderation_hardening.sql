@@ -1,46 +1,48 @@
 -- ============================================================================
 -- 067_moderation_hardening.sql
--- 第2弾: モデレーションの穴 (2026-08-01)
+-- Round 2: moderation gaps (2026-08-01)
 -- ============================================================================
--- 設計: Fable 5 / 実装: Sonnet 5 / レビュー: Fable 5
--- 設計書: Docs/design_phase2_moderation_2026_08_01.md (#5〜#9 + 追補)
--- 引き継ぎ: Docs/handoff_to_fable_2026_08_01.md #5〜#7
+-- Design: Fable 5 / Implementation: Sonnet 5 / Review: Fable 5
+-- Design doc: Docs/design_phase2_moderation_2026_08_01.md (#5 to #9 + addendum)
+-- Handoff: Docs/handoff_to_fable_2026_08_01.md #5 to #7
 --
--- 「AI審査済み」という看板が外れる3+2の穴を塞ぐ:
---   #5   層1安全ルーブリックに欠落7カテゴリを追加 (自傷自殺/摂食障害/グロ/危険行為/
---        武器/動物虐待/テロ賛美) + キャッチオール条項 + 層2への「層1優先」明記
---   #5-b 却下理由(AIの生成文)をユーザー向け通知の preview_text に出さない
---   #6   承認後の Storage 上書き (同一パスへの再アップロードで再審査を逃れる) を封じる
---   #8   通報閾値 3→5 に引き上げ + 通報由来の非表示を ethos_enforce から独立させる
---   #9   通報理由に 'off_topic' (エトス専用) を追加
---   (#7 画像取得リトライ+fail-closed は moderate-post/index.ts 側。本ファイルの対象外)
+-- Closes the 3+2 gaps that make the "AI-reviewed" label untrue:
+--   #5   Add the 7 missing categories to the layer 1 safety rubric (self-harm/suicide, eating
+--        disorders, gore, dangerous acts, weapons, animal abuse, glorifying terrorism)
+--        + a catch-all clause + state "layer 1 takes priority" in layer 2
+--   #5-b Do not show the rejection reason (AI-generated text) in preview_text of user notifications
+--   #6   Block Storage overwrites after approval (re-uploading to the same path escapes re-review)
+--   #8   Raise the report threshold 3→5 + make report-based hiding independent of ethos_enforce
+--   #9   Add 'off_topic' (ethos only) as a report reason
+--   (#7 image fetch retry + fail-closed is in moderate-post/index.ts. Out of scope for this file)
 --
--- ★最重要 (066を踏襲): 免除条件は auth.uid() IS NULL を使う。rolbypassrls は使わない。
---   本ファイルの新規トリガー関数はどれも「バックエンド免除」を必要としない
---   (report閾値trigger/lock系trigger/protect系trigger はどれも呼び出し元を問わず
---   常に同じロジックで動く設計、または既存の rolbypassrls 判定パターンを流用するのみ)。
+-- ★Most important (same as 066): the exemption condition uses auth.uid() IS NULL. Not rolbypassrls.
+--   None of the new trigger functions in this file need a "backend exemption"
+--   (the report threshold trigger / lock triggers / protect triggers all run the same logic
+--   regardless of the caller, or only reuse the existing rolbypassrls check pattern).
 --
--- DROP FUNCTION は使わない (既存関数はすべて CREATE OR REPLACE)。
---   DROP すると権限がリセットされる。063 で実際にこれが出荷ブロッカーを作った
---   (未認証で全投稿が読める状態になった。064 で修正)。
+-- Do not use DROP FUNCTION (all existing functions use CREATE OR REPLACE).
+--   DROP resets the privileges. In 063 this actually created a release blocker
+--   (all posts were readable without authentication. Fixed in 064).
 -- ============================================================================
 
 BEGIN;
 
 -- ============================================================================
--- §1. 層1安全ルーブリック: 欠落7カテゴリ + キャッチオール条項 (#5, #5-c)
+-- §1. Layer 1 safety rubric: 7 missing categories + catch-all clause (#5, #5-c)
 -- ============================================================================
--- 056_safety_rubric_v2_2_gravure.sql の既存8カテゴリ (暴力/性的コンテンツ/性的な
--- 文脈づけ/過度な露出/ヘイトスピーチ/ハラスメント/スパム/違法行為) の文言は
--- 一字一句変更していない (このファイル内の該当8行は 056 からのコピー&ペースト)。
--- 追加/変更したのは (a) 冒頭1文の言い回し (b) 末尾に7カテゴリ (c) キャッチオール条項
--- (d) 結びの段落 (「のみ fail」の内部矛盾を解消) のみ。
+-- The wording of the existing 8 categories in 056_safety_rubric_v2_2_gravure.sql (violence / sexual
+-- content / sexual framing / excessive exposure / hate speech / harassment / spam / illegal acts) is
+-- unchanged, word for word (those 8 lines in this file are copy-pasted from 056).
+-- The only additions/changes are (a) the wording of the first sentence (b) 7 categories at the end
+-- (c) the catch-all clause (d) the closing paragraph (removes the internal contradiction of "fail only").
 --
--- #5-c: 現行末尾は「見逃す方が損」と言いながら「上記に明確に該当する場合のみ fail」と
--- リストを閉じており内部矛盾している (実地でグロテスク系がこの矛盾ですり抜けた)。
--- 列挙を「代表例」に格下げし、キャッチオール条項を追加する。
--- キャッチオールの判定先は rejected (mapVerdictToStatus: safety=fail → rejected は
--- moderate-post/index.ts:391 で既存のまま変更不要。ここはルーブリック文面の変更のみ)。
+-- #5-c: The current ending says "missing something costs more" but then closes the list with
+-- "fail only if it clearly matches the above", which contradicts itself (in practice, gore content
+-- slipped through because of this contradiction).
+-- Downgrade the list to "representative examples" and add a catch-all clause.
+-- The catch-all verdict goes to rejected (mapVerdictToStatus: safety=fail → rejected already exists
+-- in moderate-post/index.ts:391 and needs no change. Only the rubric text changes here).
 UPDATE public.moderation_config
 SET safety_rubric = $safety$
 【層1: 安全性ルーブリック】
@@ -92,17 +94,17 @@ $safety$
 WHERE id = true;
 
 -- ============================================================================
--- §2. 層2エトス・ルーブリック: 層1優先の原則を明記 (#5-d)
+-- §2. Layer 2 ethos rubric: state the "layer 1 first" principle (#5-d)
 -- ============================================================================
--- 057_post_limit_5_ethos_stage_quote.sql の全文をベースに、冒頭 (このアプリの説明) の
--- 直後へ「層1優先」の1段落だけを挿入する。それ以外の文言 (fail/pass の各項目、
--- 本人向け理由文のルール等) は 057 から一切変更していない。
+-- Based on the full text of 057_post_limit_5_ethos_stage_quote.sql, insert only one "layer 1 first"
+-- paragraph right after the opening (the description of this app). All other wording (each fail/pass
+-- item, the rules for the reason text shown to the user, etc.) is unchanged from 057.
 --
--- 背景: safety=fail は mapVerdictToStatus (moderate-post/index.ts:390-394) が
--- ethos の値を見ずに rejected を返すため、コード上は既に層1が優先されている。
--- ここで追加するのはプロンプト文面側の明記であり、AI が「勉強・筋トレ・自己改善の
--- 文脈だから」という理由で層1相当の内容 (極端な断食等) を pass 方向の分析に
--- 引きずられないようにするための念押し (設計書 #5-d)。
+-- Background: for safety=fail, mapVerdictToStatus (moderate-post/index.ts:390-394) returns rejected
+-- without looking at the ethos value, so in code layer 1 already takes priority.
+-- What is added here is an explicit statement in the prompt text. It is a reminder so the AI does not
+-- let "it is in a study / workout / self-improvement context" pull its analysis toward pass for
+-- content that belongs to layer 1 (extreme fasting, etc.) (design doc #5-d).
 UPDATE public.moderation_config
 SET ethos_rubric = $ethos$
 【層2: 「1%」エトス・ルーブリック】
@@ -182,23 +184,23 @@ $ethos$
 WHERE id = true;
 
 -- ============================================================================
--- §3. 却下理由をユーザー通知の preview_text に出さない (#5-b)
+-- §3. Do not show the rejection reason in preview_text of user notifications (#5-b)
 -- ============================================================================
--- 現状確認 (実装前に読了): NotificationListView.swift の message computed property
--- (contentRejected/contentFlagged/appealApproved/appealRejected の4 kind) は
--- すべて kind から引く固定のローカライズ文言を表示しており、AI の理由文
--- (notification.previewText) は一切参照していない。previewText は別枠で
--- 「非空なら」引用符付きイタリック体で追加表示される仕組み (NotificationListView.swift:212-219、
--- `if let preview = notification.previewText, !preview.isEmpty { ... }`) になっており、
--- これが実質的に AI の safety_reason/ethos_reason をユーザーへ露出させていた。
--- → NULL を渡せばこの if 分岐が素通りして何も表示されない (レイアウトは壊れない)。
--- 「NULL だと表示が崩れる」パターンではないため、固定文言を新設する必要はない。
+-- Current state (read before implementing): the message computed property in
+-- NotificationListView.swift (4 kinds: contentRejected/contentFlagged/appealApproved/appealRejected)
+-- always shows a fixed localized string looked up from kind, and never references the AI reason text
+-- (notification.previewText). previewText is shown separately, as an extra line in quoted italics
+-- "if non-empty" (NotificationListView.swift:212-219,
+-- `if let preview = notification.previewText, !preview.isEmpty { ... }`), and
+-- this was in effect exposing the AI safety_reason/ethos_reason to the user.
+-- → If NULL is passed, this if branch is skipped and nothing is shown (the layout does not break).
+-- This is not a "layout breaks on NULL" case, so there is no need to add a new fixed string.
 --
--- 対象は content_rejected/content_flagged の2 kind のみ。appeal_approved/appeal_rejected
--- (resolve_user_appeal トリガー、039) は resolution_note (運営/AIが本人向けに書いた文章、
--- #10 の user_note 含む) を preview_text に渡す設計を維持する — これは「AIの内部判定文」
--- ではなく「本人向けに書かれた結果メモ」であり、#5-b が問題にしている性質のものではない。
--- moderation_verdict 列自体は削除しない (審査室 admin-appeals が判断材料として参照する)。
+-- Only the 2 kinds content_rejected/content_flagged are affected. appeal_approved/appeal_rejected
+-- (resolve_user_appeal trigger, 039) keep passing resolution_note (text written for the user by the
+-- operator/AI, including the user_note of #10) to preview_text. This is not "the AI's internal verdict
+-- text" but "a result note written for the user", so it is not the kind of text #5-b is about.
+-- The moderation_verdict column itself is not removed (the review room admin-appeals uses it to decide).
 CREATE OR REPLACE FUNCTION public.notify_on_post_moderation()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -209,8 +211,8 @@ DECLARE
     v_kind text;
 BEGIN
     v_kind := CASE NEW.moderation_status WHEN 'rejected' THEN 'content_rejected' ELSE 'content_flagged' END;
-    -- 067 #5-b: AI の判定文 (safety_reason/ethos_reason) を preview_text に渡さない。
-    -- クライアントは kind から固定文言を表示するため NULL で問題ない (上記コメント参照)。
+    -- 067 #5-b: do not pass the AI verdict text (safety_reason/ethos_reason) to preview_text.
+    -- The client shows a fixed string based on kind, so NULL is fine (see the comment above).
     PERFORM public.create_notification(
         p_recipient_user_id => NEW.user_id,
         p_actor_user_id     => NEW.user_id,
@@ -221,8 +223,9 @@ BEGIN
     RETURN NEW;
 END;
 $$;
--- RETURNS trigger の関数は Postgres が直接呼び出しを拒否するため REVOKE/GRANT は不要
--- (039 の元定義と同じ扱い)。トリガー本体 (WHEN句・紐付け) は 039 から変更なし。
+-- Postgres refuses direct calls to functions that RETURNS trigger, so REVOKE/GRANT is not needed
+-- (same as the original definition in 039). The trigger itself (WHEN clause, binding) is unchanged
+-- from 039.
 
 CREATE OR REPLACE FUNCTION public.notify_on_comment_moderation()
 RETURNS trigger
@@ -234,7 +237,7 @@ DECLARE
     v_kind text;
 BEGIN
     v_kind := CASE NEW.moderation_status WHEN 'rejected' THEN 'content_rejected' ELSE 'content_flagged' END;
-    -- 067 #5-b: 同上 (post 側と同じ理由)
+    -- 067 #5-b: same as above (same reason as the post side)
     PERFORM public.create_notification(
         p_recipient_user_id => NEW.author_user_id,
         p_actor_user_id     => NEW.author_user_id,
@@ -249,21 +252,22 @@ END;
 $$;
 
 -- ============================================================================
--- §4. 承認後の Storage 上書きを封じる (#6)
+-- §4. Block Storage overwrites after approval (#6)
 -- ============================================================================
--- 現状: post_images_owner_update (019_post_v2.sql:97-103) は「自分の uid フォルダ配下
--- なら常に上書き可」。approved 後に同じパスへ禁止画像を upsert しても DB 行 (moderation_*)
--- は無変更なので再審査が起きない (承認済みの看板だけが残った状態ですり替えられる)。
+-- Current state: post_images_owner_update (019_post_v2.sql:97-103) allows "overwrite at any time if it
+-- is under your own uid folder". After approved, upserting a banned image to the same path leaves the
+-- DB row (moderation_*) unchanged, so no re-review happens (the image is swapped while the approved
+-- status stays).
 --
--- クライアントは UserPostService.swift:280 (upload) / upsert:true で post-images に
--- 書き込み、正規フローは「Storage アップロード → user_posts INSERT」の順 (アップロード
--- 失敗時のリトライで UPDATE 権限が必要 = ポリシーの全撤去はできない、019 の設計どおり)。
--- アップロード時点では対応する user_posts 行がまだ存在しないため、下記ヘルパーは
--- 必ず false (未ロック=上書き可) を返す。既存の正規フローの挙動は変わらない。
+-- The client writes to post-images from UserPostService.swift:280 (upload) with upsert:true, and the
+-- normal flow is "Storage upload → user_posts INSERT" (retrying a failed upload needs UPDATE
+-- permission, so the policy cannot be removed entirely, as designed in 019).
+-- At upload time the matching user_posts row does not exist yet, so the helper below
+-- always returns false (not locked = can overwrite). The existing normal flow behaves the same.
 --
--- RLS ポリシーから public.user_posts を直接参照すると、呼び出しユーザーの権限で
--- 評価されるため RLS の相互作用が読みにくい。SECURITY DEFINER のヘルパー関数を
--- 1本作ってポリシーから呼ぶ (設計書の指示どおり)。
+-- If an RLS policy references public.user_posts directly, it is evaluated with the calling user's
+-- privileges, which makes the RLS interaction hard to read. Create one SECURITY DEFINER helper
+-- function and call it from the policy (as the design doc says).
 CREATE OR REPLACE FUNCTION public.post_image_is_locked(object_name text)
 RETURNS boolean
 LANGUAGE sql
@@ -284,8 +288,8 @@ COMMENT ON FUNCTION public.post_image_is_locked(text) IS
     'この関数は「他人の投稿が審査済みかどうか」を真偽値で返すが、moderation_status は '
     'そもそも公開列 (フィード等で誰でも見える) なので新規の情報漏洩にはならない。';
 
--- 067: クライアントから直接呼べる関数のため REVOKE/GRANT を必ず設定する
--- (FROM anon だけでは暗黙の PUBLIC 付与が残ってしまう。065 の教訓)
+-- 067: this function can be called directly from the client, so always set REVOKE/GRANT
+-- (FROM anon alone leaves the implicit PUBLIC grant in place. Lesson from 065)
 REVOKE EXECUTE ON FUNCTION public.post_image_is_locked(text) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.post_image_is_locked(text) TO authenticated;
 
@@ -298,42 +302,44 @@ CREATE POLICY "post_images_owner_update"
         AND auth.uid()::text = (storage.foldername(name))[1]
         AND NOT public.post_image_is_locked(name)
     );
--- WITH CHECK は 019 の元定義どおり省略 (UPDATE ポリシーで WITH CHECK 未指定の場合、
--- Postgres は USING 句をそのまま新行の検証にも使うため実質的に同じ効果になる)。
+-- WITH CHECK is omitted, as in the original definition in 019 (when an UPDATE policy has no WITH
+-- CHECK, Postgres uses the USING clause to check the new row too, so the effect is the same).
 --
--- avatars バケットは対象外 (アバターはモデレーション対象外、設計書に明記済み。触らない)。
+-- The avatars bucket is out of scope (avatars are not moderated, as the design doc states. Do not touch).
 
 -- ============================================================================
--- §5. 通報閾値の変更 + ethos_enforce からの分離 (#8)
+-- §5. Change the report threshold + separate it from ethos_enforce (#8)
 -- ============================================================================
--- 現状: 042 が distinct reporter >= 3 で moderation_status='flagged' にし、
--- 063:160-162 (他 fetch_following_feed/fetch_tag_feed/search_posts/
--- fetch_comments_for_post/fetch_comments_for_quote/fetch_feed_extras も同型) の
--- フィード除外は ethos_enforce=true の間だけ flagged を隠す。つまり通報由来の非表示が
--- エトス判定のオン/オフに巻き込まれている (エトスを止めると通報も無効化されてしまう)。
+-- Current state: 042 sets moderation_status='flagged' at distinct reporter >= 3, and the feed
+-- exclusion in 063:160-162 (the same pattern is in fetch_following_feed/fetch_tag_feed/search_posts/
+-- fetch_comments_for_post/fetch_comments_for_quote/fetch_feed_extras) hides flagged only while
+-- ethos_enforce=true. So report-based hiding is tied to ethos checks being on or off
+-- (turning off ethos also disables reports).
 --
--- 採用した方式: user_posts / user_comments に report_flagged boolean 列を追加し、
--- 「通報閾値で flagged になった」という由来を明示的に持たせる (moderation_status 自体は
--- 引き続き 'flagged' のまま = 既存の file_appeal / RLS 等が status で判定している箇所は
--- 無改修で動く。resolve_user_appeal の「status IN ('rejected','flagged')」判定、
--- fetch_notifications の content_flagged 通知、審査室の一覧表示は全部そのまま)。
--- 除外条件を全箇所で
+-- Chosen approach: add a report_flagged boolean column to user_posts / user_comments to record
+-- explicitly that the row "was flagged by the report threshold" (moderation_status itself still
+-- stays 'flagged' = places that decide by status, such as the existing file_appeal / RLS, work
+-- without changes. The "status IN ('rejected','flagged')" check in resolve_user_appeal, the
+-- content_flagged notification in fetch_notifications, and the review room list all stay as they are).
+-- The exclusion condition in every place is changed to
 --   moderation_status <> 'flagged' OR (NOT report_flagged AND NOT ethos_enforce)
--- に統一する。これにより:
---   - 通報閾値超え (report_flagged=true) → ethos_enforce の値に関わらず常に非表示
---   - 層2エトスのみで flagged (report_flagged=false) → 従来どおり ethos_enforce の
---     オン/オフに追従 (エトス判定を将来止めても通報は常に効く、という設計書の要求を満たす)
+-- (the condition above). As a result:
+--   - Over the report threshold (report_flagged=true) → always hidden, whatever ethos_enforce is
+--   - Flagged only by layer 2 ethos (report_flagged=false) → follows ethos_enforce on/off as before
+--     (meets the design doc requirement that reports always work even if ethos checks are turned
+--     off in the future)
 --
--- 別カラム方式を選んだ理由 (verdict jsonb にマークを埋める代替案を採らなかった理由):
---   - moderation_verdict は「AIの判定結果」を表す列という意味が既に決まっており (039/052/
---     admin-appeals が前提にしている)、通報由来という別種の情報を混ぜると意味が曖昧になる
---   - 042 のコメントに「閾値フラグでは verdict が無いことが多く NULL になる」とある通り、
---     report_flagged は AI 判定を経ない経路 (通報のみ) でも独立して立つ必要があり、
---     jsonb の中に埋めるより列で持つ方が WHERE 句・RLS ポリシーの両方から素直に参照できる
---   - 「flagged かつ ethos_enforce」だけを見る条件式に対して、既存のフィード等6箇所は
---     ほぼ同じ形の WHERE 句を繰り返しており、report_flagged 列を足す差分が最小
+-- Why a separate column (why the alternative of putting a mark inside the verdict jsonb was not used):
+--   - moderation_verdict already has a fixed meaning, "the AI verdict result" (039/052/
+--     admin-appeals rely on it). Mixing in a different kind of information (from reports) makes
+--     the meaning unclear
+--   - As the comment in 042 says, "threshold flags often have no verdict, so it is NULL".
+--     report_flagged must be set on its own even on paths with no AI verdict (reports only), and
+--     a column is easier than a value inside jsonb to reference from both WHERE clauses and RLS policies
+--   - The existing 6 places (feed etc.) repeat almost the same WHERE clause that only checks
+--     "flagged and ethos_enforce", so adding the report_flagged column is the smallest diff
 
--- §5-1. report_flagged 列の追加
+-- §5-1. Add the report_flagged column
 ALTER TABLE public.user_posts
     ADD COLUMN IF NOT EXISTS report_flagged boolean NOT NULL DEFAULT false;
 ALTER TABLE public.user_comments
@@ -347,15 +353,15 @@ COMMENT ON COLUMN public.user_posts.report_flagged IS
 COMMENT ON COLUMN public.user_comments.report_flagged IS
     '067 #8: user_posts.report_flagged と同じ意味 (コメント側)';
 
--- §5-2. 自己申告・改ざん防止: report_flagged は service_role 専用の書き込みにする
--- user_posts_update_own / user_comments_update_own (RLS UPDATE ポリシー) は行全体の
--- UPDATE を許可しており、本文/画像/moderation列は個別の protect trigger で守られている
--- のと同じパターンで、report_flagged も投稿者本人が直接 UPDATE で書き換えられてしまう
--- (自分の投稿を report_flagged=false に戻して非表示を解除できてしまう)。
--- 027 の protect_user_posts_moderation / protect_user_comments_moderation の
--- ガード対象列に report_flagged を追加する (moderation_status 等と同じ「service_role
--- 専用列」として扱う)。シグネチャ不変の CREATE OR REPLACE なので ACL・トリガー紐付けは
--- そのまま保持される。
+-- §5-2. Prevent self-assignment / tampering: report_flagged is written by service_role only
+-- user_posts_update_own / user_comments_update_own (RLS UPDATE policies) allow UPDATE of the whole
+-- row, and body/image/moderation columns are protected by separate protect triggers. Without the same
+-- pattern, the post author could change report_flagged directly with UPDATE
+-- (set their own post back to report_flagged=false and remove the hiding).
+-- Add report_flagged to the guarded columns of protect_user_posts_moderation /
+-- protect_user_comments_moderation from 027 (treat it as a "service_role only column", like
+-- moderation_status). This is CREATE OR REPLACE with the same signature, so the ACL and trigger
+-- bindings are kept as they are.
 CREATE OR REPLACE FUNCTION public.protect_user_posts_moderation()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -370,7 +376,7 @@ BEGIN
     IF NEW.moderation_status <> OLD.moderation_status
         OR NEW.moderation_verdict IS DISTINCT FROM OLD.moderation_verdict
         OR NEW.moderated_at IS DISTINCT FROM OLD.moderated_at
-        -- 067: report_flagged も moderation 列と同じ扱いでロックする
+        -- 067: lock report_flagged the same way as the moderation columns
         OR NEW.report_flagged IS DISTINCT FROM OLD.report_flagged THEN
         RAISE EXCEPTION 'moderation columns are read-only for users (service_role only)';
     END IF;
@@ -398,14 +404,15 @@ BEGIN
     RETURN NEW;
 END;
 $$;
--- トリガー本体 (BEFORE UPDATE ... EXECUTE FUNCTION) は 027 で既に張られており、
--- 関数を CREATE OR REPLACE するだけで新しいロジックが即座に効く (再張り不要)。
+-- The trigger itself (BEFORE UPDATE ... EXECUTE FUNCTION) was already created in 027, so
+-- CREATE OR REPLACE of the function applies the new logic immediately (no need to recreate it).
 
--- §5-3. INSERT 時の自己申告防止 (066 lock_user_posts_insert / lock_user_comments_insert
--- に report_flagged := false を追加)。悪用耐性としては必須ではない (新規投稿は通報履歴が
--- 無いので report_flagged=true を自称しても自分の投稿を自分で隠すだけの自傷行為にしか
--- ならない) が、066 が他の自己申告可能列 (moderation_status 等) を一律 pending/false に
--- 固定している方針と揃え、「service_role 専用列は INSERT 時点でも常に既定値」を保つ。
+-- §5-3. Prevent self-assignment on INSERT (add report_flagged := false to 066 lock_user_posts_insert /
+-- lock_user_comments_insert). This is not required for abuse resistance (a new post has no report
+-- history, so claiming report_flagged=true would only hide your own post, which only hurts yourself),
+-- but it follows the policy of 066, which fixes the other self-assignable columns (moderation_status
+-- etc.) to pending/false, and keeps "service_role only columns always have their default value, even
+-- at INSERT".
 CREATE OR REPLACE FUNCTION public.lock_user_posts_insert()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -414,7 +421,7 @@ DECLARE
     total_overlay_len integer;
 BEGIN
     IF auth.uid() IS NULL THEN
-        RETURN NEW;   -- service_role / SQL Editor / cron = バックエンド操作 (設計書 §1)
+        RETURN NEW;   -- service_role / SQL Editor / cron = backend operation (design doc §1)
     END IF;
 
     NEW.created_at         := now();
@@ -424,7 +431,7 @@ BEGIN
     NEW.like_count         := 0;
     NEW.comment_count      := 0;
     NEW.view_count         := 0;
-    -- 067: report_flagged も自己申告不可にする (§5-2 のコメント参照)
+    -- 067: report_flagged cannot be self-assigned either (see the comment in §5-2)
     NEW.report_flagged     := false;
 
     IF NEW.image_path IS NOT NULL
@@ -461,7 +468,7 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     IF auth.uid() IS NULL THEN
-        RETURN NEW;   -- service_role / SQL Editor / cron = バックエンド操作
+        RETURN NEW;   -- service_role / SQL Editor / cron = backend operation
     END IF;
 
     NEW.created_at         := now();
@@ -469,26 +476,26 @@ BEGIN
     NEW.moderation_verdict := NULL;
     NEW.moderated_at       := NULL;
     NEW.like_count         := 0;
-    -- 067: report_flagged も自己申告不可にする
+    -- 067: report_flagged cannot be self-assigned either
     NEW.report_flagged     := false;
 
     RETURN NEW;
 END;
 $$;
--- どちらも RETURNS trigger の直接呼び出し不可な関数のため REVOKE/GRANT は不要 (066 と同じ)。
--- トリガー本体の張り直しは不要 (066 が既に BEFORE INSERT で張っており、関数の
--- CREATE OR REPLACE だけで新ロジックが有効になる)。
+-- Both are RETURNS trigger functions that cannot be called directly, so REVOKE/GRANT is not needed
+-- (same as 066). No need to recreate the triggers (066 already created them as BEFORE INSERT, and
+-- CREATE OR REPLACE of the functions is enough to enable the new logic).
 
--- §5-4. 通報閾値 3→5 + report_flagged セット + 既に flagged な行も再判定できるよう修正
+-- §5-4. Report threshold 3→5 + set report_flagged + allow rows that are already flagged to be re-evaluated
 --
--- ⚠️ 042 の元 WHERE 句は `moderation_status IN ('approved', 'pending')` で、既に
--- 'flagged' な行を UPDATE 対象から除外していた (「flagged は no-op」という当時の設計)。
--- これは report_flagged という概念が無かった時代には無害だったが、そのまま残すと
--- 「層2エトスで先に flagged になった投稿は、後から通報が5件を超えても report_flagged が
--- 立たない」というバグになる (UPDATE の WHERE 句自体が素通りしてしまうため)。
--- そこで条件を `moderation_status <> 'rejected'` に変更し、approved/pending/flagged の
--- どの状態からでも通報閾値超えを反映できるようにする (rejected だけは層1 AI 判定を
--- 尊重して上書きしない、という元の意図はそのまま維持)。
+-- ⚠️ The original WHERE clause in 042 was `moderation_status IN ('approved', 'pending')`, which
+-- excluded rows that were already 'flagged' from the UPDATE (the design at the time: "flagged is a
+-- no-op"). That was harmless before the report_flagged concept existed, but left as is it becomes a
+-- bug: "a post flagged earlier by layer 2 ethos never gets report_flagged, even when reports later
+-- exceed 5" (because the UPDATE's WHERE clause skips it).
+-- So the condition is changed to `moderation_status <> 'rejected'`, so the report threshold can be
+-- applied from any of approved/pending/flagged (the original intent, not overwriting rejected out of
+-- respect for the layer 1 AI verdict, is kept).
 CREATE OR REPLACE FUNCTION public.flag_content_on_report_threshold()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -496,7 +503,7 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-    -- 067: 3 → 5 (ユーザー判断、設計書追補 #8)
+    -- 067: 3 → 5 (user decision, design doc addendum #8)
     report_threshold constant integer := 5;
     v_count integer;
 BEGIN
@@ -528,19 +535,19 @@ BEGIN
               AND moderation_status <> 'rejected';
         END IF;
     END IF;
-    -- quote / user 通報は自動処理なし (042 のまま、運営手動)
+    -- quote / user reports have no automatic handling (same as 042, handled manually by the operator)
 
     RETURN NEW;
 END;
 $$;
--- トリガー本体 (AFTER INSERT ON user_reports) は 042 のまま変更なし。
+-- The trigger itself (AFTER INSERT ON user_reports) is unchanged from 042.
 
--- §5-5. 異議申し立て承認時に report_flagged をリセットする
--- resolve_user_appeal (039) は approved 時に moderation_status を 'approved' に戻すが、
--- report_flagged が true のまま残ると、対象が将来別の理由 (層2エトスのみ) で再び flagged
--- になった際に「通報由来ではないのに常時非表示」という過剰な扱いを引きずってしまう。
--- 異議申し立て承認 = 運営/AIが「この投稿は問題ない」と判断した行為そのものなので、
--- report_flagged も含めて汚名を洗い流すのが自然。
+-- §5-5. Reset report_flagged when an appeal is approved
+-- resolve_user_appeal (039) sets moderation_status back to 'approved' on approval, but if
+-- report_flagged stays true, then when the item is flagged again later for a different reason
+-- (layer 2 ethos only), it keeps an excessive treatment: "always hidden even though it is not from
+-- reports". Approving an appeal is the operator/AI deciding "this post is fine", so it makes sense to
+-- clear every mark, report_flagged included.
 CREATE OR REPLACE FUNCTION public.resolve_user_appeal()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -578,23 +585,25 @@ BEGIN
     RETURN NEW;
 END;
 $$;
--- トリガー本体 (AFTER UPDATE ... WHEN (...)) は 039 のまま変更なし。
+-- The trigger itself (AFTER UPDATE ... WHEN (...)) is unchanged from 039.
 
--- §5-6. フィード/検索/コメント除外の6箇所を report_flagged 対応に更新
--- 対象は「moderation_status <> 'flagged' OR NOT ethos_enforce」という同型の WHERE 句を
--- 持つ最新の関数定義6本 (履歴上、同名関数を後から上書きしている旧バージョンには触れない):
---   fetch_mixed_feed_random  (最新 = 063)
---   fetch_following_feed     (最新 = 029)
---   fetch_tag_feed           (最新 = 029)
---   search_posts             (最新 = 032)
---   fetch_comments_for_post  (最新 = 050)
---   fetch_comments_for_quote (最新 = 037)
---   fetch_feed_extras        (最新 = 037、comment_rows CTE のみ該当。likers は対象外
---     — user_likes に moderation_status が無いため元から無関係)
--- いずれも RETURNS TABLE の列・シグネチャは変更しないため CREATE OR REPLACE で足りる。
--- 本文は上記の最新版から一言一句コピーし、除外条件の1ブロックだけを書き換えている。
+-- §5-6. Update the 6 feed/search/comment exclusion places to handle report_flagged
+-- Targets are the 6 latest function definitions that have the same WHERE clause
+-- "moderation_status <> 'flagged' OR NOT ethos_enforce" (older versions that were later overwritten
+-- by a function with the same name are not touched):
+--   fetch_mixed_feed_random  (latest = 063)
+--   fetch_following_feed     (latest = 029)
+--   fetch_tag_feed           (latest = 029)
+--   search_posts             (latest = 032)
+--   fetch_comments_for_post  (latest = 050)
+--   fetch_comments_for_quote (latest = 037)
+--   fetch_feed_extras        (latest = 037, only the comment_rows CTE applies. likers is out of scope
+--     because user_likes has no moderation_status, so it was never relevant)
+-- None of them change the RETURNS TABLE columns or the signature, so CREATE OR REPLACE is enough.
+-- The bodies are copied word for word from the latest versions above, and only the one exclusion
+-- block is rewritten.
 
--- ---- 5-6-1. fetch_mixed_feed_random (最新: 063_feed_seeded_shuffle.sql) ----
+-- ---- 5-6-1. fetch_mixed_feed_random (latest: 063_feed_seeded_shuffle.sql) ----
 CREATE OR REPLACE FUNCTION public.fetch_mixed_feed_random(
     limit_count integer DEFAULT 50,
     seed text DEFAULT NULL
@@ -768,7 +777,7 @@ COMMENT ON FUNCTION public.fetch_mixed_feed_random(integer, text) IS
 REVOKE EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer, text) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer, text) TO authenticated;
 
--- ---- 5-6-2. fetch_following_feed (最新: 029_recommend_feed.sql) ----
+-- ---- 5-6-2. fetch_following_feed (latest: 029_recommend_feed.sql) ----
 CREATE OR REPLACE FUNCTION public.fetch_following_feed(limit_count integer DEFAULT 50)
 RETURNS TABLE (
     kind                text,
@@ -866,7 +875,7 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.fetch_following_feed(integer) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_following_feed(integer) TO authenticated;
 
--- ---- 5-6-3. fetch_tag_feed (最新: 029_recommend_feed.sql) ----
+-- ---- 5-6-3. fetch_tag_feed (latest: 029_recommend_feed.sql) ----
 CREATE OR REPLACE FUNCTION public.fetch_tag_feed(
     target_tag  text,
     limit_count integer DEFAULT 50
@@ -960,7 +969,7 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.fetch_tag_feed(text, integer) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_tag_feed(text, integer) TO authenticated;
 
--- ---- 5-6-4. search_posts (最新: 032_search_posts.sql) ----
+-- ---- 5-6-4. search_posts (latest: 032_search_posts.sql) ----
 CREATE OR REPLACE FUNCTION public.search_posts(
     query       text,
     limit_count integer DEFAULT 30
@@ -1054,7 +1063,7 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.search_posts(text, integer) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.search_posts(text, integer) TO authenticated;
 
--- ---- 5-6-5. fetch_comments_for_post (最新: 050_comment_owner_like.sql) ----
+-- ---- 5-6-5. fetch_comments_for_post (latest: 050_comment_owner_like.sql) ----
 CREATE OR REPLACE FUNCTION public.fetch_comments_for_post(
     target_post_id uuid,
     limit_count    integer DEFAULT 200
@@ -1130,7 +1139,7 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.fetch_comments_for_post(uuid, integer) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_comments_for_post(uuid, integer) TO authenticated;
 
--- ---- 5-6-6. fetch_comments_for_quote (最新: 037_moderation_visibility_fixes.sql) ----
+-- ---- 5-6-6. fetch_comments_for_quote (latest: 037_moderation_visibility_fixes.sql) ----
 CREATE OR REPLACE FUNCTION public.fetch_comments_for_quote(
     target_quote_id uuid,
     limit_count     integer DEFAULT 200
@@ -1199,9 +1208,9 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.fetch_comments_for_quote(uuid, integer) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_comments_for_quote(uuid, integer) TO authenticated;
 
--- ---- 5-6-7. fetch_feed_extras (最新: 037_moderation_visibility_fixes.sql) ----
--- comment_rows CTE のみ変更対象。liker_rows は user_likes に moderation_status が
--- 無いため元から無関係 (037 時点から変更なし)。
+-- ---- 5-6-7. fetch_feed_extras (latest: 037_moderation_visibility_fixes.sql) ----
+-- Only the comment_rows CTE is changed. liker_rows is not relevant because user_likes has no
+-- moderation_status (unchanged since 037).
 CREATE OR REPLACE FUNCTION public.fetch_feed_extras(
     post_ids  uuid[] DEFAULT '{}',
     quote_ids uuid[] DEFAULT '{}'
@@ -1298,20 +1307,21 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.fetch_feed_extras(uuid[], uuid[]) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_feed_extras(uuid[], uuid[]) TO authenticated;
 
--- §5-7. プロフィール等の直接 SELECT 経路 (RLS ポリシー) にも report_flagged を効かせる
+-- §5-7. Apply report_flagged to direct SELECT paths (RLS policies) such as the profile too
 --
--- 現状確認: UserPostService.swift の loadPosts(byUser:) (他人のプロフィール一覧) は
--- RPC を経由せず `.from("user_posts").select().eq("user_id", ...)` を直接叩いており、
--- 可視性は完全に RLS の user_posts_select_all ポリシーに依存している。037 時点の定義
--- (`auth.uid() = user_id OR moderation_status <> 'rejected'`) は flagged を一切
--- フィルタしていない (ethos_enforce の値に関わらず常に見える) — これはフィード側の
--- 「ethos_enforce に応じて隠す」設計とはそもそも別の、プロフィール側だけの既存ギャップで
--- あり、本タスク (#8: 通報由来の非表示を全除外経路で一貫させる) の対象そのもの。
--- ここでは #8 の要求どおり「通報由来 (report_flagged) は常に非表示」だけを追加し、
--- 「エトス由来 (report_flagged=false) の flagged がプロフィールでは ethos_enforce を
--- 無視して見え続ける」という pre-existing の非対称は意図的に変更しない
--- (#8 の依頼はあくまで通報由来の一貫性であり、ethos_enforce 自体のプロフィール適用は
--- 別議論。挙動を広げすぎて依頼スコープを超えることを避けた。詳細は実装報告に明記)。
+-- Current state: loadPosts(byUser:) in UserPostService.swift (another user's profile list) does not
+-- go through an RPC and calls `.from("user_posts").select().eq("user_id", ...)` directly, so
+-- visibility depends entirely on the RLS policy user_posts_select_all. The definition as of 037
+-- (`auth.uid() = user_id OR moderation_status <> 'rejected'`) does not filter flagged at all
+-- (always visible regardless of ethos_enforce). This is an existing gap on the profile side only,
+-- separate from the feed-side design of "hide depending on ethos_enforce", and it is exactly what
+-- this task (#8: make report-based hiding consistent on all exclusion paths) is about.
+-- Here, as #8 requires, only "report-based (report_flagged) is always hidden" is added. The
+-- pre-existing asymmetry, "ethos-based flagged posts (report_flagged=false) stay visible on the
+-- profile, ignoring ethos_enforce", is intentionally left unchanged
+-- (#8 asks only for consistency of report-based hiding. Applying ethos_enforce itself to profiles is
+-- a separate discussion. This avoids widening the behavior beyond the requested scope. Details are in
+-- the implementation report).
 DROP POLICY IF EXISTS "user_posts_select_all" ON public.user_posts;
 CREATE POLICY "user_posts_select_all"
     ON public.user_posts FOR SELECT
@@ -1329,14 +1339,14 @@ CREATE POLICY "user_comments_select_all"
     );
 
 -- ============================================================================
--- §6. user_reports.reason の CHECK に 'off_topic' を追加 (#9)
+-- §6. Add 'off_topic' to the CHECK on user_reports.reason (#9)
 -- ============================================================================
--- 006_b_moderation.sql:32 の CHECK は無名制約 (Postgres が自動命名する
--- user_reports_reason_check) のまま一度も変更されていない (grep で確認済み)。
--- エトス違反 (「このアプリの趣旨に合わない」) 専用の通報理由が無く、ユーザーは
--- 'other' に自由記述するしかなかった。
--- 閾値カウントは他の理由と同列に扱う (§5 の flag_content_on_report_threshold は
--- reason を見ずに distinct reporter 数だけで判定するため、コード変更は不要)。
+-- The CHECK at 006_b_moderation.sql:32 is still an unnamed constraint (auto-named by Postgres as
+-- user_reports_reason_check) and has never been changed (confirmed with grep).
+-- There was no report reason for ethos violations ("does not fit the purpose of this app"), so users
+-- could only pick 'other' and write free text.
+-- The threshold count treats it the same as the other reasons (flag_content_on_report_threshold in §5
+-- decides only by the number of distinct reporters and does not look at reason, so no code change).
 ALTER TABLE public.user_reports
     DROP CONSTRAINT IF EXISTS user_reports_reason_check;
 ALTER TABLE public.user_reports
@@ -1346,50 +1356,50 @@ ALTER TABLE public.user_reports
 COMMIT;
 
 -- ============================================================================
--- 検証クエリ (適用後にこれを流して結果を確認する。065/066 と同じ形式)
+-- Verification queries (run these after applying and check the results. Same format as 065/066)
 -- ============================================================================
 
--- (A) safety_rubric に7新カテゴリが入ったか
+-- (A) Were the 7 new categories added to safety_rubric
 -- SELECT safety_rubric LIKE '%自傷・自殺%' AND safety_rubric LIKE '%摂食障害%'
 --        AND safety_rubric LIKE '%グロテスク%' AND safety_rubric LIKE '%危険行為%'
 --        AND safety_rubric LIKE '%武器%' AND safety_rubric LIKE '%動物虐待%'
 --        AND safety_rubric LIKE '%テロ%' AS all_7_present
 -- FROM moderation_config;
--- 期待値: true
+-- Expected: true
 
--- (B) ethos_rubric に層1優先の一文が入ったか
+-- (B) Was the "layer 1 first" sentence added to ethos_rubric
 -- SELECT ethos_rubric LIKE '%層1優先の原則%' AS priority_note_present FROM moderation_config;
--- 期待値: true
+-- Expected: true
 
--- (C) report_flagged 列が追加され、既存行が false で埋まっているか
+-- (C) Was the report_flagged column added, with existing rows filled with false
 -- SELECT count(*) FILTER (WHERE report_flagged IS NULL) AS null_count,
 --        count(*) FILTER (WHERE report_flagged = true)  AS true_count
 -- FROM user_posts;
--- 期待値: null_count = 0 (NOT NULL DEFAULT false のため)
+-- Expected: null_count = 0 (because of NOT NULL DEFAULT false)
 
--- (D) 通報閾値トリガーが有効か + report_flagged を書き込む権限があるか
+-- (D) Is the report threshold trigger enabled + does it have permission to write report_flagged
 -- SELECT tgrelid::regclass, tgname, tgenabled
 -- FROM pg_trigger
 -- WHERE tgname IN (
 --     'user_reports_flag_threshold', 'user_posts_protect_moderation',
 --     'user_comments_protect_moderation', 'user_posts_lock_insert', 'user_comments_lock_insert'
 -- );
--- 期待値: 全て tgenabled='O'
+-- Expected: all tgenabled='O'
 
--- (E) post_image_is_locked の権限 (authenticated のみ実行可か)
+-- (E) Privileges of post_image_is_locked (only authenticated can execute?)
 -- SELECT grantee, privilege_type FROM information_schema.role_routine_grants
 -- WHERE routine_name = 'post_image_is_locked';
--- 期待値: authenticated / EXECUTE の1行のみ (PUBLIC/anon は無いこと)
+-- Expected: only one row, authenticated / EXECUTE (no PUBLIC/anon)
 
--- (F) user_reports.reason に off_topic が通るか (実データを汚さないよう ROLLBACK 前提でテストする場合の例)
+-- (F) Is off_topic accepted for user_reports.reason (example test with ROLLBACK so real data stays clean)
 -- BEGIN; INSERT INTO user_reports (reporter_id, target_post_id, reason)
---   VALUES ('<自分のuid>', '<既存post_id>', 'off_topic'); ROLLBACK;
+--   VALUES ('<your uid>', '<existing post_id>', 'off_topic'); ROLLBACK;
 
--- (G) 通報閾値5件で report_flagged が立つか (手動テスト用手順、実行は不要)
--- 1. 適当な post_id に対し異なる5アカウントから
+-- (G) Does report_flagged get set at 5 reports (manual test steps, no need to run)
+-- 1. For some post_id, from 5 different accounts
 --    INSERT INTO user_reports (reporter_id, target_post_id, reason) VALUES (..., '<post_id>', 'spam');
 -- 2. SELECT moderation_status, report_flagged FROM user_posts WHERE id = '<post_id>';
 --    → moderation_status='flagged', report_flagged=true
 -- 3. UPDATE moderation_config SET ethos_enforce = false;
 -- 4. SELECT * FROM fetch_mixed_feed_random(50) WHERE item_id = '<post_id>';
---    → 0行 (ethos_enforce を false にしても通報由来なので出てこないこと)
+--    → 0 rows (must not appear even with ethos_enforce set to false, because it is report-based)

@@ -2,13 +2,15 @@
 //  FeedImageLoader.swift
 //  AppBlocker
 //
-//  フィードカード (FeedCardMediaView) 用のフルサイズ画像ローダー。
-//  AsyncImage はキャンセルを .failure として phase に固着させ、リトライ機構も無い。
-//  スクロール中のキャンセルで画像投稿が quoteMedia (別コンテンツに見える描画) に
-//  化けるバグの真因だったため、PostThumbnailLoader と同じ
-//  「URLSession + ImageIO + NSCache + キャンセル対応は呼び出し側」の構造に置き換える。
-//  ⚠️ PostThumbnailLoader (400px サムネ) とはキャッシュを共有しない。
-//  同じ URL をグリッドとフィードが別解像度で使うため、キー衝突するとボケ画像が刺さる。
+//  Full-size image loader for feed cards (FeedCardMediaView).
+//  AsyncImage gets stuck in phase with a cancellation as .failure and has no retry mechanism.
+//  That was the real cause of the bug where an image post turned into quoteMedia (a rendering that
+//  looks like different content) when cancelled during scrolling, so it is replaced with the same
+//  structure as PostThumbnailLoader: "URLSession + ImageIO + NSCache + cancellation handled by the
+//  caller".
+//  ⚠️ Does not share its cache with PostThumbnailLoader (400px thumbnails).
+//  The grid and the feed use the same URL at different resolutions, so a key collision would stick a
+//  blurry image in.
 //
 
 import UIKit
@@ -18,18 +20,18 @@ final class FeedImageLoader {
 
     static let shared = FeedImageLoader()
 
-    /// 投稿v2 の焼き込み画像は 1080×1350。それを素通しし、想定外の巨大画像だけ抑える上限。
-    /// nonisolated 必須: 下の downsample が @concurrent nonisolated なので、
-    /// 無印だと MainActor 隔離の static を actor 外から読む形になる (Swift 6 ではエラー)
+    /// Post v2 baked-in images are 1080×1350. This is an upper limit that lets those pass and only reins in
+    /// unexpectedly huge images. nonisolated is required: downsample below is @concurrent nonisolated, so
+    /// without it we would read a MainActor-isolated static from outside the actor (an error in Swift 6)
     nonisolated private static let maxPixelSize: CGFloat = 1400
 
-    /// デコード済みフルサイズ画像のキャッシュ。1枚 ≈ 5.8MB (1080×1350×4byte) なので
-    /// 枚数でなくバイト数 (cost) で制限する
+    /// Cache of decoded full-size images. 1 image ≈ 5.8MB (1080×1350×4byte), so
+    /// limit by bytes (cost), not by count
     private let cache = NSCache<NSURL, UIImage>()
 
     private init() {
-        // AsyncImage 時代はデコード済みキャッシュがゼロだったため、純増を抑えて 32MB に留める
-        cache.totalCostLimit = 32 * 1024 * 1024   // 約5枚ぶん。溢れは NSCache が自動追い出し
+        // In the AsyncImage days there was no decoded cache at all, so keep the net increase down at 32MB
+        cache.totalCostLimit = 32 * 1024 * 1024   // about 5 images' worth. NSCache evicts overflow automatically
         cache.countLimit = 24
     }
 
@@ -39,7 +41,7 @@ final class FeedImageLoader {
         }
         do {
             var request = URLRequest(url: url)
-            // 投稿画像の URL は不変 (焼き込み済み) なので再検証不要のキャッシュ優先で良い
+            // Post image URLs are immutable (baked in), so cache-first without revalidation is fine
             request.cachePolicy = .returnCacheDataElseLoad
             let (data, _) = try await URLSession.shared.data(for: request)
             guard let image = await Self.downsample(data: data) else { return nil }
@@ -47,11 +49,11 @@ final class FeedImageLoader {
             cache.setObject(image, forKey: url as NSURL, cost: cost)
             return image
         } catch {
-            // キャンセル (スクロールで view が消えた等) と本当の失敗はログだけ分ける。
-            // 返り値契約はどちらも nil。キャンセル時に phase を書かない対策は
-            // 呼び出し側 (FeedFitBlurImage) が Task.isCancelled で行う
-            // ログは DEBUG 限定。スクロール中のキャンセルは頻発する上、この print は
-            // MainActor 上で走るため、出荷ビルドで毎回文字列補間を回すコストを避ける
+            // Separate cancellation (the view disappeared by scrolling, etc.) from real failure only in the log.
+            // The return contract is nil for both. Not writing phase on cancellation is handled
+            // by the caller (FeedFitBlurImage) with Task.isCancelled
+            // Logging is DEBUG only. Cancellations happen often during scrolling, and this print
+            // runs on the MainActor, so avoid the cost of string interpolation on every call in shipping builds
             #if DEBUG
             let isCancellation = error is CancellationError || (error as? URLError)?.code == .cancelled
             if isCancellation {
@@ -64,13 +66,13 @@ final class FeedImageLoader {
         }
     }
 
-    /// ImageIO でデコード時点から縮小する (AsyncImage は描画時にフルデコードしていた)。
-    /// ⚠️ `@concurrent nonisolated` は必須。このプロジェクトは
-    /// SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor なので、無注釈だと FeedImageLoader ごと
-    /// @MainActor に推論され、フルサイズデコード (実測 17.65ms/枚) がメインスレッドに載って
-    /// スクロールのコマ落ちになる。`nonisolated` だけでは NonisolatedNonsendingByDefault に
-    /// より呼び出し側 (MainActor) の executor を継承してしまうため、両方を付けて
-    /// 明示的にバックグラウンド executor へ逃がす
+    /// Downscale with ImageIO from decode time (AsyncImage did a full decode at draw time).
+    /// ⚠️ `@concurrent nonisolated` is required. This project has
+    /// SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor, so without annotations the whole FeedImageLoader is
+    /// inferred as @MainActor, and the full-size decode (measured 17.65ms/image) lands on the main thread,
+    /// dropping frames while scrolling. With only `nonisolated`, NonisolatedNonsendingByDefault
+    /// makes it inherit the caller's (MainActor) executor, so both are added to
+    /// explicitly move it to a background executor
     @concurrent nonisolated private static func downsample(data: Data) async -> UIImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let options: [CFString: Any] = [

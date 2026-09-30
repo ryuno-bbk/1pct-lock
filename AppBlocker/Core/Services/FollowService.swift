@@ -2,14 +2,14 @@
 //  FollowService.swift
 //  AppBlocker
 //
-//  偉人フォロー管理サービス（Supabase）
+//  Service for managing follows of great figures (Supabase)
 //
 
 import Foundation
 import Combine
 import Supabase
 
-/// 偉人のフォロー/アンフォロー管理
+/// Manages follow/unfollow of great figures
 final class FollowService: ObservableObject {
 
     static let shared = FollowService()
@@ -33,12 +33,12 @@ final class FollowService: ObservableObject {
 
     // MARK: - Public Methods
 
-    /// フォロー状態を確認
+    /// Check the follow state
     func isFollowing(authorId: UUID) -> Bool {
         followedAuthorIds.contains(authorId)
     }
 
-    /// フォロー/アンフォロー切り替え
+    /// Toggle follow/unfollow
     func toggleFollow(authorId: UUID) async {
         if isFollowing(authorId: authorId) {
             await unfollow(authorId: authorId)
@@ -47,7 +47,7 @@ final class FollowService: ObservableObject {
         }
     }
 
-    /// 偉人をフォロー
+    /// Follow a great figure
     @MainActor
     func follow(authorId: UUID) async {
         guard let followerId = UserAuthService.shared.userId else {
@@ -55,7 +55,7 @@ final class FollowService: ObservableObject {
             return
         }
 
-        // 楽観的UI更新
+        // Optimistic UI update
         followedAuthorIds.insert(authorId)
 
         do {
@@ -70,13 +70,13 @@ final class FollowService: ObservableObject {
 
             print("✅ Followed author: \(authorId)")
         } catch {
-            // 失敗時はロールバック
+            // On failure, roll back
             followedAuthorIds.remove(authorId)
             print("⚠️ Follow failed: \(error)")
         }
     }
 
-    /// 偉人をアンフォロー
+    /// Unfollow a great figure
     @MainActor
     func unfollow(authorId: UUID) async {
         guard let followerId = UserAuthService.shared.userId else {
@@ -84,7 +84,7 @@ final class FollowService: ObservableObject {
             return
         }
 
-        // 楽観的UI更新
+        // Optimistic UI update
         followedAuthorIds.remove(authorId)
 
         do {
@@ -97,13 +97,13 @@ final class FollowService: ObservableObject {
 
             print("✅ Unfollowed author: \(authorId)")
         } catch {
-            // 失敗時はロールバック
+            // On failure, roll back
             followedAuthorIds.insert(authorId)
             print("⚠️ Unfollow failed: \(error)")
         }
     }
 
-    /// 起動時にフォロー一覧を読み込み (偉人 + 一般ユーザー両方)
+    /// Load the follow list at launch (both great figures + regular users)
     @MainActor
     func loadFollowedAuthors() async {
         guard let followerId = UserAuthService.shared.userId else {
@@ -138,19 +138,21 @@ final class FollowService: ObservableObject {
         }
     }
 
-    // MARK: - ユーザー間フォロー (UGC 投稿者)
+    // MARK: - Follows between users (UGC posters)
 
     func isFollowingUser(userId: UUID) -> Bool {
         followedUserIds.contains(userId)
     }
 
-    /// 相手が自分をフォローしているか (相互フォロー表示用、058 RPC is_following_me)。
-    /// RLS で user_follows の他人行は読めないため RPC 経由。058 未適用/失敗時は false
-    /// (表示が通常の「フォロー中」に落ちるだけの fail-soft)
+    /// Whether the other user follows you (for the mutual follow display, 058 RPC is_following_me).
+    /// RLS does not allow reading other people's rows in user_follows, so it goes through an RPC. false
+    /// if 058 is not applied / on failure (fail-soft: the display just falls back to the normal
+    /// "フォロー中" ("Following"))
     func isFollowedBy(userId: UUID) async -> Bool {
         do {
-            // params は辞書で渡す (独自 struct だとデフォルト MainActor 分離の Encodable 準拠が
-            // Sendable 要件を満たせずコンパイルエラーになる。stdlib の辞書準拠は nonisolated)
+            // params are passed as a dictionary (with a custom struct, its Encodable conformance under the
+            // default MainActor isolation cannot meet the Sendable requirement and fails to compile. The stdlib
+            // dictionary conformance is nonisolated)
             let result: Bool = try await client
                 .rpc("is_following_me", params: ["p_user_id": userId.uuidString])
                 .execute()
@@ -222,7 +224,7 @@ final class FollowService: ObservableObject {
         }
     }
 
-    /// フォロー中の偉人一覧を取得
+    /// Get the list of followed great figures
     func getFollowedAuthors() async -> [Author] {
         guard !followedAuthorIds.isEmpty else { return [] }
 

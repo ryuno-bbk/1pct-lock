@@ -1,41 +1,45 @@
 // ============================================================
 // review-appeal / index.ts
-// 異議申し立てのAI二次審査 Edge Function (Deno)
+// Edge Function (Deno) for the AI second review of appeals
 // ============================================================
-// 設計+実装: Fable 5 (2026-07-29、ユーザー承認「自信あるなら実装入っちゃっていい」)
+// Design + implementation: Fable 5 (2026-07-29, user approval: "if you are confident, go ahead and
+// implement it")
 //
-// 役割:
-//   申し立て (user_appeals) の送信直後にクライアントから呼ばれ、対象コンテンツを
-//   「二次審査」の観点で3値で再判定する (2026-07-30 ユーザー指摘で2値→3値へ:
-//   「AI棄却を全部人間キューに積むと、筋なし申し立てが大半を占めて運営の労働が減らない」):
-//     - overturn (明白な誤判定)   → status='approved' へ更新 (039 の user_appeals_resolve
-//       トリガーがコンテンツ復活 + 通知まで自動で行う)
-//     - reject   (明白に筋なし)   → status='rejected' へ更新 = AI が最終却下。
-//       トリガーが本人への結果反映まで自動で行い、運営には来ない
-//     - unsure   (言い切れない)   → status は 'pending' のまま = 運営 (人間) の最終裁定
-//       キューに残る。AI の所見は ai_review (052) に記録され、二次意見として読める
-//   これで運営の手動裁定は「AIが白とも黒とも言い切れなかった案件」だけに絞られる。
-//   自動最終判定 (approved/rejected) は ai_review.auto=true でマークされ、月次パトロール
-//   SQL でサンプル確認できる (申し立ては1投稿1回きりのため、reject は最終決定)。
+// Role:
+//   Called by the client right after an appeal (user_appeals) is submitted, and re-judges the content
+//   from a "second review" point of view with 3 values (changed from 2 to 3 values after the user's
+//   point on 2026-07-30: "if every AI rejection goes to the human queue, weak appeals make up most of
+//   it and the operator's work does not go down"):
+//     - overturn (clear misjudgment) → update to status='approved' (the user_appeals_resolve
+//       trigger in 039 restores the content + sends the notification automatically)
+//     - reject   (clearly no grounds) → update to status='rejected' = the AI makes the final rejection.
+//       The trigger applies the result for the user automatically, and it never reaches the operator
+//     - unsure   (cannot say either way) → status stays 'pending' = stays in the operator (human)
+//       final decision queue. The AI's findings are recorded in ai_review (052) and can be read as a
+//       second opinion
+//   This narrows the operator's manual decisions to "cases the AI could not call either way".
+//   Automatic final decisions (approved/rejected) are marked with ai_review.auto=true and can be
+//   sampled with the monthly patrol SQL (an appeal is allowed only once per post, so reject is final).
 //
-// 認可:
-//   verify_jwt ON でデプロイする (deploy 時に --no-verify-jwt を付けない! delete-account と同じ)。
-//   さらに関数内で Authorization ヘッダの JWT から uid を取り、appeal.user_id と一致する
-//   場合のみ処理する (申し立て本人しか自分の再審査をトリガーできない)。
+// Authorization:
+//   Deploy with verify_jwt ON (do not add --no-verify-jwt at deploy! Same as delete-account).
+//   In addition, the function takes the uid from the JWT in the Authorization header and processes
+//   only if it matches appeal.user_id (only the person who appealed can trigger their own re-review).
 //
-// 判定の傾き:
-//   一次判定 (moderate-post) は「安全側に倒す」が、二次審査は申し立て文脈がある前提なので
-//   「規約違反が明確に確認できない限り申し立てを認める」方向に倒す。
-//   ただし層1 (安全性) の明確な違反は覆さない。
-//   reject (自動最終却下) は「原判定が明白に正しく、かつ申し立てに新しい事実・具体的根拠が
-//   何もない」場合のみ。迷いが少しでもあれば unsure (人間キュー) に落とす。
+// Bias of the decision:
+//   The first decision (moderate-post) "leans to the safe side", but the second review assumes there
+//   is appeal context, so it leans toward "accept the appeal unless a policy violation is clearly
+//   confirmed". However, clear layer 1 (safety) violations are not overturned.
+//   reject (automatic final rejection) only when "the original decision is clearly correct and the
+//   appeal has no new facts or concrete grounds at all". With even a little doubt, fall back to
+//   unsure (human queue).
 //
-// エラー処理:
-//   失敗しても申し立ては pending のまま人間キューに残るだけ (fail-safe)。
-//   HTTP はエラー時も 200 + {status:"skipped"} を返しクライアントを壊さない。
+// Error handling:
+//   Even on failure, the appeal just stays pending in the human queue (fail-safe).
+//   On error HTTP still returns 200 + {status:"skipped"} so the client does not break.
 //
-// 環境変数: moderate-post と同じ (ANTHROPIC_API_KEY は設定済みの secret を共用)。
-// デプロイ: `supabase functions deploy review-appeal`   ← --no-verify-jwt を付けない!
+// Environment variables: same as moderate-post (shares the ANTHROPIC_API_KEY secret already set).
+// Deploy: `supabase functions deploy review-appeal`   ← do not add --no-verify-jwt!
 // ============================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -54,15 +58,15 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 });
 
 // ------------------------------------------------------------
-// 型
+// Types
 // ------------------------------------------------------------
 interface AppealReviewVerdict {
-  // 内部用の分析全文 (ai_review に保存、運営キューの二次意見)
+  // Full internal analysis (saved in ai_review, second opinion for the operator queue)
   analysis: string;
-  // overturn = 復活 / reject = 最終却下 / unsure = 人間キューへ
+  // overturn = restore / reject = final rejection / unsure = to the human queue
   decision: "overturn" | "reject" | "unsure";
-  // 本人向けの結果メモ (2文以内・丁寧語・内部用語禁止)。overturn/reject 時に
-  // resolution_note として保存され、申し立てシートに表示される
+  // Result note for the user (max 2 sentences, polite, no internal terms). On overturn/reject it is
+  // saved as resolution_note and shown in the appeal sheet
   user_note: string;
 }
 
@@ -85,7 +89,7 @@ const APPEAL_REVIEW_SCHEMA = {
 } as const;
 
 // ------------------------------------------------------------
-// moderation_config (rubric + model) — moderate-post と同じ読み方
+// moderation_config (rubric + model). Read the same way as moderate-post
 // ------------------------------------------------------------
 async function loadConfig(): Promise<{
   safety_rubric: string;
@@ -109,12 +113,13 @@ async function loadConfig(): Promise<{
     model: typeof row.model === "string" && row.model.length > 0
       ? row.model
       : DEFAULT_ANTHROPIC_MODEL,
-    // 055: unsure 時に再審査する上位モデル (列未適用なら既定 Sonnet)
+    // 055: stronger model used to re-review when unsure (defaults to Sonnet if the column is not applied)
     escalation_model:
       typeof row.escalation_model === "string" && row.escalation_model.length > 0
         ? row.escalation_model
         : DEFAULT_ANTHROPIC_MODEL,
-    // 054 適用前 or 未設定なら null (通知はスキップされるだけで本流に影響なし)
+    // null before 054 is applied or if not set (the notification is just skipped, no effect on the main
+    // flow)
     operator_user_id: typeof row.operator_user_id === "string" && row.operator_user_id.length > 0
       ? row.operator_user_id
       : null,
@@ -122,7 +127,7 @@ async function loadConfig(): Promise<{
 }
 
 // ------------------------------------------------------------
-// 画像取得 (moderate-post と同一ロジック: 512px縮小 + フォールバック)
+// Image fetch (same logic as moderate-post: resize to 512px + fallback)
 // ------------------------------------------------------------
 function buildImagePaths(imagePath: string, imageCount: number): string[] {
   if (!imagePath.endsWith(".jpg")) return [imagePath];
@@ -164,7 +169,7 @@ async function fetchImageAsBase64(
 }
 
 // ------------------------------------------------------------
-// Claude API (moderate-post と同じ raw fetch + キャッシュ + 構造化出力)
+// Claude API (same raw fetch + cache + structured output as moderate-post)
 // ------------------------------------------------------------
 async function callClaudeJSON<T>(
   system: string,
@@ -180,15 +185,15 @@ async function callClaudeJSON<T>(
     },
     body: JSON.stringify({
       model,
-      // 067 #10: 700 → 2000。実地で `SyntaxError: Unterminated string in JSON at
-      // position 798` が発生していた = analysis が長くなると応答JSONが途中で切れて
-      // パース失敗 → fail-safe で握りつぶされ ai_review が NULL のまま pending に残る
-      // (ユーザーからは「何も起きない」に見える)。max_tokens は上限であって課金額では
-      // ない (実出力分のみ課金) ため引き上げコストはほぼゼロ。
+      // 067 #10: 700 → 2000. In real use `SyntaxError: Unterminated string in JSON at
+      // position 798` was happening = when analysis got long the response JSON was cut off and
+      // parsing failed → swallowed by the fail-safe, ai_review stayed NULL and the appeal stayed pending
+      // (to the user it looked like "nothing happens"). max_tokens is a cap, not the billed amount
+      // (only actual output is billed), so raising it costs almost nothing.
       max_tokens: 2000,
       thinking: { type: "disabled" },
-      // rubric 部分は moderate-post と共通の system 接頭辞ではないためキャッシュキーは別だが、
-      // 申し立てが連続する場面 (誤判定の多発時) では同一 system が再利用される
+      // The rubric part is not the same system prefix as moderate-post, so the cache key is different, but
+      // when appeals come in a row (when misjudgments are frequent) the same system is reused
       system: [
         { type: "text", text: system, cache_control: { type: "ephemeral" } },
       ],
@@ -203,10 +208,10 @@ async function callClaudeJSON<T>(
   if (json?.stop_reason === "refusal") {
     throw new Error("model refusal");
   }
-  // 067 #10: max_tokens で打ち切られた応答は JSON が途中で切れ、この後の JSON.parse が
-  // 失敗する。原因をログに明示しておく (パースエラーだけ見ても max_tokens 由来か
-  // 判別できないため)。ここでは throw しない (JSON.parse 側の失敗が既存の catch で
-  // 拾われ、呼び出し元は従来どおり fail-safe で pending キューに残る)
+  // 067 #10: a response cut off by max_tokens has truncated JSON, and the JSON.parse below
+  // fails. Log the cause explicitly (from the parse error alone you cannot tell whether it came from
+  // max_tokens). Do not throw here (the JSON.parse failure is caught by the existing catch, and
+  // the caller stays in the pending queue by the fail-safe as before)
   if (json?.stop_reason === "max_tokens") {
     console.error(
       "⚠️ Anthropic応答が max_tokens で打ち切られた (JSON parse失敗の原因になりうる)",
@@ -241,7 +246,7 @@ function buildSystemPrompt(cfg: { safety_rubric: string; ethos_rubric: string })
 }
 
 // ------------------------------------------------------------
-// メイン
+// Main
 // ------------------------------------------------------------
 Deno.serve(async (req) => {
   const ok = (body: Record<string, unknown>) =>
@@ -251,7 +256,8 @@ Deno.serve(async (req) => {
     });
 
   try {
-    // 1. 呼び出し者の本人確認 (verify_jwt ON が前提だが、uid と申し立て所有者の一致まで確認する)
+    // 1. Verify the caller's identity (verify_jwt ON is assumed, but also check that the uid matches the
+    // appeal owner)
     const authHeader = req.headers.get("Authorization") ?? "";
     const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
@@ -268,7 +274,7 @@ Deno.serve(async (req) => {
       return ok({ status: "skipped", reason: "no appealId" });
     }
 
-    // 2. 申し立てをロード (本人 + pending + 未審査のみ。冪等)
+    // 2. Load the appeal (own + pending + not yet reviewed only. Idempotent)
     const { data: appeal, error: appealError } = await supabase
       .from("user_appeals")
       .select("id, user_id, target_post_id, target_comment_id, reason, status, ai_review")
@@ -282,7 +288,7 @@ Deno.serve(async (req) => {
       return ok({ status: "skipped", reason: "already reviewed" });
     }
 
-    // 3. 対象コンテンツ + 原判定をロード
+    // 3. Load the target content + the original verdict
     const content: AnthropicContentBlock[] = [];
     let originalVerdict: Record<string, unknown> | null = null;
 
@@ -321,7 +327,8 @@ Deno.serve(async (req) => {
         text: `【審査対象の投稿】\n${textParts.length > 0 ? textParts.join("\n") : "(画像のみ、テキスト無し)"}`,
       });
     } else {
-      // 列名は 014_b の実定義どおり text (body ではない。046 の author_user_id 誤記の教訓)
+      // The column name is text, as in the actual definition in 014_b (not body. Lesson from the
+      // author_user_id typo in 046)
       const { data: comment } = await supabase
         .from("user_comments")
         .select("text, moderation_status, moderation_verdict")
@@ -338,7 +345,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    // 原判定の内部分析 + 申し立て文を文脈として渡す
+    // Pass the internal analysis of the original verdict + the appeal text as context
     const verdictSummary = originalVerdict
       ? JSON.stringify(originalVerdict)
       : "(原判定の記録なし)";
@@ -350,8 +357,9 @@ Deno.serve(async (req) => {
       ].join("\n\n"),
     });
 
-    // 4. AI 二次審査 (055 カスケード: 基本モデルが unsure なら上位モデルで再審査。
-    //    上位モデルでも unsure なら運営キュー+ベル通知 = 「Sonnetでも迷ったら俺が見る」)
+    // 4. AI second review (055 cascade: if the base model is unsure, re-review with the stronger model.
+    //    If the stronger model is also unsure, operator queue + bell notification = "if even Sonnet is
+    //    unsure, I will look at it")
     const cfg = await loadConfig();
     const system = buildSystemPrompt(cfg);
     let verdict = await callClaudeJSON<AppealReviewVerdict>(system, content, cfg.model);
@@ -364,21 +372,21 @@ Deno.serve(async (req) => {
       escalated = true;
     }
 
-    // 5. 結果の書き込み (decision で3分岐)
+    // 5. Write the result (3 branches on decision)
     const isFinal = verdict.decision === "overturn" || verdict.decision === "reject";
     const aiReview = {
       analysis: verdict.analysis,
       decision: verdict.decision,
       user_note: verdict.user_note,
-      auto: isFinal, // AI が最終判定したケースのマーク (月次パトロール SQL 用)
+      auto: isFinal, // Marks cases where the AI made the final decision (for the monthly patrol SQL)
       model: usedModel,
-      escalated, // 055: 上位モデルへの再審査を経たか
+      escalated, // 055: whether it went through re-review by the stronger model
       reviewed_at: new Date().toISOString(),
     };
 
     if (isFinal) {
-      // approved: 039 user_appeals_resolve トリガーがコンテンツ復活+通知を実行
-      // rejected: 同トリガーが本人への結果反映を実行 (運営には来ない)
+      // approved: the 039 user_appeals_resolve trigger restores the content + sends the notification
+      // rejected: the same trigger applies the result for the user (never reaches the operator)
       const newStatus = verdict.decision === "overturn" ? "approved" : "rejected";
       const { error } = await supabase
         .from("user_appeals")
@@ -389,7 +397,7 @@ Deno.serve(async (req) => {
           ai_review: aiReview,
         })
         .eq("id", appealId)
-        .eq("status", "pending"); // 競合ガード (運営が同時に裁定した場合は何もしない)
+        .eq("status", "pending"); // Race guard (does nothing if the operator decided at the same time)
       if (error) throw error;
       console.log(
         verdict.decision === "overturn"
@@ -398,13 +406,13 @@ Deno.serve(async (req) => {
       );
       return ok({ status: verdict.decision === "overturn" ? "overturned" : "rejected" });
     } else {
-      // unsure: 所見を記録し pending のまま人間キューへ。
-      // 067 #10: resolution_note に verdict.user_note も書く (status は 'pending' の
-      // ままなので、この UPDATE では status キー自体を指定しない = 変更しない)。
-      // 従来は ai_review にしか書いていなかったため、AI が生成した「担当者が確認中です」
-      // という本人向け文言が捨てられ、申し立てたユーザーからは「無反応」に見えていた。
-      // 表示側 (AppealSheetView.swift:174) は既に resolutionNote を描画する作りなので
-      // クライアント側の変更は不要
+      // unsure: record the findings and leave it pending in the human queue.
+      // 067 #10: also write verdict.user_note to resolution_note (status stays 'pending', so this UPDATE
+      // does not set the status key at all = no change).
+      // Before, it was written only to ai_review, so the AI-generated text for the user, "a staff member
+      // is checking this", was thrown away, and to the user who appealed it looked like "no response".
+      // The display side (AppealSheetView.swift:174) already renders resolutionNote, so
+      // no client change is needed
       const { error } = await supabase
         .from("user_appeals")
         .update({ ai_review: aiReview, resolution_note: verdict.user_note })
@@ -412,17 +420,17 @@ Deno.serve(async (req) => {
         .eq("status", "pending");
       if (error) throw error;
 
-      // 054 の運営ベル通知は 2026-07-30 ユーザー判断で撤去 (「無理してやらなくていい」+
-      // 自分の申し立て文が自分の通知欄に出る見た目が不評)。unsure の確認は
-      // 運営の審査画面を開く運用に一本化。
-      // 054 のスキーマ (kind/operator_user_id) は残置 — 復活させる場合はここに
-      // create_notification RPC 呼び出しを戻すだけ (git 履歴 085b80e 参照)
+      // The operator bell notification from 054 was removed on 2026-07-30 by user decision ("no need to
+      // force it" + the look of your own appeal text showing up in your own notification list was
+      // disliked). Checking unsure cases is now done only by opening the operator review screen.
+      // The 054 schema (kind/operator_user_id) is left in place. To bring it back, just put the
+      // create_notification RPC call back here (see git history 085b80e)
 
       console.log(`↩️ 申し立て unsure→人間キューへ (appeal=${appealId})`);
       return ok({ status: "upheld" });
     }
   } catch (e) {
-    // 失敗しても申し立ては pending のまま人間キューに残る (fail-safe)
+    // Even on failure the appeal stays pending in the human queue (fail-safe)
     console.error(`review-appeal エラー: ${e}`);
     return ok({ status: "skipped", reason: "error" });
   }

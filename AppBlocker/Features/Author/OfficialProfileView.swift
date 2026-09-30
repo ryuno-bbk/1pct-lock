@@ -2,10 +2,11 @@
 //  OfficialProfileView.swift
 //  AppBlocker
 //
-//  「1%」公式アカウントのプロフィールページ (全公式名言一覧 + フォロー)
-//  偉人実名アカウント廃止に伴い AuthorProfileView (偉人個別プロフィール) を置き換える
-//  "アカウント" 側の遷移先。個々の偉人はカード上のテキスト表記 (— 著者名) に降格し、
-//  そのタップ先は AuthorQuoteFeedView (著者トピックフィード) へ移った。
+//  Profile page of the "1%" official account (list of all official quotes + follow)
+//  With the removal of real-name great figure accounts, this replaces AuthorProfileView (individual
+//  great figure profile) as the navigation target on the "account" side. Individual great figures
+//  were demoted to a text label on the card (em dash + author name), and tapping it now goes to
+//  AuthorQuoteFeedView (author topic feed).
 //
 
 import SwiftUI
@@ -30,14 +31,16 @@ struct OfficialProfileView: View {
         followService.isFollowing(authorId: OnePercentAccount.authorId)
     }
 
-    // 2026-07-31 ユーザー指定: 「大衆向けじゃないSNS」+「1%の公式アカウント」の2点を言う
+    // 2026-07-31 user instruction: say 2 things, "an SNS that is not for the masses" + "the official
+    // 1% account"
     private var bio: String {
         lang == .japanese
-            ? "大衆向けじゃないSNS。1% の公式アカウント。" // 文言はユーザー添削待ち
+            ? "大衆向けじゃないSNS。1% の公式アカウント。" // Wording awaiting user review
             : "Not a social app for everyone. The official 1% account."
     }
 
-    /// 全公式名言 (QuoteService の既存キャッシュを流用。偉人アカウント廃止後は全名言が 1% 名義)
+    /// All official quotes (reuses QuoteService's existing cache. After the great figure accounts were
+    /// removed, all quotes are under the 1% name)
     private var officialQuotes: [Quote] {
         quoteService.quotes
     }
@@ -54,10 +57,11 @@ struct OfficialProfileView: View {
                 }
             }
             .coordinateSpace(name: ProfileHeroHeader.scrollSpace)
-            // ヒーロー画像を画面上端 (ステータスバー下) までべったり付ける (BeReal 準拠)
+            // Attach the hero image flush to the top edge of the screen (under the status bar) (following BeReal)
             .ignoresSafeArea(edges: .top)
         }
-        // 名前はヒーロー内に大きく出るためバータイトルは空。バー背景も透過して画像に重ねる
+        // The name appears large inside the hero, so the bar title is empty. The bar background is also
+        // transparent and laid over the image
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
@@ -79,12 +83,12 @@ struct OfficialProfileView: View {
             await loadFollowerCount()
         }
         .onChange(of: followService.followedAuthorIds) { _, _ in
-            // 自分のフォロー/解除でフォロワー数を即時反映
+            // Reflect the follower count immediately when you follow/unfollow
             Task { await loadFollowerCount() }
         }
     }
 
-    // MARK: - Profile Header (BeReal 風ヒーロー、2026-07-10。公式はロゴヒーロー)
+    // MARK: - Profile Header (BeReal-style hero, 2026-07-10. The official one uses a logo hero)
 
     private var profileHeader: some View {
         ProfileHeroHeader(
@@ -188,8 +192,8 @@ struct OfficialProfileView: View {
         }
     }
 
-    /// user_follows から author_id = sentinel のフォロワー数を取得。
-    /// head + count で件数だけもらう (全行フェッチしてクライアントで数えない)
+    /// Get the follower count with author_id = sentinel from user_follows.
+    /// Get only the count with head + count (do not fetch all rows and count on the client)
     private func loadFollowerCount() async {
         do {
             let response = try await SupabaseManager.shared.client

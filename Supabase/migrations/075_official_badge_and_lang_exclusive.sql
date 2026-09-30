@@ -1,27 +1,30 @@
 -- ============================================================
--- 075: 公式マーク (users.is_official) + 公式アカウントの言語出し分け (users.lang_exclusive)
+-- 075: official badge (users.is_official) + per-language delivery for the official account
+-- (users.lang_exclusive)
 --
--- 背景:
---   ① フィード4関数が UGC 投稿について `false AS is_official_author` をハードコードしており、
---      運営アカウント (ai_motivation) に認証バッジを出せない。public.users に列が無かった。
---   ② 073 の同一言語ボーナス (w_same_lang) は重み 0.0 で出荷され、フィードは言語を見ていない。
---      公式アカウントが同内容の日本語版/英語版を2投稿したとき、両方が全員に出てしまう。
+-- Background:
+--   ① The 4 feed functions hardcode `false AS is_official_author` for UGC posts, so the operator
+--      account (ai_motivation) cannot show a verified badge. public.users had no column for it.
+--   ② The same-language bonus of 073 (w_same_lang) shipped with weight 0.0, and the feed does not
+--      look at language. When the official account posts the same content twice, as a Japanese and
+--      an English version, both are shown to everyone.
 --
--- 方針:
---   一般ユーザーの見え方は一切変えない。lang_exclusive を立てたアカウント (= 公式) だけが
---   言語で振り分けられる。既定値はどちらも false なので、既存の全ユーザーは現状維持。
+-- Policy:
+--   Nothing changes in what regular users see. Only accounts with lang_exclusive set (= official) are
+--   routed by language. Both default to false, so all existing users stay as they are.
 --
--- ⚠️ この STEP 1 だけでは挙動は何も変わらない (列を足して自己昇格を塞ぐだけ)。
---    フィード関数の書き換えは STEP 2 以降。
+-- ⚠️ This STEP 1 alone changes no behavior (it only adds columns and closes self-promotion).
+--    Rewriting the feed functions is STEP 2 onward.
 -- ============================================================
 
 begin;
 
 -- ------------------------------------------------------------
--- STEP 1-a: 列を追加
+-- STEP 1-a: add columns
 -- ------------------------------------------------------------
--- is_official    : 認証バッジ。FeedListCard.nameLabel(official:) がチェックマークを描く
--- lang_exclusive : true のアカウントの投稿は「閲覧者の言語に合う1本」だけをフィードに出す
+-- is_official    : verified badge. FeedListCard.nameLabel(official:) draws the check mark
+-- lang_exclusive : for accounts with true, only "the one post that matches the viewer's language" is
+--                  shown in the feed
 alter table public.users add column if not exists is_official    boolean not null default false;
 alter table public.users add column if not exists lang_exclusive boolean not null default false;
 
@@ -32,13 +35,14 @@ comment on column public.users.lang_exclusive is
     'lang が NULL の投稿は言語を問わない扱いで全員に出る。既定 false = 従来どおり全員に出る';
 
 -- ------------------------------------------------------------
--- STEP 1-b: 自己昇格の防止
+-- STEP 1-b: prevent self-promotion
 -- ------------------------------------------------------------
--- 🔴 public.users の RLS は users_update_own (auth.uid() = id) で「自分の行の全列」を
---    更新できてしまう (列単位の GRANT も制限されていない)。このまま列を足すと、
---    任意のユーザーが PATCH /users?id=eq.<自分> {"is_official": true} で
---    認証バッジを自分に付けられる。is_pro と同じ流儀で BEFORE UPDATE トリガに追加して塞ぐ。
---    rolbypassrls (postgres / service_role) は従来どおり素通し = 運営の SQL / スタジオは書ける。
+-- 🔴 The RLS of public.users, users_update_own (auth.uid() = id), allows updating "all columns of your
+--    own row" (column-level GRANTs are not restricted either). If we just add the columns, any user can
+--    give themself the verified badge with PATCH /users?id=eq.<me> {"is_official": true}.
+--    Close it by adding it to the BEFORE UPDATE trigger, the same way as is_pro.
+--    rolbypassrls (postgres / service_role) passes through as before = the operator's SQL / studio can
+--    still write.
 create or replace function public.protect_users_is_pro()
 returns trigger
 language plpgsql
@@ -56,7 +60,7 @@ BEGIN
     IF NEW.rc_last_event_ms IS DISTINCT FROM OLD.rc_last_event_ms THEN
         RAISE EXCEPTION 'rc_last_event_ms is read-only for users';
     END IF;
-    -- 075: 認証バッジ / 言語出し分けの自己設定を禁止
+    -- 075: forbid setting the verified badge / per-language delivery on yourself
     IF NEW.is_official IS DISTINCT FROM OLD.is_official THEN
         RAISE EXCEPTION 'is_official is read-only for users';
     END IF;

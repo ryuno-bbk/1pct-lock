@@ -2,59 +2,66 @@
 //  UnlockChallenge.swift
 //  AppBlocker
 //
-//  ロックを解除するために課す「課題」= 難易度モード。
+//  The "challenge" you must complete to unlock = difficulty mode.
 //
-//  背景 (2026-08-28 ユーザーと設計):
-//    海外で伸びている同種アプリ (Touch Grass / PushUp Time 等) は、
-//    カメラで現実の行動を証明させて解除させる。アプリ内で完結する難しさより
-//    段違いに強い、というのが出発点。
+//  Background (designed with the user on 2026-08-28):
+//    Similar apps growing overseas (Touch Grass / PushUp Time etc.) make you prove a real-world
+//    action with the camera to unlock. The starting point was that this is far stronger than any
+//    difficulty that stays inside the app.
 //
-//  🔴 腕立て・スクワットは 2026-08-29 に廃止した。
-//    端末内 Vision の身体ポーズ検出で実装したが、実機で2度とも使い物にならなかった
-//    (「ボトムで少し動いただけで大量にカウント」)。肩幅で正規化する設計上、
-//    分母が揺れると比が跳ね上がる。動きの追跡そのものが不安定だったため、
-//    静止画1枚で判定する「ノート+ペン」に一本化する判断。
-//    復元が要る場合は commit 8ace469 以前を見ること。
+//  🔴 Push-ups and squats were removed on 2026-08-29.
+//    They were implemented with on-device Vision body pose detection, but on a real device they were
+//    unusable both times ("a small movement at the bottom counts many times"). Because the design
+//    normalizes by shoulder width, when the denominator shakes, the ratio jumps. Motion tracking
+//    itself was unstable, so we decided to go with only "notebook + pen", which judges from one
+//    still image.
+//    If you need to restore it, look at commit 8ace469 or earlier.
 //
-//  🔴 設計の芯:
-//    - 課題は「ロックを始めるとき」に決める。止めようとしている瞬間に選べたら縛りにならない
-//    - 走っているセッションは開始時の課題を焼き付けて持つ (UnlockChallengeService)。
-//      そのため設定を後から変えても、いま走っているロックは緩まない
-//    - 脱出口は常にある (アプリを消せば Screen Time の遮断も消える)。
-//      それを塞ぐことはできないし、塞いだと嘘をついてもいけない
+//  🔴 Core of the design:
+//    - The challenge is decided "when starting the lock". If you could choose it at the moment you
+//      are trying to stop, it would not bind you
+//    - A running session keeps the challenge from its start baked in (UnlockChallengeService).
+//      So even if the settings are changed later, the lock that is running now does not get looser
+//    - There is always an escape (deleting the app also removes the Screen Time blocking).
+//      We cannot close it, and we must not lie that it is closed
 //
 
 import Foundation
 
 enum UnlockChallenge: String, CaseIterable, Codable, Identifiable {
 
-    /// 2秒長押し。既存の中断画面がすでにやっている摩擦 = 現状維持の既定値
+    /// 2-second long press. The friction the existing interruption screen already has = the default that
+    /// keeps the status quo
     case longPress
-    /// 休憩が終わったあとにやる作業を1行書く (実行意図 / if-then プラン)。
-    /// メタ分析で d=0.65 (Gollwitzer & Sheeran 2006, 94試験) と、行動変容で最も実証された技法。
-    /// 🔴 「解除したら何をするか」ではなく「休憩が終わったら何をやるか」を聞く。
-    ///    前者の正直な答えは「スクロールする」で、聞く意味が無い (2026-08-29 ユーザー指摘)
+    /// Write one line about the work you will do after the break ends (implementation intention / if-then
+    /// plan). d=0.65 in a meta-analysis (Gollwitzer & Sheeran 2006, 94 tests), the best-proven technique
+    /// for behavior change.
+    /// 🔴 Ask "what will you do when the break ends", not "what will you do after you unlock".
+    ///    The honest answer to the latter is "scroll", so there is no point asking it (pointed out by the
+    ///    user 2026-08-29)
     case declaration
-    /// フィードの投稿を N 件見る (中核ループ: ロック中の衝動をアプリ内で満たす)
+    /// View N posts in the feed (core loop: satisfy the urge during a lock inside the app)
     case scrollFeed
-    /// 自分で登録した画像を見る。中身は毎回ランダム。端末内保存 (サーバーに上げない)
+    /// View images you registered yourself. The content is random each time. Stored on the device (not
+    /// uploaded to the server)
     case imageScroll
-    /// 候補プールから抽選。🔴 プールはユーザーが選ぶ。
-    /// 全ミッションから完全ランダムにすると「電車の中でノートが出る」で詰む
+    /// Draw from a candidate pool. 🔴 The user chooses the pool.
+    /// Fully random from all missions gets you stuck with "notebook comes up while you are on the train"
     case random
-    /// 解除手段を出さないモード。
-    /// 🔴 文言に「何をしてもロックを解除できません」は使わないこと。事実ではない
-    ///    (アプリを消せば必ず解除される)。「このモードでは解除できません」= アプリ内では真実
+    /// Mode that shows no way to unlock.
+    /// 🔴 Do not use the text "No matter what you do, you cannot unlock". It is not true
+    ///    (deleting the app always unlocks). "このモードでは解除できません" ("You cannot unlock in this
+    ///    mode") = true inside the app
     case none
 
     var id: String { rawValue }
 
-    /// ピッカーに出す順序。random / none は下に置く
+    /// Order shown in the picker. random / none go at the bottom
     static var pickable: [UnlockChallenge] {
         [.longPress, .declaration, .scrollFeed, .imageScroll, .none]
     }
 
-    /// 抽選の候補になれるか (random 自身と none は候補にしない)
+    /// Whether it can be a candidate for the draw (random itself and none are not candidates)
     var canBeRandomCandidate: Bool {
         switch self {
         case .random, .none: return false
@@ -62,45 +69,47 @@ enum UnlockChallenge: String, CaseIterable, Codable, Identifiable {
         }
     }
 
-    /// Pro 限定か (2026-08-28 ユーザー確定: 投稿とスクロールのみ無料)
+    /// Whether it is Pro only (2026-08-28 confirmed by the user: only post and scroll are free)
     var requiresPro: Bool {
         switch self {
-        // 解除方法で課金は作らない。ロックの手段 (スケジュール/位置) が既に Pro なので、
-        // ここで弱い機能を並べて特典を水増しする必要が無い (2026-08-29 確定)
+        // We do not charge for unlock methods. The lock methods (schedule/location) are already Pro, so there
+        // is no need to pad the perks here with weak features (confirmed 2026-08-29)
         case .longPress, .declaration, .scrollFeed, .imageScroll, .random: return false
-        // 🔴 ハードモードだけ Pro。Opal も Deep Focus を有料にしている
+        // 🔴 Only hard mode is Pro. Opal also makes Deep Focus paid
         case .none:                                                        return true
         }
     }
 
-    /// 実装済みか。段階的に足すので、未実装のものはピッカーに出さない。
-    /// 🔴 未実装のものを既定やランダム候補に混ぜないこと (解除不能になる)
+    /// Whether it is implemented. They are added step by step, so unimplemented ones are not shown in the
+    /// picker.
+    /// 🔴 Do not mix unimplemented ones into the default or the random candidates (unlocking would become
+    /// impossible)
     var isImplemented: Bool {
         switch self {
         case .longPress, .declaration, .scrollFeed, .imageScroll, .none: return true
-        // random は後回し (方法が複数あれば切替自体が変化になる)
+        // random is postponed (if there are several methods, the switching itself becomes the variation)
         case .random:                                                    return false
         }
     }
 
-    /// 行の左に出す SF Symbol (2026-09-05 ユーザー指定)。
-    /// 🔴 文字が地味で「どれがどれか分からない」という実機フィードバックへの対応。
-    ///    アイコンはテキストとは別の固定幅カラムに置くこと (同じ HStack に混ぜると
-    ///    タイトルの折り返し位置が方法ごとにズレる)
+    /// SF Symbol shown at the left of the row (2026-09-05, user-specified).
+    /// 🔴 Response to real-device feedback that the text is plain and "you can't tell which is which".
+    ///    Put the icon in a fixed-width column separate from the text (mixing it into the same HStack
+    ///    shifts the title's wrap position for each method)
     var icon: String {
         switch self {
-        case .longPress:   return "stop.circle.fill"   // 停止マーク = 終了ボタンを押し続ける
-        case .declaration: return "note.text"          // ノート = 宣言を書く
-        case .scrollFeed:  return "person.3.fill"      // 他人が何人か = ライバル
-        case .imageScroll: return "photo.fill"         // 画像
+        case .longPress:   return "stop.circle.fill"   // Stop mark = keep pressing the end button
+        case .declaration: return "note.text"          // Notebook = write a declaration
+        case .scrollFeed:  return "person.3.fill"      // A few other people = rivals
+        case .imageScroll: return "photo.fill"         // Image
         case .random:      return "shuffle"
-        case .none:        return "lock.fill"          // 南京錠 = ハードロック
+        case .none:        return "lock.fill"          // Padlock = hard lock
         }
     }
 
-    /// ✅ 日本語はユーザー口述 (2026-09-05)。「〜して解除 / 〜してから解除」で語尾を統一し、
-    ///    タイトルだけで「何をすれば解除できるか」が分かる形にした。
-    /// ⚠️ 英語はユーザー添削待ち (ネイティブ総点検が未実施)
+    /// ✅ The Japanese was dictated by the user (2026-09-05). The endings are unified to the pattern
+    ///    "unlock by doing X / unlock after doing X", so the title alone tells "what you need to do to unlock".
+    /// ⚠️ The English is waiting for user review (the full native check has not been done)
     func title(_ lang: AppLanguage) -> String {
         let ja = lang == .japanese
         switch self {
@@ -113,7 +122,7 @@ enum UnlockChallenge: String, CaseIterable, Codable, Identifiable {
         }
     }
 
-    /// ⚠️ 文言はユーザー添削待ち
+    /// ⚠️ Text waiting for user review
     func detail(_ lang: AppLanguage) -> String {
         let ja = lang == .japanese
         switch self {
@@ -128,17 +137,17 @@ enum UnlockChallenge: String, CaseIterable, Codable, Identifiable {
                 ? "ライバルがどれだけ前に進んでいるか確認してから解除"
                 : "Check how far your rivals have moved ahead, then unlock"
         case .imageScroll:
-            // ✅ 2026-09-05 ユーザー確定 (3案から選択)。ここだけ「〜してから解除」ではなく
-            //    「必ず見る」で強制力を出す形をユーザーが選んだ
+            // ✅ Confirmed by the user on 2026-09-05 (chosen from 3 options). Only here, instead of "unlock after
+            //    doing X", the user chose a form that uses "必ず見る" ("must view") to add force
             return ja
                 ? "自分を奮い立たせる画像を、解除の前に必ず見る"
                 : "Always look at the image that fires you up before unlocking"
         case .random:
             return ja ? "選んだ中からどれが来るか分からない" : "You won't know which one you get"
         case .none:
-            // ⚠️ 文言はユーザーが後で全部添削する (2026-08-29)。
-            //    Claude は「アプリを消せば解除されるので嘘になる」と2度指摘したが、
-            //    ユーザー判断でこの表現を採用。再度蒸し返さないこと
+            // ⚠️ The user will review all of the text later (2026-08-29).
+            //    Claude pointed out twice that "it would be a lie, because deleting the app unlocks it", but
+            //    the user decided to adopt this wording. Do not bring it up again
             return ja
                 ? "何をしてもロックを解除できない。セッションも終了できない"
                 : "Nothing can lift this lock. The session can't be ended"

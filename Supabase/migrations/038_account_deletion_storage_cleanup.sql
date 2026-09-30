@@ -1,39 +1,39 @@
 -- ============================================================
 -- 038_account_deletion_storage_cleanup.sql
--- 監査 M32: アカウント削除時に Storage (avatars / post-images) の
--- 画像が消去されず公開URLで永久に閲覧可能なまま残る問題を修正
+-- Audit M32: fix the problem where images in Storage (avatars / post-images) were not erased on
+-- account deletion and stayed viewable forever through public URLs
 -- ============================================================
--- 背景:
---   009_b_moderation_v2.sql で定義した delete_my_account() は
---   public.users / auth.users の DELETE のみを行い、
---   storage.objects は一切削除していなかった。
---   avatars バケット・post-images バケットはどちらも public = true のため、
---   アカウント削除後もアバター画像・投稿画像が公開URLで
---   第三者から閲覧可能なまま残ってしまう (個人情報保護上の不備)。
+-- Background:
+--   delete_my_account() defined in 009_b_moderation_v2.sql
+--   only DELETEd public.users / auth.users
+--   and deleted nothing from storage.objects.
+--   Both the avatars bucket and the post-images bucket are public = true, so
+--   even after account deletion, avatar images and post images stayed viewable
+--   by third parties through public URLs (a gap in personal data protection).
 --
--- 修正方針:
---   delete_my_account() を CREATE OR REPLACE し、
---   public.users / auth.users を削除する前に
---   storage.objects から本人所有のオブジェクトを削除する処理を追加する。
+-- Fix:
+--   CREATE OR REPLACE delete_my_account(), and before deleting
+--   public.users / auth.users, add a step that deletes
+--   the user's own objects from storage.objects.
 --
---   Storage パスの先頭ディレクトリは常に user_id の lowercase 文字列
---   (Swift 側: UserAuthService.uploadAvatar / UserPostService のアップロード
---   処理を参照。013_b_profile_edit.sql / 019_post_v2.sql の RLS ポリシーでも
---   同じ規約 (storage.foldername(name))[1] = auth.uid()::text を使用している):
+--   The top directory of a Storage path is always the lowercase string of user_id
+--   (Swift side: see UserAuthService.uploadAvatar / the upload logic in UserPostService.
+--   The RLS policies in 013_b_profile_edit.sql / 019_post_v2.sql also use
+--   the same convention (storage.foldername(name))[1] = auth.uid()::text):
 --     - avatars:      "{uid}/avatar.jpg"
---     - post-images:  "{uid}/{post_id}.jpg", "{uid}/{post_id}_2.jpg" 〜 "_4.jpg"
---   Postgres の uuid → text キャストは常に lowercase 表記になるため、
---   target_user_id::text は Swift 側が生成するパスと自然に一致する。
+--     - post-images:  "{uid}/{post_id}.jpg", "{uid}/{post_id}_2.jpg" to "_4.jpg"
+--   Postgres's uuid → text cast always produces lowercase, so
+--   target_user_id::text naturally matches the paths generated on the Swift side.
 --
---   storage.objects の DELETE を public.users / auth.users の DELETE より前に
---   行うことで、万一 Storage 側の削除に失敗した場合でも public.users /
---   auth.users の行がまだ残っておりリトライ可能な状態を保つ
---   (関数全体は単一トランザクションなので例外発生時はどのみち全体
---   ロールバックされるが、記述順序としての安全側に倣う)。
+--   By running the storage.objects DELETE before the public.users / auth.users DELETE,
+--   even if the Storage-side deletion fails, the public.users /
+--   auth.users rows still exist and a retry stays possible
+--   (the whole function is a single transaction, so on an exception everything is
+--   rolled back anyway, but the statement order follows the safe side).
 --
--- 実行順序: 009_b_moderation_v2.sql 適用後ならいつでも。何度実行しても安全
---   (CREATE OR REPLACE FUNCTION)。本ファイルはユーザーが Supabase Dashboard
---   → SQL Editor で手動適用する想定 (自動デプロイはしない)。
+-- Execution order: any time after 009_b_moderation_v2.sql is applied. Safe to run any number of times
+--   (CREATE OR REPLACE FUNCTION). This file is meant to be applied manually by the user in Supabase
+--   Dashboard → SQL Editor (no automatic deploy).
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.delete_my_account()
@@ -49,17 +49,17 @@ BEGIN
         RAISE EXCEPTION 'Not authenticated';
     END IF;
 
-    -- M32: 公開Storageバケット (avatars / post-images) の本人所有オブジェクトを
-    -- 先に削除する。両バケットとも public = true のため、消し忘れると
-    -- アカウント削除後も画像が公開URLで閲覧可能なまま残ってしまう。
+    -- M32: delete the user's own objects in the public Storage buckets (avatars / post-images)
+    -- first. Both buckets are public = true, so if they are not deleted,
+    -- images stay viewable through public URLs even after the account is deleted.
     DELETE FROM storage.objects
     WHERE bucket_id IN ('avatars', 'post-images')
       AND (storage.foldername(name))[1] = target_user_id::text;
 
-    -- public.users 削除 (CASCADE で関連データ消える)
+    -- Delete public.users (related data is removed by CASCADE)
     DELETE FROM public.users WHERE id = target_user_id;
 
-    -- auth.users 削除 (SECURITY DEFINER + postgres owner で許可される)
+    -- Delete auth.users (allowed by SECURITY DEFINER + postgres owner)
     DELETE FROM auth.users WHERE id = target_user_id;
 END;
 $$;

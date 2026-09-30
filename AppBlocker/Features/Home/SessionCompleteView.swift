@@ -2,22 +2,23 @@
 //  SessionCompleteView.swift
 //  AppBlocker
 //
-//  タイマー自然完了時の「静かな祝福」画面。
-//  Apple Fitness のリング完了(粒子)を参考に、墨+金で控えめに演出する。
-//  派手な confetti はブランド(エリート志向 / Not for everyone)に不整合のため禁止。
+//  "Quiet celebration" screen when the timer completes naturally.
+//  Based on Apple Fitness ring completion (particles), with a restrained ink + gold effect.
+//  Flashy confetti is forbidden because it does not fit the brand (elite-minded / Not for everyone).
 //
 
 import SwiftUI
-// @Environment(\.requestReview) の実体 (RequestReviewAction) は StoreKit 側にあるため必須
+// Required because the implementation of @Environment(\.requestReview) (RequestReviewAction) is in
+// StoreKit
 import StoreKit
 
 struct SessionCompleteView: View {
-    /// 完遂直後の評価依頼 (2026-09-05)。判断は ReviewPrompt が持つ
+    /// Rating request right after completion (2026-09-05). ReviewPrompt makes the decision
     @Environment(\.requestReview) private var requestReview
 
-    /// 今回のセッションの実ロック時間 (秒)
+    /// Actual lock time of this session (seconds)
     let duration: TimeInterval
-    /// schedule/location による継続ロック中の注記 (該当しない場合は nil)
+    /// Note shown when a lock continues because of schedule/location (nil if not applicable)
     let continuedLockMessage: String?
     let lang: AppLanguage
 
@@ -26,7 +27,7 @@ struct SessionCompleteView: View {
 
     private var reduceMotion: Bool { UIAccessibility.isReduceMotionEnabled }
 
-    // MARK: - 演出シーケンス State
+    // MARK: - Animation sequence State
 
     @State private var numberRevealed = false
     @State private var animatedSeconds: Double = 0
@@ -38,7 +39,7 @@ struct SessionCompleteView: View {
     @State private var showFooter = false
     @State private var showButton = false
 
-    // MARK: - データ整合 State
+    // MARK: - Data consistency State
 
     @State private var statsLoaded = false
     @State private var displayedTotalSeconds = 0
@@ -75,17 +76,19 @@ struct SessionCompleteView: View {
                 }
 
                 PrimaryButton(L.sessionCompleteDone(lang)) {
-                    // 🔴 2026-09-05: 完遂ベースのトリガーを復活させた。
-                    //    2026-08-06 に全廃したのは「完遂を**前提条件**にすると大半に永久に聞けない」
-                    //    という理由で、**追加の機会**として置く分には当時の判断と矛盾しない。
-                    //    完遂直後は達成感が最大の瞬間で、最も星が高くなる。
-                    //    OS が年3回に間引くので出し過ぎにはならない。判断は ReviewPrompt に集約。
+                    // 🔴 2026-09-05: brought back the completion-based trigger.
+                    //    It was removed entirely on 2026-08-06 because "if completion is a **precondition**, most users
+                    //    are never asked", so placing it as an **additional opportunity** does not contradict that decision.
+                    //    Right after completion is the moment of the strongest sense of achievement, when ratings are
+                    //    highest.
+                    //    The OS limits it to 3 times a year, so it will not be shown too often. The decision is centralized
+                    //    in ReviewPrompt.
                     ReviewPrompt.recordSessionCompleted()
                     let shouldAsk = ReviewPrompt.shouldAskAfterCompletedSession()
                     dismiss()
                     if shouldAsk {
                         Task {
-                            // 画面が閉じきってから被せる (閉じるアニメと重ねない)
+                            // Show it after the screen has fully closed (do not overlap it with the close animation)
                             try? await Task.sleep(nanoseconds: 900_000_000)
                             requestReview()
                         }
@@ -97,7 +100,7 @@ struct SessionCompleteView: View {
             }
         }
         .task {
-            // UI演出シーケンスとデータロードを並行実行 (どちらもブロックしない)
+            // Run the UI animation sequence and the data load in parallel (neither blocks)
             Task { await runIntroSequence() }
             await loadStatsData()
         }
@@ -109,7 +112,7 @@ struct SessionCompleteView: View {
         ZStack {
             AppColors.background
 
-            // 「墨がわずかに明るくなる」演出 (中心やや上)
+            // "Ink gets slightly brighter" effect (slightly above center)
             RadialGradient(
                 colors: [Color.white.opacity(0.05), Color.clear],
                 center: UnitPoint(x: 0.5, y: 0.38),
@@ -130,8 +133,8 @@ struct SessionCompleteView: View {
                 .foregroundColor(AppColors.textSecondary)
                 .opacity(numberRevealed ? 1 : 0)
 
-            // 🔴 金色と粒子の演出は撤去 (2026-08-29 ユーザー指示)。
-            //    白のままカウントアップするだけのシンプルな見せ方にする
+            // 🔴 The gold color and particle effects were removed (2026-08-29 user instruction).
+            //    Simple presentation: it just counts up in white
             Text(formatDuration(Int(animatedSeconds.rounded())))
                 .font(.system(size: 56, weight: .bold))
                 .monospacedDigit()
@@ -172,8 +175,9 @@ struct SessionCompleteView: View {
         .redacted(reason: statsLoaded ? [] : .placeholder)
     }
 
-    // 2026-07-14 UI再設計: 金の数字を単独ヒーローに保つため、統計タイルは 2 個 (累計ロック / 連続日数) に縮小。
-    // 上位% タイルは撤去 (MyProfileView 側には引き続き残る)
+    // 2026-07-14 UI redesign: to keep the gold number as the single hero, the stat tiles were reduced to 2
+    // (total lock / consecutive days).
+    // The top percentile tile was removed (it still remains in MyProfileView)
     private enum StatRowKind: Equatable {
         case total, streak
     }
@@ -227,9 +231,10 @@ struct SessionCompleteView: View {
         }
     }
 
-    /// 表示用の累計ロック時間フォーマット (BlockSessionTracker.formattedTotal() と同じ書式)。
-    /// tracker.formattedTotal() は tracker.totalSeconds を直接使うため、
-    /// オフライン整合用に max() 補正した displayedTotalSeconds には使えず、同じロジックをここで再現する。
+    /// Format of the total lock time for display (same format as BlockSessionTracker.formattedTotal()).
+    /// tracker.formattedTotal() uses tracker.totalSeconds directly, so it cannot be used for
+    /// displayedTotalSeconds, which is corrected with max() for offline consistency, and the same logic is
+    /// reproduced here.
     private var displayedTotalText: String {
         let hours = displayedTotalSeconds / 3600
         let minutes = (displayedTotalSeconds % 3600) / 60
@@ -257,7 +262,7 @@ struct SessionCompleteView: View {
 
     private func runIntroSequence() async {
         guard !reduceMotion else {
-            // reduceMotion: カウントアップ省略で即値表示、粒子スキップ、stagger 短縮
+            // reduceMotion: skip the count-up and show the value immediately, skip particles, shorten the stagger
             numberRevealed = true
             animatedSeconds = duration
             numberConfirmed = true
@@ -269,43 +274,43 @@ struct SessionCompleteView: View {
             return
         }
 
-        // 1. 0.4秒の静寂
+        // 1. 0.4 seconds of silence
         try? await Task.sleep(nanoseconds: 400_000_000)
 
         withAnimation(.easeOut(duration: 0.3)) {
             numberRevealed = true
         }
 
-        // 2. 0 から約1.2秒かけてカウントアップ
+        // 2. Count up from 0 over about 1.2 seconds
         await runCountUp()
 
-        // 数字確定: 色遷移 + haptic 同期
+        // Number finalized: color transition + synced haptic
         withAnimation(.easeInOut(duration: 0.4)) {
             numberConfirmed = true
         }
         hapticTrigger.toggle()
 
-        // 4. 金の粒子 (1.5秒で自然消滅、シーケンス本体はブロックしない)
+        // 4. Gold particles (fade out naturally in 1.5 seconds, do not block the sequence itself)
         particlesActive = true
         Task {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             particlesActive = false
         }
 
-        // 5. 統計行: 数字確定の0.3秒後にゲートを開く
+        // 5. Stat rows: open the gate 0.3 seconds after the number is finalized
         try? await Task.sleep(nanoseconds: 300_000_000)
         withAnimation(.easeOut(duration: 0.3)) {
             statsGateReached = true
         }
         revealStatsIfReady()
 
-        // 6. フッター
+        // 6. Footer
         try? await Task.sleep(nanoseconds: 120_000_000)
         withAnimation(.easeOut(duration: 0.25)) {
             showFooter = true
         }
 
-        // 7. 完了ボタン
+        // 7. Done button
         try? await Task.sleep(nanoseconds: 120_000_000)
         withAnimation(.easeOut(duration: 0.25)) {
             showButton = true
@@ -334,8 +339,9 @@ struct SessionCompleteView: View {
         animatedSeconds = target
     }
 
-    /// ゲート (シーケンス上の表示タイミング) とデータロードの両方が揃ってから stagger 表示する。
-    /// ゲートだけ先に開いた場合はプレースホルダのまま待機し、ロード完了時に改めて呼ばれる。
+    /// Show with stagger only after both the gate (display timing in the sequence) and the data load are
+    /// ready.
+    /// If only the gate opens first, wait with placeholders; it is called again when loading finishes.
     private func revealStatsIfReady() {
         guard statsGateReached, statsLoaded else { return }
         let total = visibleStatRowKinds.count
@@ -355,7 +361,7 @@ struct SessionCompleteView: View {
         }
     }
 
-    // MARK: - Data Consistency (App Group キュー flush → 累計反映)
+    // MARK: - Data Consistency (App Group queue flush → total updated)
 
     private func loadStatsData() async {
         let totalBefore = sessionTracker.totalSeconds
@@ -363,7 +369,7 @@ struct SessionCompleteView: View {
         await sessionTracker.flushQueue()
         await sessionTracker.loadStats()
 
-        // オフラインで flush 失敗しても、今回分を含んだ値を最低保証する
+        // Even if the flush fails offline, guarantee at least a value that includes this session
         let finalTotal = max(sessionTracker.totalSeconds, totalBefore + totalSecondsInt)
         displayedTotalSeconds = finalTotal
         statsLoaded = true
@@ -371,9 +377,10 @@ struct SessionCompleteView: View {
     }
 }
 
-// MARK: - Gold Particles (Canvas + TimelineView, confetti ライブラリ不使用)
+// MARK: - Gold Particles (Canvas + TimelineView, no confetti library)
 
-/// 数字の輪郭付近から立ち上る金の微粒子。最大15個、軽量な Canvas 描画。
+/// Fine gold particles that rise from around the outline of the number. Up to 15, drawn with a light
+/// Canvas.
 private struct GoldParticlesView: View {
     let isActive: Bool
 
@@ -381,7 +388,7 @@ private struct GoldParticlesView: View {
     @State private var activatedAt: Date?
 
     private struct Particle {
-        let startX: CGFloat   // -1...1 (中心からの相対オフセット)
+        let startX: CGFloat   // -1...1 (relative offset from the center)
         let driftAmplitude: CGFloat
         let delay: Double
         let duration: Double

@@ -2,28 +2,31 @@
 //  OnboardingLockModes.swift
 //  AppBlocker
 //
-//  3つのロックモード (タイマー / スケジュール / 位置情報) をオンボーディングで1枚だけ見せる。
+//  Shows the 3 lock modes (timer / schedule / location) on a single onboarding screen.
 //
-//  Why (2026-08-06 ユーザー指摘):
-//  従来のオンボは「なぜやめるべきか」(診断→ショック→夢→署名) だけを説き、
-//  このアプリが何をするのかを一度も見せないままペイウォールへ到達していた。
-//  = 何を売っているか見せずに売っている状態だった。
+//  Why (2026-08-06 user feedback):
+//  The old onboarding only argued "why you should quit" (diagnosis → shock → dream → signature),
+//  and reached the paywall without ever showing what this app does.
+//  = It was selling without showing what it sells.
 //
-//  置き場所は「ショック → 覚悟」の直後 (ユーザー指定)。
-//  「人生を変える覚悟はできていますか?」の次に「これがその手段だ」を出す並びになる。
+//  Placed right after "shock → resolve" (user instruction).
+//  This puts "here is how" right after "人生を変える覚悟はできていますか?" ("Are you ready to
+//  change your life?").
 //
-//  レイアウトの決定 (モックを4案→3案→3案と出した末の結論):
-//  - モード名は大きく、**改行しない**。承認済み App Store スクショの見出しと同じ字組み
-//    (heavy / トラッキング詰め / nowrap) を使う。仕様は _builder/decorate.html の .headline
-//  - 説明はモード名の下に小さく AppColors.textSecondary で置く (スクショの .sub と同じ)
-//  - 🔴 アイコンは文字の**背後**に特大で置き、画面右端から見切れさせる。
-//    横に並べるとその幅だけモード名を小さくするしかなくなるため
-//    (「アイコンを大きく」と「文字を大きく」を両立させるための配置)
-//  - 罫線は画面端まで通す。左右 24pt の内側で止めるとリスト感が出る
+//  Layout decision (the conclusion after mockups of 4 → 3 → 3 options):
+//  - Mode names are large and **never wrap**. Same typesetting as the headings of the approved App
+//    Store screenshots (heavy / tight tracking / nowrap). Spec is .headline in _builder/decorate.html
+//  - The description sits small under the mode name in AppColors.textSecondary (same as .sub in the
+//    screenshots)
+//  - 🔴 The icon is placed extra large **behind** the text, cut off by the right edge of the screen.
+//    Placing it side by side would force the mode name to shrink by that width
+//    (this placement lets both "large icon" and "large text" work)
+//  - Divider lines run to the screen edge. Stopping them 24pt inside left and right makes it look
+//    like a list
 //
-//  ⚠️ アイコンは .background に置くこと。ZStack に入れると 96pt のアイコンが行の高さを
-//     決めてしまい、3行で画面からあふれる
-//  ⚠️ scaleEffect は使わない (2026-07 実機で10fpsになった経験。opacity + offset のみ)
+//  ⚠️ Put the icon in .background. Inside a ZStack the 96pt icon decides the row height,
+//     and 3 rows overflow the screen
+//  ⚠️ Do not use scaleEffect (it dropped to 10fps on a real device in 2026-07. Only opacity + offset)
 //
 
 import SwiftUI
@@ -35,7 +38,8 @@ struct LockModesStepView: View {
 
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
 
-    /// 段階的リビール。行が上から順に入り、最後に CTA が出る (ShockLossStepView と同じ作法)
+    /// Staged reveal. Rows come in from the top in order, and the CTA appears last (same approach as
+    /// ShockLossStepView)
     @State private var revealedRows = 0
     @State private var showCTA = false
 
@@ -45,17 +49,18 @@ struct LockModesStepView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 上ナビ (戻る + 2px 進捗バー) を避ける固定余白。
-            // 他のクイズ画面と同じ 64pt に揃えている (OnboardingTopNav は 44pt + 上余白 16pt)
+            // Fixed space to avoid the top nav (back + 2px progress bar).
+            // Matches the 64pt of the other quiz screens (OnboardingTopNav is 44pt + 16pt top padding)
             Spacer().frame(height: 64)
 
-            // ページ見出し。モード名 (21pt) より一段大きくしてタイトルとして立たせる。
-            // 28pt = AppTypography.title1 と同寸で、オンボ他画面の見出しと揃う
+            // Page heading. One step larger than the mode names (21pt) so it stands out as the title.
+            // 28pt = same as AppTypography.title1, matching the headings on the other onboarding screens
             Text(LockModeCopy.heading(lang))
                 .font(.system(size: 28, weight: .heavy, design: .rounded))
                 .tracking(-0.6)
                 .foregroundColor(AppColors.textPrimary)
-                // 「このアプリのロック方法」= 11文字。28pt でも最小幅の iPhone に収まる
+                // "このアプリのロック方法" ("How this app locks") = 11 characters. Fits even at 28pt on the
+                // narrowest iPhone
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -63,7 +68,7 @@ struct LockModesStepView: View {
 
             Spacer(minLength: 20)
 
-            // 罫線とアイコンを画面端まで届かせるため、この塊だけ横パディングを持たない
+            // Only this block has no horizontal padding, so the divider lines and icons reach the screen edge
             VStack(spacing: 0) {
                 ForEach(Array(modes.enumerated()), id: \.element.id) { index, mode in
                     LockModeRow(mode: mode, isFirst: index == 0)
@@ -86,7 +91,7 @@ struct LockModesStepView: View {
         .onAppear(perform: runReveal)
     }
 
-    /// 上の行から 0.13 秒間隔で入れ、全部出てから CTA を出す
+    /// Bring rows in from the top at 0.13 second intervals, and show the CTA after all are in
     private func runReveal() {
         guard revealedRows == 0 else { return }
         for index in modes.indices {
@@ -100,7 +105,7 @@ struct LockModesStepView: View {
     }
 }
 
-// MARK: - 1行
+// MARK: - One row
 
 private struct LockModeRow: View {
     let mode: LockModeCopy
@@ -115,7 +120,8 @@ private struct LockModeRow: View {
                     .font(.system(size: 21, weight: .heavy, design: .rounded))
                     .tracking(-0.4)
                     .foregroundColor(AppColors.textPrimary)
-                    // ⚠️ 改行させない。日本語8文字 (タイマーブロック) が現状の最長
+                    // ⚠️ Do not wrap. The Japanese "タイマーブロック" ("Timer block", 8 characters) is currently the
+                    // longest
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
 
@@ -128,8 +134,8 @@ private struct LockModeRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 24)
             .padding(.vertical, 19)
-            // 特大アイコンは背景として敷く。.background は親の大きさに影響しないので、
-            // 行の高さはあくまで文字が決める (ZStack だとアイコンが高さを決めてしまう)
+            // The extra large icon is laid as a background. .background does not affect the parent's size, so
+            // the row height is decided by the text only (in a ZStack the icon would decide the height)
             .background(alignment: .trailing) {
                 Image(systemName: mode.symbol)
                     .font(.system(size: 74, weight: .ultraLight))
@@ -143,7 +149,7 @@ private struct LockModeRow: View {
                             endPoint: .bottom
                         )
                     )
-                    // 画面右端から見切れさせる (端で切れることで「大きい」が伝わる)
+                    // Cut off at the right edge of the screen (being cut at the edge conveys "big")
                     .offset(x: 18)
                     .allowsHitTesting(false)
             }
@@ -160,10 +166,12 @@ private struct LockModeRow: View {
     }
 }
 
-// MARK: - 背景
+// MARK: - Background
 
-/// 黒地 + 霧。App Store スクショの仕様 (「背景 = 黒 + 霧。それ以外の背景要素は入れない」) に合わせる。
-/// ⚠️ blur / material は使わない (全面ブラーは実機で重い)。RadialGradient を重ねるだけ
+/// Black + fog. Matches the App Store screenshot spec ("background = black + fog. No other background
+/// elements").
+/// ⚠️ Do not use blur / material (full-screen blur is heavy on a real device). Only layered
+/// RadialGradients
 private struct LockModesBackdrop: View {
     var body: some View {
         ZStack {
@@ -192,10 +200,10 @@ private struct LockModesBackdrop: View {
     }
 }
 
-// MARK: - 文言
+// MARK: - Copy
 
-/// 🔴 日本語はユーザーが口頭で指定したもの (2026-08-06)。勝手に言い換えない。
-/// 英語は仮訳 — ネイティブ総点検の対象。 // 文言はユーザー添削待ち
+/// 🔴 The Japanese is what the user specified verbally (2026-08-06). Do not reword it.
+/// English is a draft translation, for the full native check. // Wording is waiting for the user's review
 struct LockModeCopy: Identifiable {
     let id: String
     let symbol: String
@@ -203,7 +211,7 @@ struct LockModeCopy: Identifiable {
     let subtitle: String
 
     static func heading(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "このアプリのロック方法" : "How 1% locks your apps" // 文言はユーザー添削待ち
+        lang == .japanese ? "このアプリのロック方法" : "How 1% locks your apps" // Wording is waiting for the user's review
     }
 
     static func next(_ lang: AppLanguage) -> String {

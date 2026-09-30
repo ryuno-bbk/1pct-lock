@@ -2,8 +2,9 @@
 //  NotificationService.swift
 //  AppBlocker
 //
-//  アプリ内通知 (like / follow / comment / reply / comment_like) の取得 + 未読管理
-//  Push 通知は将来実装、ここではアプリ内ベル + 通知一覧のみ
+//  Fetching in-app notifications (like / follow / comment / reply / comment_like) + unread
+//  management. Push notifications are for a future implementation; this only covers the in-app
+//  bell + notification list
 //
 
 import Foundation
@@ -27,7 +28,7 @@ final class NotificationService: ObservableObject {
 
     // MARK: - Fetch
 
-    /// 通知一覧取得 (新着順、最大 50 件)
+    /// Fetch the notification list (newest first, up to 50)
     func loadNotifications(limit: Int = 50) async {
         guard UserAuthService.shared.userId != nil else {
             notifications = []
@@ -55,7 +56,7 @@ final class NotificationService: ObservableObject {
         }
     }
 
-    /// 未読件数のみ取得 (ベルバッジ更新用、軽量)
+    /// Fetch only the unread count (for updating the bell badge, lightweight)
     func refreshUnreadCount() async {
         guard UserAuthService.shared.userId != nil else {
             unreadCount = 0
@@ -68,8 +69,8 @@ final class NotificationService: ObservableObject {
                 .execute()
                 .value
             unreadCount = count
-            // アプリアイコンのバッジも同じ数に合わせる。ここがズレると
-            // 「バッジは付いているのに開くと何も無い」で信用を失う
+            // Match the app icon badge to the same number. If they drift apart,
+            // "the badge is there but opening shows nothing" loses the user's trust
             PushNotificationService.shared.setBadge(count)
         } catch {
             print("⚠️ Failed to refresh unread count: \(error)")
@@ -78,11 +79,11 @@ final class NotificationService: ObservableObject {
 
     // MARK: - Mark Read
 
-    /// 通知タブを開いた時に呼ぶ。全件既読化 + ローカル状態反映
+    /// Call when the notifications tab is opened. Marks everything read + updates local state
     func markAllRead() async {
         guard UserAuthService.shared.userId != nil else { return }
 
-        // 楽観 UI
+        // Optimistic UI
         unreadCount = 0
         PushNotificationService.shared.clearBadge()
 
@@ -97,7 +98,7 @@ final class NotificationService: ObservableObject {
 
     // MARK: - Reset
 
-    /// サインアウト時にクリア
+    /// Clear on sign-out
     func clear() {
         notifications = []
         unreadCount = 0

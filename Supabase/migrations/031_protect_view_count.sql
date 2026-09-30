@@ -1,55 +1,55 @@
 -- ============================================================
 -- 031_protect_view_count.sql
--- 【致命度: 中】user_posts.view_count の投稿者による自己改ざん防止
+-- [Severity: medium] Prevent authors from tampering with user_posts.view_count on their own posts
 -- ============================================================
--- 発見の経緯:
---   028_bereal_ui.sql で user_posts.view_count を plain int 列として追加。
---   user_posts_update_own ポリシー (005_b_user_posts.sql:100-103) は
---   投稿者による行全体の UPDATE を許可する。like_count / comment_count は
---   015_security_audit.sql の protect_user_posts_like_count trigger で、
---   moderation_status / moderation_verdict は 027_ai_moderation.sql の
---   protect_user_posts_moderation trigger で読み取り専用化済みだが、
---   view_count には同種のガードが一切ない。
---   → 投稿者が PostgREST 経由で
+-- How it was found:
+--   028_bereal_ui.sql added user_posts.view_count as a plain int column.
+--   The user_posts_update_own policy (005_b_user_posts.sql:100-103)
+--   allows the author to UPDATE the whole row. like_count / comment_count are
+--   made read-only by the protect_user_posts_like_count trigger in 015_security_audit.sql,
+--   and moderation_status / moderation_verdict by the
+--   protect_user_posts_moderation trigger in 027_ai_moderation.sql,
+--   but view_count has no such guard at all.
+--   → If the author, through PostgREST, calls
 --       PATCH /user_posts?id=eq.<own_post> { "view_count": 999999 }
---     を叩くと成功する。view_count は全ユーザーに表示され、かつ
---     029_recommend_feed.sql の fetch_mixed_feed_random スコアリングの
---     入力にもなるため、閲覧数の水増しがそのままフィード露出の水増しに直結する。
+--     it succeeds. view_count is shown to all users, and it is also
+--     an input to the fetch_mixed_feed_random scoring in 029_recommend_feed.sql,
+--     so inflating view counts directly inflates feed exposure.
 --
--- 修正方針 (015 の protect_user_posts_like_count と全く同じ機構を流用):
---   - protect_user_posts_like_count trigger 関数を CREATE OR REPLACE し、
---     like_count / comment_count に加えて view_count のガード条件を追加する。
---     既存の DROP TRIGGER IF EXISTS + CREATE TRIGGER の対 (005/015 で作成済み、
---     関数名 protect_user_posts_like_count / trigger 名
---     user_posts_protect_like_count) はそのまま再利用する。新しい trigger は作らない。
---   - 判定ロジックは 015/027 と同じ rolbypassrls パターン:
+-- Fix policy (reuses exactly the same mechanism as 015's protect_user_posts_like_count):
+--   - CREATE OR REPLACE the protect_user_posts_like_count trigger function and
+--     add a guard condition for view_count in addition to like_count / comment_count.
+--     The existing DROP TRIGGER IF EXISTS + CREATE TRIGGER pair (created in 005/015,
+--     function name protect_user_posts_like_count / trigger name
+--     user_posts_protect_like_count) is reused as is. No new trigger is created.
+--   - The check logic is the same rolbypassrls pattern as 015/027:
 --       SELECT 1 FROM pg_roles WHERE rolname = current_user AND rolbypassrls
---     を満たすロール (service_role, SECURITY DEFINER 関数の所有者 postgres) は
---     素通りさせ、それ以外の一般 authenticated ロールの直接 UPDATE のみ拒否する。
+--     Roles that satisfy this (service_role, postgres as the owner of SECURITY DEFINER functions)
+--     pass through; only direct UPDATEs by other regular authenticated roles are rejected.
 --
--- record_post_view (028) が引き続き動作することの確認 (コードトレース):
---   - toggle_post_like (005/015) は SECURITY DEFINER 関数で、関数所有者は
---     postgres。postgres ロールは rolbypassrls = true のため、関数内から実行される
---     `UPDATE user_posts SET like_count = ...` は protect trigger の
---     「rolbypassrls なら RETURN NEW」の分岐に入り、ガードを素通りする。
---     current_user は「関数を呼び出したセッションのロール」ではなく
---     「SECURITY DEFINER 関数の実行時ロール = 所有者」になる点がポイント
---     (015 のコメントにある通り current_setting('role') ではなく rolbypassrls で
---     判定するのはこのため)。
---   - record_post_view (028_bereal_ui.sql:56-94) も同じく
---     `LANGUAGE plpgsql SECURITY DEFINER` かつ所有者は postgres。
---     関数内の `UPDATE public.user_posts SET view_count = view_count + 1
---     WHERE id = target_post_id;` (028行目 90-92) は toggle_post_like の
---     like_count 更新と全く同じ経路 (SECURITY DEFINER → postgres →
---     rolbypassrls=true → trigger 素通り) を通るため、本 migration 適用後も
---     record_post_view による view_count 加算は変更なく成功する。
---   - 一方、投稿者が PostgREST 経由で直接
---     `UPDATE user_posts SET view_count = ... WHERE id = own_post` を叩く場合は
---     current_user が authenticated ロール (rolbypassrls=false) のままなので
---     trigger のガードに掛かり拒否される。
+-- Confirming that record_post_view (028) keeps working (code trace):
+--   - toggle_post_like (005/015) is a SECURITY DEFINER function whose owner is
+--     postgres. The postgres role has rolbypassrls = true, so the
+--     `UPDATE user_posts SET like_count = ...` executed inside the function goes into the protect
+--     trigger's "RETURN NEW if rolbypassrls" branch and passes the guard.
+--     The key point is that current_user is not "the role of the session that called the function"
+--     but "the execution role of the SECURITY DEFINER function = its owner"
+--     (this is why, as the 015 comment says, the check uses rolbypassrls and not
+--     current_setting('role')).
+--   - record_post_view (028_bereal_ui.sql:56-94) is likewise
+--     `LANGUAGE plpgsql SECURITY DEFINER` and owned by postgres.
+--     The `UPDATE public.user_posts SET view_count = view_count + 1
+--     WHERE id = target_post_id;` inside it (028 lines 90-92) goes through exactly the same path as
+--     the like_count update in toggle_post_like (SECURITY DEFINER → postgres →
+--     rolbypassrls=true → trigger passes), so even after this migration is applied,
+--     the view_count increment by record_post_view succeeds unchanged.
+--   - On the other hand, when the author calls directly through PostgREST
+--     `UPDATE user_posts SET view_count = ... WHERE id = own_post`,
+--     current_user stays the authenticated role (rolbypassrls=false), so
+--     it hits the trigger's guard and is rejected.
 --
--- 実行順序: 015・027・028 適用後。何度実行しても安全 (CREATE OR REPLACE のみ、
--- 新規オブジェクト作成なし)
+-- Run order: after 015, 027 and 028 are applied. Safe to run any number of times (CREATE OR REPLACE only,
+-- no new objects created)
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.protect_user_posts_like_count()
@@ -76,10 +76,10 @@ BEGIN
 END;
 $$;
 
--- 既存 trigger (005/015 で作成済み) はそのまま。関数の中身だけが差し替わる。
--- 念のため存在確認して未作成なら張り直す (015 未適用のまま本 migration だけ
--- 走らせるケースへの保険。通常は既に存在しているため NOTICE も出ない)
-DROP TRIGGER IF EXISTS user_posts_protect_columns   ON public.user_posts; -- 旧トリガー名 (S1 草案)
+-- The existing trigger (created in 005/015) stays as is. Only the function body is replaced.
+-- Just in case, check that it exists and recreate it if missing (insurance for the case where only
+-- this migration is run without 015 applied. Normally it already exists, so no NOTICE is emitted either)
+DROP TRIGGER IF EXISTS user_posts_protect_columns   ON public.user_posts; -- old trigger name (S1 draft)
 DROP TRIGGER IF EXISTS user_posts_protect_like_count ON public.user_posts;
 CREATE TRIGGER user_posts_protect_like_count
     BEFORE UPDATE ON public.user_posts
@@ -87,20 +87,20 @@ CREATE TRIGGER user_posts_protect_like_count
     EXECUTE FUNCTION public.protect_user_posts_like_count();
 
 -- ============================================
--- 動作確認用クエリ (実行不要、コメント / verify_026_028.sql と同じ貼り付け形式)
+-- Queries for checking behavior (no need to run; same paste format as the comments / verify_026_028.sql)
 -- ============================================
--- (a) 自分の投稿の view_count を直接書き換えようとして拒否されることの確認
---     (authenticated として実行 → エラーになること: "view_count is read-only for users")
+-- (a) Confirm that trying to overwrite the view_count of your own post directly is rejected
+--     (run as authenticated → it should error: "view_count is read-only for users")
 --   UPDATE user_posts SET view_count = 999999
---     WHERE id = '<自分が所有する post の id>' AND user_id = auth.uid();
+--     WHERE id = '<id of a post you own>' AND user_id = auth.uid();
 --
--- (b) record_post_view が引き続き view_count を加算できることの確認
---     (authenticated として、自分以外が所有する post に対して実行)
---   SELECT view_count FROM user_posts WHERE id = '<他人の post の id>'; -- 実行前の値を確認
---   SELECT record_post_view('<他人の post の id>');
---   SELECT view_count FROM user_posts WHERE id = '<他人の post の id>'; -- +1 されていること
+-- (b) Confirm that record_post_view can still increment view_count
+--     (run as authenticated, on a post owned by someone else)
+--   SELECT view_count FROM user_posts WHERE id = '<id of another user's post>'; -- check the value before running
+--   SELECT record_post_view('<id of another user's post>');
+--   SELECT view_count FROM user_posts WHERE id = '<id of another user's post>'; -- it should be +1
 --
--- (c) 適用確認 (verify_026_028.sql スタイル、SQL Editor に貼って ok=true を確認)
+-- (c) Check that it is applied (verify_026_028.sql style, paste into the SQL Editor and check ok=true)
 --   SELECT * FROM (
 --       SELECT '031' AS mig, 'trigger user_posts_protect_like_count guards view_count' AS object,
 --              EXISTS(

@@ -2,7 +2,7 @@
 //  ReportService.swift
 //  AppBlocker
 //
-//  投稿/ユーザー/名言の通報送信 (Supabase user_reports)
+//  Sending reports on posts/users/quotes (Supabase user_reports)
 //
 
 import Foundation
@@ -14,10 +14,11 @@ enum ReportReason: String, CaseIterable, Identifiable {
     case hate
     case nudity
     case violence
-    /// 067 #9: エトス専用の通報理由 (「このアプリの趣旨に合わない」)。
-    /// rawValue は 067_moderation_hardening.sql の user_reports_reason_check CHECK 制約と
-    /// 一致させる必要がある (off_topic)。ReportSheetView は ForEach(ReportReason.allCases)
-    /// で列挙しているため、追加するだけで選択肢に自然に出る (UI側の変更は不要)
+    /// 067 #9: ethos-specific report reason ("このアプリの趣旨に合わない" ("Doesn't fit the purpose
+    /// of this app")). The rawValue must match the user_reports_reason_check CHECK constraint in
+    /// 067_moderation_hardening.sql (off_topic). ReportSheetView lists them with
+    /// ForEach(ReportReason.allCases), so just adding it makes it appear as an option (no UI change
+    /// needed)
     case offTopic = "off_topic"
     case other
 
@@ -47,23 +48,24 @@ final class ReportService {
         self.client = client
     }
 
-    /// 投稿を通報
+    /// Report a post
     func reportPost(postId: UUID, reason: ReportReason, detail: String?) async -> Bool {
         await submit(targetPostId: postId, targetUserId: nil, targetQuoteId: nil, targetCommentId: nil, reason: reason, detail: detail)
     }
 
-    /// ユーザーを通報 (プロフィール経由)
+    /// Report a user (from the profile)
     func reportUser(userId: UUID, reason: ReportReason, detail: String?) async -> Bool {
         await submit(targetPostId: nil, targetUserId: userId, targetQuoteId: nil, targetCommentId: nil, reason: reason, detail: detail)
     }
 
-    /// 公式名言を通報
+    /// Report an official quote
     func reportQuote(quoteId: UUID, reason: ReportReason, detail: String?) async -> Bool {
         await submit(targetPostId: nil, targetUserId: nil, targetQuoteId: quoteId, targetCommentId: nil, reason: reason, detail: detail)
     }
 
-    /// コメントを通報 (H9)。target_comment_id 列は 042_comment_reports_threshold_flag.sql が前提
-    /// (未適用の DB では INSERT がカラム不存在エラーになる)
+    /// Report a comment (H9). The target_comment_id column requires
+    /// 042_comment_reports_threshold_flag.sql (on a DB without it, the INSERT fails with a
+    /// column-does-not-exist error)
     func reportComment(commentId: UUID, reason: ReportReason, detail: String?) async -> Bool {
         await submit(targetPostId: nil, targetUserId: nil, targetQuoteId: nil, targetCommentId: commentId, reason: reason, detail: detail)
     }
@@ -112,11 +114,12 @@ final class ReportService {
             print("🚩 Report submitted: reason=\(reason.rawValue)")
             return true
         } catch {
-            // 重複通報 (UNIQUE 制約) はサイレントに成功扱い (UX 改善)。
-            // M14: 制約名の文字列一致は 015_security_audit.sql での改名 (user_reports_unique_per_post/quote →
-            // 部分ユニークインデックス user_reports_reporter_{post,quote,user}_unique) で追従漏れが起きた実績があり脆い。
-            // PostgrestError の SQLSTATE (unique_violation = "23505") で判定する方が制約名変更に影響されず堅牢
-            // (BlockSessionTracker.isRowRejection と同じ判定方式)
+            // Duplicate reports (UNIQUE constraint) are silently treated as success (UX improvement).
+            // M14: matching on the constraint name string is fragile; it already failed to keep up once, when
+            // 015_security_audit.sql renamed the constraints (user_reports_unique_per_post/quote →
+            // partial unique indexes user_reports_reporter_{post,quote,user}_unique).
+            // Checking the SQLSTATE of PostgrestError (unique_violation = "23505") is robust against constraint
+            // name changes (same check as BlockSessionTracker.isRowRejection)
             if let pgError = error as? PostgrestError, pgError.code == "23505" {
                 print("ℹ️ Duplicate report ignored")
                 return true

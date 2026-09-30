@@ -2,7 +2,7 @@
 //  BlockedAccountsView.swift
 //  AppBlocker
 //
-//  ブロック中ユーザー一覧 + 解除
+//  Blocked users list + unblock
 //
 
 import SwiftUI

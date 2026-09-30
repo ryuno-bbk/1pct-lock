@@ -2,7 +2,7 @@
 //  UserPostService.swift
 //  AppBlocker
 //
-//  UGC: ユーザー投稿の fetch / insert / delete
+//  UGC: fetch / insert / delete for user posts
 //
 
 import Foundation
@@ -14,18 +14,18 @@ final class UserPostService: ObservableObject {
 
     static let shared = UserPostService()
 
-    // 自分の投稿 (MyProfileView 用)
+    // My posts (for MyProfileView)
     @Published private(set) var myPosts: [UserPost] = []
 
-    // 他人の投稿 (UserProfileView 用)。userId ごとに保持するキー付きストア。
-    // UserProfileView は自分自身の上にスタックで再度 push されうる (FeedCardListView の著者タップ /
-    // LikersSheet / CommentPageView から別ユーザーのプロフィールを開く導線があるため) ので、
-    // 単一スロットだと内側の profile が外側の profile のデータを上書き/クリアしてしまう。
-    // ユーザーごとの配列を保持することでどのプロフィール画面が手前にあっても正しいデータを保つ
-    // (数ユーザーぶんの投稿配列をメモリに保持するコストは許容)。
+    // Other users' posts (for UserProfileView). A keyed store held per userId.
+    // UserProfileView can be pushed again on top of itself in the stack (there are paths that open another
+    // user's profile from the author tap in FeedCardListView / LikersSheet / CommentPageView), so
+    // with a single slot the inner profile would overwrite/clear the outer profile's data.
+    // Holding an array per user keeps the correct data no matter which profile screen is in front
+    // (the cost of holding post arrays for a few users in memory is acceptable).
     @Published private(set) var viewingPostsByUser: [UUID: [UserPost]] = [:]
 
-    /// 指定ユーザーの投稿一覧 (未ロードなら空配列)
+    /// Post list of the given user (empty array if not loaded)
     func viewingPosts(for userId: UUID) -> [UserPost] {
         viewingPostsByUser[userId] ?? []
     }
@@ -38,13 +38,13 @@ final class UserPostService: ObservableObject {
         self.client = client
     }
 
-    /// 073: 投稿時の user_posts.lang に書き込む値。AppBlockerApp.init() / WidgetCacheService と
-    /// 同じ「mainLanguage キー未設定なら端末既定言語」の読み方に合わせる
+    /// 073: The value written to user_posts.lang when posting. Uses the same reading as
+    /// AppBlockerApp.init() / WidgetCacheService: "device default language if the mainLanguage key is unset"
     private func currentMainLanguageRaw() -> String {
         UserDefaults.standard.string(forKey: "mainLanguage") ?? AppLanguage.deviceDefault.rawValue
     }
 
-    // MARK: - 自分の投稿
+    // MARK: - My posts
 
     func loadMyPosts() async {
         guard let userId = UserAuthService.shared.userId else {
@@ -61,9 +61,9 @@ final class UserPostService: ObservableObject {
                 .limit(200)
                 .execute()
                 .value
-            // L11: 読込開始後にサインアウト/別アカウントへの切替が起きていたら、
-            // 前ユーザーの投稿一覧を新しい状態 (myPosts) へ書き込んでしまう。
-            // 完了時点の userId が開始時と一致する場合のみ結果を反映する
+            // L11: If a sign-out/switch to another account happened after loading started,
+            // the previous user's post list would be written into the new state (myPosts).
+            // Apply the result only if the userId at completion matches the one at the start
             guard UserAuthService.shared.userId == userId else {
                 print("⚠️ loadMyPosts discarded: user changed during load")
                 return
@@ -75,11 +75,11 @@ final class UserPostService: ObservableObject {
         }
     }
 
-    // MARK: - 他人の投稿
+    // MARK: - Other users' posts
 
-    /// userId の投稿を取得し viewingPostsByUser[userId] へ書き込む (呼ぶたびに最新化)。
-    /// UserProfileView が自分自身の上に複数スタックされても、それぞれ別 key に書くので
-    /// 互いのデータを上書きしない
+    /// Fetch userId's posts and write them to viewingPostsByUser[userId] (refreshed on every call).
+    /// Even if UserProfileView is stacked on top of itself several times, each writes to a different key, so
+    /// they do not overwrite each other's data
     func loadPosts(byUser userId: UUID) async {
         do {
             let posts: [UserPost] = try await client
@@ -97,23 +97,23 @@ final class UserPostService: ObservableObject {
         }
     }
 
-    /// サインアウト/アカウント切替時に全ユーザーぶんのキャッシュを破棄する。
-    /// 通常のプロフィール画面 pop では呼ばない (キャッシュはスタック中も保持する設計)
+    /// Discard the cache for all users on sign-out/account switch.
+    /// Not called on a normal pop of the profile screen (by design the cache is kept while stacked)
     func clearAllViewingUsers() {
         viewingPostsByUser = [:]
     }
 
-    /// L11 (2026-07-22 監査): サインアウト時に myPosts (マイページの自分の投稿一覧) が
-    /// 残留していたため追加。viewingPostsByUser (他人の投稿キャッシュ) は既存の
-    /// clearAllViewingUsers() に委譲する。
+    /// L11 (2026-07-22 audit): Added because myPosts (my own post list on My Page) remained
+    /// after sign-out. viewingPostsByUser (other users' post cache) is delegated to the existing
+    /// clearAllViewingUsers().
     func clearAllForSignOut() {
         myPosts = []
         clearAllViewingUsers()
     }
 
-    // MARK: - 単体取得 (通知タップ等から)
+    // MARK: - Single fetch (from a notification tap etc.)
 
-    /// post_id 1 件の取得 (見つからない場合 nil)
+    /// Fetch 1 post by post_id (nil if not found)
     func fetchPost(id postId: UUID) async -> UserPost? {
         do {
             let post: UserPost = try await client
@@ -130,12 +130,12 @@ final class UserPostService: ObservableObject {
         }
     }
 
-    // MARK: - 投稿作成
+    // MARK: - Create post
 
-    /// 投稿作成 (成功時 myPosts 先頭に挿入)
-    /// textJp / textEn は片方のみでも OK (最低 1 つ必須、両方 nil 不可)
-    /// 文字制限: jp <= 200, en <= 400
-    /// backgroundId: BackgroundImageProvider の index (nil なら hash 自動割当)
+    /// Create a post (on success, insert at the head of myPosts)
+    /// Only one of textJp / textEn is OK (at least 1 is required, both nil is not allowed)
+    /// Character limits: jp <= 200, en <= 400
+    /// backgroundId: index into BackgroundImageProvider (if nil, assigned automatically by hash)
     func createPost(
         textJp: String?,
         textEn: String?,
@@ -156,7 +156,7 @@ final class UserPostService: ObservableObject {
         if let en = cleanedEn, en.count > 400 { return nil }
         let cleanedTags = Array(tags.filter { !$0.isEmpty }.prefix(3))
 
-        // background_id の正当性チェック (範囲外なら nil 扱い)
+        // Validity check of background_id (treated as nil if out of range)
         let cleanedBackgroundId: Int? = {
             guard let id = backgroundId, id >= 0, id < BackgroundImageProvider.count else { return nil }
             return id
@@ -180,7 +180,7 @@ final class UserPostService: ObservableObject {
             text_en: cleanedEn,
             tags: cleanedTags,
             background_id: cleanedBackgroundId,
-            // 073: 投稿者の端末言語を記録 (フィードの同一言語優先スコアリングの判定材料)
+            // 073: Record the author's device language (input for the same-language priority scoring of the feed)
             lang: currentMainLanguageRaw()
         )
 
@@ -201,36 +201,38 @@ final class UserPostService: ObservableObject {
         }
     }
 
-    // MARK: - 投稿作成 v2 (背景 + 自由配置テキストの焼き込み画像、複数枚対応)
+    // MARK: - Create post v2 (background + baked-in image of freely placed text, supports multiple images)
 
-    /// 投稿v2: テキストは呼び出し側で画像ごとに1枚のJPEGに焼き込み済み。DB は
-    /// title/tags/image_path (1枚目)/image_count/overlays のみ保持する。
+    /// Post v2: the caller has already baked the text into one JPEG per image. The DB holds only
+    /// title/tags/image_path (first image)/image_count/overlays.
     /// - Parameters:
-    ///   - id: クライアント側で採番した UUID (Storage パスと user_posts.id を一致させるため明示指定)
-    ///   - title: 任意のタイトル (# タグを含みうる、60文字以内。超過分は切り詰め)
-    ///   - tags: 0-3 個 (既存タグプールから選択、createPost と同じ制約)
-    ///   - images: 焼き込み済み JPEG データの配列 (1〜4枚、先頭がカバー画像)
-    ///   - overlays: 再編集/検索/モデレ用の生テキスト+配置情報 (imageIndex で画像を紐付け)
-    /// - Returns: 成功時は挿入された UserPost (myPosts 先頭に楽観反映)、失敗時は nil
-    /// 直近の投稿失敗の種別 (046 レート制限 5件/24h の文言出し分け用。
-    /// createPostV2 が nil を返した直後に呼び出し側が読む)
+    ///   - id: UUID assigned on the client (set explicitly so the Storage path and user_posts.id match)
+    ///   - title: optional title (may contain # tags, up to 60 characters. Anything over is truncated)
+    ///   - tags: 0-3 (chosen from the existing tag pool, same constraints as createPost)
+    ///   - images: array of baked-in JPEG data (1 to 4 images, the first is the cover image)
+    ///   - overlays: raw text + placement info for re-editing/search/moderation (linked to an image by
+    ///     imageIndex)
+    /// - Returns: on success the inserted UserPost (optimistically applied to the head of myPosts), nil on
+    ///   failure
+    /// The kind of the most recent post failure (for choosing the message for the 046 rate limit of 5
+    /// posts/24h. The caller reads it right after createPostV2 returns nil)
     enum CreateFailure {
         case rateLimited
         case other
     }
     private(set) var lastCreateFailure: CreateFailure?
 
-    /// 1日の投稿上限。サーバー側 enforce_post_rate_limit (052=10 → 057=5) と数字を同期させること
+    /// Daily post limit. Keep the number in sync with the server-side enforce_post_rate_limit (052=10 → 057=5)
     static let dailyPostLimit = 5
 
-    /// 過去24時間の自分の投稿数から残り枠を返す (PostConfirmView の残数表示用)。
-    /// 失敗時は nil (呼び出し側は表示を省略するだけで投稿自体は妨げない)
+    /// Return the remaining slots from my post count in the last 24 hours (for the remaining count shown in
+    /// PostConfirmView). nil on failure (the caller just hides the display; posting itself is not blocked)
     ///
-    /// 068: user_posts の現存行を数える方式から get_post_quota_used RPC (rate_events 台帳) へ変更。
-    /// 旧方式は「投稿を削除すると表示上の残り枠が増えるのに、サーバー (066 で台帳ベースに変更済み) は
-    /// 削除を枠の回復と見なさないので投稿が弾かれる」という食い違いを起こしていた
-    /// (2026-08-01 実機テストで発覚)。台帳はクライアントから直接読めない (066 で RLS + REVOKE 済み) ため
-    /// SECURITY DEFINER の RPC を経由する。
+    /// 068: Changed from counting existing rows in user_posts to the get_post_quota_used RPC (rate_events
+    /// ledger). The old way caused a mismatch: "deleting a post increases the remaining slots on screen,
+    /// but the server (already ledger-based since 066) does not count a deletion as restoring a slot, so
+    /// the post gets rejected" (found in a real device test on 2026-08-01). The ledger cannot be read
+    /// directly by the client (RLS + REVOKE in 066), so we go through a SECURITY DEFINER RPC.
     func remainingDailyPostSlots() async -> Int? {
         guard UserAuthService.shared.userId != nil else { return nil }
         do {
@@ -272,19 +274,21 @@ final class UserPostService: ObservableObject {
         lastCreateFailure = nil
         defer { isCreating = false }
 
-        // Storage パス規約: 1枚目 "{uid}/{post_id}.jpg" (既存投稿と互換)、2枚目以降 "..._2.jpg"〜"_4.jpg"
-        // (uid/uuid とも lowercased で RLS の文字列比較に揃える)
+        // Storage path convention: first image "{uid}/{post_id}.jpg" (compatible with existing posts), images
+        // 2 and later "..._2.jpg" to "_4.jpg" (both uid and uuid are lowercased to match the string comparison
+        // in RLS)
         let basePath = "\(userId.uuidString.lowercased())/\(id.uuidString.lowercased())"
         let paths = images.indices.map { idx in
             idx == 0 ? "\(basePath).jpg" : "\(basePath)_\(idx + 1).jpg"
         }
 
-        // 1. Storage へ全画像を順にアップロード (途中で失敗したら成功済み分を best-effort で削除して中断)
+        // 1. Upload all images to Storage in order (if one fails midway, delete the uploaded ones best-effort
+        //    and abort)
         var uploadedPaths: [String] = []
         for (idx, data) in images.enumerated() {
             do {
-                // M18b: 投稿画像は H13 (037 SQL) でサーバー側もイミュータブル化済みの不変コンテンツ
-                // (image_path 変更は編集トリガーで拒否される) なので 1年キャッシュが正当
+                // M18b: Post images are immutable content, also made immutable on the server side by H13 (037 SQL)
+                // (changing image_path is rejected by the edit trigger), so a 1-year cache is justified
                 _ = try await client.storage
                     .from("post-images")
                     .upload(
@@ -307,7 +311,7 @@ final class UserPostService: ObservableObject {
             }
         }
 
-        // 2. user_posts へ insert (id を明示指定して Storage パスと一致させる)
+        // 2. Insert into user_posts (set id explicitly to match the Storage path)
         struct InsertRow: Encodable {
             let id: String
             let user_id: String
@@ -327,7 +331,7 @@ final class UserPostService: ObservableObject {
             image_path: paths[0],
             image_count: images.count,
             overlays: overlays,
-            // 073: 投稿者の端末言語を記録 (フィードの同一言語優先スコアリングの判定材料)
+            // 073: Record the author's device language (input for the same-language priority scoring of the feed)
             lang: currentMainLanguageRaw()
         )
 
@@ -344,13 +348,14 @@ final class UserPostService: ObservableObject {
             return inserted
         } catch {
             print("⚠️ Failed to insert post v2 row: \(error)")
-            // 046 レート制限 (5件/24h)。RAISE EXCEPTION の文言判定 (AppealService と同じパターン)
+            // 046 rate limit (5 posts/24h). Detected by matching the RAISE EXCEPTION message (same pattern as
+            // AppealService)
             if let pgError = error as? PostgrestError, pgError.message.contains("daily post limit") {
                 lastCreateFailure = .rateLimited
             } else {
                 lastCreateFailure = .other
             }
-            // insert 失敗時は Storage の孤児ファイルを best-effort で削除 (失敗しても無視)
+            // If the insert fails, delete orphan files in Storage best-effort (failures are ignored)
             do {
                 _ = try await client.storage.from("post-images").remove(paths: paths)
             } catch {
@@ -360,10 +365,10 @@ final class UserPostService: ObservableObject {
         }
     }
 
-    // MARK: - コメント数の楽観更新
+    // MARK: - Optimistic update of comment count
 
-    /// CommentService から呼ばれる。myPosts / viewingPostsByUser の全ユーザーぶんキャッシュの
-    /// comment_count を増減する (どのプロフィール画面がスタックされていても反映されるよう全 key を patch)
+    /// Called from CommentService. Increments/decrements comment_count in the caches for myPosts / all users in
+    /// viewingPostsByUser (patch every key so it shows no matter which profile screen is stacked)
     func adjustCommentCount(forPostId postId: UUID, by delta: Int) {
         if let idx = myPosts.firstIndex(where: { $0.id == postId }) {
             myPosts[idx] = patchedPost(myPosts[idx], commentCountDelta: delta)
@@ -392,22 +397,23 @@ final class UserPostService: ObservableObject {
             imagePath: post.imagePath,
             overlays: post.overlays,
             imageCount: post.imageCount,
-            // L11 (ついで修正): UserPost のメンバーワイズ init は moderationStatus/viewCount の
-            // デフォルトが nil/0 のため、これらを渡し忘れると comment_count 調整のたびに
-            // rejected バッジ (moderationStatus) と閲覧数 (viewCount) が消えていた
+            // L11 (fixed along the way): the memberwise init of UserPost defaults moderationStatus/viewCount to
+            // nil/0, so forgetting to pass them made the rejected badge (moderationStatus) and view count (viewCount)
+            // disappear on every comment_count adjustment
             moderationStatus: post.moderationStatus,
             viewCount: post.viewCount
         )
     }
 
-    // MARK: - 投稿削除
+    // MARK: - Delete post
 
-    /// 投稿削除 (自分の投稿のみ、RLS で他人投稿は弾かれる)
-    /// 投稿v2 (image_path あり) の場合は Storage の焼き込み画像を image_count 分すべて best-effort で削除する
-    /// - Returns: 成功時 true (失敗時は内部でロールバック済みなので呼び出し側の楽観 UI も戻すこと)
+    /// Delete a post (own posts only; other users' posts are rejected by RLS)
+    /// For post v2 (has image_path), delete all baked-in images in Storage (image_count of them) best-effort
+    /// - Returns: true on success (on failure it is already rolled back internally, so the caller must also
+    ///   revert its optimistic UI)
     @discardableResult
     func deletePost(_ postId: UUID) async -> Bool {
-        // 楽観 UI 更新
+        // Optimistic UI update
         let backup = myPosts
         let removedPost = backup.first(where: { $0.id == postId })
         myPosts.removeAll { $0.id == postId }
@@ -432,7 +438,7 @@ final class UserPostService: ObservableObject {
             }
             return true
         } catch {
-            // ロールバック
+            // Rollback
             myPosts = backup
             print("⚠️ Failed to delete post: \(error)")
             return false

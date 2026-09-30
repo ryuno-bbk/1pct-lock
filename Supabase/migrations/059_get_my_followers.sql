@@ -1,14 +1,14 @@
 -- ============================================================
 -- 059_get_my_followers.sql
--- 自分のフォロワー一覧 RPC (2026-07-30 フォロワータップのタブ化とセット)
+-- RPC for your own follower list (2026-07-30, paired with turning the follower tap into tabs)
 -- ============================================================
--- 背景: マイページのフォロワー数タップ→[フォロワー|フォロー中]タブ (IG方式、ユーザー確定)。
--- user_follows の他人行は RLS で読めないため、SECURITY DEFINER で「自分をフォローしている
--- ユーザーのプロフィール最小セット」だけを返す。呼び出し元は自分のフォロワーしか取れない
--- (引数なし・auth.uid() 固定)。
+-- Background: tapping the follower count on My Page → [Followers|Following] tabs (IG style,
+-- confirmed by the user). Other people's rows in user_follows cannot be read due to RLS, so
+-- SECURITY DEFINER returns only "a minimal profile set of the users who follow you". The caller
+-- can only get their own followers (no arguments, fixed to auth.uid()).
 --
--- クライアント: FollowListView (フォロワータブ)。未適用なら空一覧になるだけで壊れない。
--- 冪等。ロールバック: DROP FUNCTION public.get_my_followers();
+-- Client: FollowListView (followers tab). If not applied, it just shows an empty list and does not
+-- break. Idempotent. Rollback: DROP FUNCTION public.get_my_followers();
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.get_my_followers()

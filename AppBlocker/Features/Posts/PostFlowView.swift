@@ -2,10 +2,10 @@
 //  PostFlowView.swift
 //  AppBlocker
 //
-//  UGC 投稿 v2: フロー全体のコンテナ (Step1 背景グリッド → Step2 ストーリー式エディタ →
-//  Step3 確認/投稿 → 完了状態 → (任意) ロック導線)。
-//  MyProfileView から sheet(isPresented:) で提示される想定 (引数なし init)。
-//  共有状態は PostDraft (ObservableObject) で Step 間を橋渡しする。
+//  UGC post v2: container for the whole flow (Step1 background grid → Step2 story-style editor →
+//  Step3 confirm/post → completed state → (optional) path to lock).
+//  Expected to be presented from MyProfileView with sheet(isPresented:) (init without arguments).
+//  Shared state is bridged between steps by PostDraft (ObservableObject).
 //
 
 import SwiftUI
@@ -13,7 +13,7 @@ import UIKit
 import CoreText
 import Combine
 
-// MARK: - PostBackground (Step1 で選ばれる背景の内部表現)
+// MARK: - PostBackground (internal representation of the background chosen in Step1)
 
 enum PostBackground {
     case photo(UIImage)
@@ -22,58 +22,64 @@ enum PostBackground {
     case white
 }
 
-// MARK: - オーバーレイ編集用のローカルモデル (確定時に PostOverlayDTO へ変換)
+// MARK: - Local model for overlay editing (converted to PostOverlayDTO on confirm)
 
 enum OverlayFont: String, CaseIterable {
     case serif
     case sans
-    /// 「現在時刻を挿入」ボタン用のオシャレな時刻フォント (Avenir Next Ultra Light)。
-    /// オンボの焼き込み画像の時刻表記と同じ font。通常入力では選ばせず、時刻挿入時のみ付く
+    /// Stylish time font for the "insert current time" button (Avenir Next Ultra Light).
+    /// Same font as the time in onboarding's baked images. Not offered for normal input; only applied
+    /// when the time is inserted
     case time
-    /// おしゃれ英字フォント (Futura。Nike/Supreme系のジオメトリック)。ユーザー決定 2026-07-10
+    /// Stylish Latin font (Futura. Geometric, Nike/Supreme style). User decision 2026-07-10
     case futura
-    /// おしゃれ英字フォント (Didot。Vogue系ハイコントラスト明朝)。オンボ焼き込みの英字と同じ。
-    /// 実機FB第7弾 (2026-07-15): "Didot-Bold" が実機に無く .serif と完全に同じ見た目にフォール
-    /// バックしてしまう真因が判明したためピッカーからは外した。ただし既存投稿のデコード互換
-    /// (rawValue "didot" で保存済みのデータ) のため case 自体と provider 分岐は残す
+    /// Stylish Latin font (Didot. Vogue-style high-contrast serif). Same as the Latin text in
+    /// onboarding's baked images.
+    /// Real device feedback round 7 (2026-07-15): found the real cause, "Didot-Bold" does not exist on
+    /// real devices, so it falls back to exactly the same look as .serif. It was removed from the picker.
+    /// However, for decoding compatibility with existing posts (data saved with rawValue "didot"), the
+    /// case itself and the provider branch are kept
     case didot
-    /// タイプライター調 (American Typewriter Semibold)。無ければ monospaced semibold にフォールバック
-    /// 実機FB第8弾 (2026-07-15): ピル上で serif と見分けがつかずピッカーから除外。デコード互換で case は残す
+    /// Typewriter style (American Typewriter Semibold). Falls back to monospaced semibold if missing
+    /// Real device feedback round 8 (2026-07-15): indistinguishable from serif on the pill, so it was
+    /// removed from the picker. The case is kept for decoding compatibility
     case typewriter
-    /// 丸ゴシック (system rounded heavy)。システムフォントなのでフォールバック不要
+    /// Rounded gothic (system rounded heavy). It is a system font, so no fallback is needed
     case rounded
-    /// 手書き (Yusei Magic)。日本語グリフを自前で持つ数少ない手書き書体で、かつ太いので
-    /// 写真の上でも背景に負けない (2026-08-28 ユーザー選定)
+    /// Handwriting (Yusei Magic). One of the few handwriting typefaces with its own Japanese glyphs, and
+    /// it is bold, so it holds up against the background even on photos (selected by the user 2026-08-28)
     case handwriting
 
-    /// フォントピルに出す通常の選択肢 (time は時刻ボタン専用なので除外。didot/typewriter は上記コメント参照)
+    /// Normal options shown in the font pills (time is excluded because it is only for the time button.
+    /// For didot/typewriter, see the comments above)
     static var pickable: [OverlayFont] { [.serif, .sans, .futura, .rounded, .handwriting] }
 
 }
 
-/// OverlayFont の実フォント解決 + 時刻文字列生成。ライブエディタ / 焼き込みレンダラー共通。
+/// Resolves OverlayFont to real fonts + builds the time string. Shared by the live editor and the
+/// bake renderer.
 enum OverlayFontProvider {
-    /// 時刻フォント (Avenir Next Ultra Light。無い環境では rounded light にフォールバック)
+    /// Time font (Avenir Next Ultra Light. Falls back to rounded light where it is missing)
     static func time(_ size: CGFloat) -> Font {
         custom("AvenirNext-UltraLight", size, fallback: .system(size: size, weight: .ultraLight, design: .rounded))
     }
 
-    /// Futura (おしゃれ英字。Medium)。無ければ rounded medium
+    /// Futura (stylish Latin. Medium). If missing, rounded medium
     static func futura(_ size: CGFloat) -> Font {
         custom("Futura-Medium", size, fallback: .system(size: size, weight: .medium, design: .rounded))
     }
 
-    /// Didot (おしゃれ英字。Bold)。無ければ serif bold
+    /// Didot (stylish Latin. Bold). If missing, serif bold
     static func didot(_ size: CGFloat) -> Font {
         custom("Didot-Bold", size, fallback: .system(size: size, weight: .bold, design: .serif))
     }
 
-    /// タイプライター調 (American Typewriter Semibold)。無ければ monospaced semibold
+    /// Typewriter style (American Typewriter Semibold). If missing, monospaced semibold
     static func typewriter(_ size: CGFloat) -> Font {
         custom("AmericanTypewriter-Semibold", size, fallback: .system(size: size, weight: .semibold, design: .monospaced))
     }
 
-    /// 丸ゴシック。英字は SF Rounded、日本語はヒラギノ丸ゴ
+    /// Rounded gothic. SF Rounded for Latin, Hiragino Maru Gothic for Japanese
     static func rounded(_ size: CGFloat) -> Font {
         let plain = Font.system(size: size, weight: .heavy, design: .rounded)
         guard let latin = UIFont.systemFont(ofSize: size, weight: .heavy)
@@ -81,7 +87,7 @@ enum OverlayFontProvider {
         return mixed(latin, japanese: "HiraMaruProN-W4", size: size, fallback: plain)
     }
 
-    /// 明朝。英字は New York、日本語はヒラギノ明朝
+    /// Mincho (serif). New York for Latin, Hiragino Mincho for Japanese
     static func serif(_ size: CGFloat) -> Font {
         let plain = Font.system(size: size, weight: .bold, design: .serif)
         guard let latin = UIFont.systemFont(ofSize: size, weight: .bold)
@@ -89,19 +95,20 @@ enum OverlayFontProvider {
         return mixed(latin, japanese: "HiraMinProN-W6", size: size, fallback: plain)
     }
 
-    /// ゴシック。日本語の既定の差し替え先がヒラギノ角ゴなので、合成せずそのままでよい
+    /// Gothic (sans). The default substitute for Japanese is Hiragino Kaku Gothic, so it can be used
+    /// as-is without composing
     static func sans(_ size: CGFloat) -> Font {
         .system(size: size, weight: .semibold, design: .default)
     }
 
-    /// 手書き (Yusei Magic)。日本語グリフを自前で持っているので合成不要
+    /// Handwriting (Yusei Magic). It has its own Japanese glyphs, so no composing is needed
     static func handwriting(_ size: CGFloat) -> Font {
         custom("YuseiMagic-Regular", size, fallback: .system(size: size, weight: .semibold, design: .rounded))
     }
 
-    /// OverlayFont → 実 Font の唯一の解決口。
-    /// 🔴 ここ以外で .system(design:) を直書きしないこと。以前は編集キャンバス/ピル/
-    ///    プレビューの3箇所に散っていて、日本語対応を入れる場所が分からなくなっていた
+    /// The only place that resolves OverlayFont → real Font.
+    /// 🔴 Do not write .system(design:) directly anywhere else. It used to be spread over 3 places
+    ///    (edit canvas / pill / preview), and it became unclear where to add Japanese support
     static func font(_ kind: OverlayFont, size: CGFloat) -> Font {
         switch kind {
         case .serif:       return serif(size)
@@ -115,12 +122,12 @@ enum OverlayFontProvider {
         }
     }
 
-    /// 英字と日本語で別々の書体を使う合成フォントを作る。
+    /// Build a composite font that uses different typefaces for Latin and Japanese.
     ///
-    /// 🔴 これが無いと日本語は必ずヒラギノ角ゴに差し替えられる (2026-08-28 シミュレータで実測)。
-    ///    英字書体は日本語グリフを持たないので OS が勝手に差し替えてしまい、
-    ///    serif も rounded も futura も「日本語では全部同じ見た目」になっていた。
-    ///    = 4択が実質1択だったというユーザー報告の正体。
+    /// 🔴 Without this, Japanese is always substituted with Hiragino Kaku Gothic (measured on the
+    ///    simulator 2026-08-28). Latin typefaces have no Japanese glyphs, so the OS substitutes them on
+    ///    its own, and serif, rounded and futura all "looked the same in Japanese".
+    ///    = the real reason behind the user report that the 4 choices were effectively 1.
     private static func mixed(
         _ latin: UIFontDescriptor,
         japanese: String,
@@ -137,7 +144,7 @@ enum OverlayFontProvider {
         UIFont(name: name, size: size) != nil ? .custom(name, size: size) : fallback
     }
 
-    /// 現在時刻を "H:mm" (先頭ゼロなし) で。例: 5:20 / 21:05
+    /// Current time as "H:mm" (no leading zero). e.g. 5:20 / 21:05
     static func currentTimeString() -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -146,18 +153,18 @@ enum OverlayFontProvider {
     }
 }
 
-/// テキスト色。プリセット (白/黒/名前付き) + スポイトで拾った任意色 ("#RRGGBB")。
-/// enum → トークン構造体に変更 (2026-07-11、スポイト対応)。DTO には token を
-/// そのまま保存する。旧データの "offwhite"/"ink"/"red" 等のトークンもそのまま通る
+/// Text color. Presets (white/black/named) + any color picked with the eyedropper ("#RRGGBB").
+/// Changed from an enum to a token struct (2026-07-11, for eyedropper support). The token is saved
+/// as-is in the DTO. Tokens from old data such as "offwhite"/"ink"/"red" also pass through as-is
 struct OverlayColor: Equatable, Hashable {
     let token: String
 
     static let offwhite = OverlayColor(token: "offwhite")
     static let ink      = OverlayColor(token: "ink")
-    /// プレート背景サイクルの「グレー」(OFF→グレー→黒→白→OFF、2026-07-11)
+    /// The "gray" in the plate background cycle (OFF→gray→black→white→OFF, 2026-07-11)
     static let plateGray = OverlayColor(token: "plategray")
 
-    /// スポイト/パレットで拾った任意色
+    /// Any color picked with the eyedropper/palette
     static func custom(_ color: UIColor) -> OverlayColor {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         color.getRed(&r, green: &g, blue: &b, alpha: &a)
@@ -166,20 +173,21 @@ struct OverlayColor: Equatable, Hashable {
         return OverlayColor(token: hex)
     }
 
-    /// スウォッチ列のプリセット (白黒グレー → 虹のグラデーション細分 → パステル。
-    /// IG 準拠で横スクロール 1 列、2026-07-11 ユーザー指定)。
-    /// body 評価のたびに ~41 色の UIColor init + getRed + String(format:) を再計算していたため
-    /// (colorScrollRow の ForEach から毎回参照される) stored let で一度だけ構築する (2026-07-11)
+    /// Presets for the swatch row (white/black/gray → finely divided rainbow gradient → pastels.
+    /// One horizontally scrolling row following IG, specified by the user 2026-07-11).
+    /// Every body evaluation used to recompute ~41 UIColor inits + getRed + String(format:)
+    /// (referenced every time from the ForEach in colorScrollRow), so it is built only once as a
+    /// stored let (2026-07-11)
     static let palette: [OverlayColor] = {
         var list: [OverlayColor] = [.offwhite, .ink]
         for white in [0.78, 0.55, 0.32] {
             list.append(.custom(UIColor(white: white, alpha: 1)))
         }
-        // 虹 (15°刻み24色、ビビッド)
+        // Rainbow (24 colors in 15° steps, vivid)
         for i in 0..<24 {
             list.append(.custom(UIColor(hue: CGFloat(i) / 24, saturation: 0.85, brightness: 0.95, alpha: 1)))
         }
-        // パステル (30°刻み12色)
+        // Pastel (12 colors in 30° steps)
         for i in 0..<12 {
             list.append(.custom(UIColor(hue: CGFloat(i) / 12, saturation: 0.32, brightness: 1.0, alpha: 1)))
         }
@@ -191,7 +199,7 @@ struct OverlayColor: Equatable, Hashable {
         case "offwhite":  return UIColor(AppColors.textPrimary)
         case "ink":       return UIColor(AppColors.background)
         case "plategray": return UIColor(white: 0.55, alpha: 1)
-        // 旧8色プリセットのトークン (後方互換)
+        // Tokens of the old 8-color presets (backward compatibility)
         case "red":      return UIColor(Color(hex: "E53935"))
         case "orange":   return UIColor(Color(hex: "F97316"))
         case "yellow":   return UIColor(Color(hex: "FFD23F"))
@@ -216,7 +224,8 @@ struct OverlayColor: Equatable, Hashable {
 
     var swiftUIColor: Color { Color(uiColor) }
 
-    /// プレートON時の文字色 (プレート背景 = 自分の色。輝度でコントラスト自動判定)
+    /// Text color when the plate is ON (plate background = own color. Contrast decided automatically by
+    /// luminance)
     var contrastText: OverlayColor {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
@@ -224,7 +233,7 @@ struct OverlayColor: Equatable, Hashable {
         return luminance > 0.55 ? .ink : .offwhite
     }
 
-    /// DTO 互換 (旧 enum の rawValue と同じ意味)
+    /// DTO compatibility (same meaning as the rawValue of the old enum)
     var rawValue: String { token }
 }
 
@@ -246,31 +255,32 @@ struct EditableOverlay: Identifiable {
     let id: UUID
     var text: String
     var font: OverlayFont
-    /// 文字色 (常に文字に適用される。プレートONでも文字色はこれ)
+    /// Text color (always applied to the text. With the plate ON, the text color is still this)
     var color: OverlayColor
     var plate: Bool
-    /// プレート背景色。nil = 文字色から自動コントラスト (白文字→黒プレート等)。
-    /// カラー行の「文字/背景」切替で明示指定できる (2026-07-11)
+    /// Plate background color. nil = automatic contrast from the text color (white text → black plate,
+    /// etc.). Can be set explicitly with the "text/background" switch in the color row (2026-07-11)
     var plateColor: OverlayColor? = nil
-    /// 中心位置 / キャンバス幅・高 (0-1、正規化済み)
+    /// Center position / canvas width and height (0-1, normalized)
     var x: Double
     var y: Double
-    /// 実 pt 値 (編集中のキャンバス基準)。DTO 化時にキャンバス幅で正規化する。
+    /// Actual pt value (relative to the canvas being edited). Normalized by the canvas width when
+    /// converted to a DTO.
     var fontSize: Double
     var rotationDegrees: Double
     var alignment: OverlayAlignment
 
-    /// 実際に描画するプレート背景色 (明示指定 or 自動コントラスト)
+    /// The plate background color actually drawn (explicit or automatic contrast)
     var resolvedPlateColor: OverlayColor {
         plateColor ?? color.contrastText
     }
 }
 
 extension EditableOverlay {
-    /// 別エージェント実装の UserPostService.createPostV2 に渡す DTO へ変換。
-    /// fontSize は「pt / キャンバス幅」の正規化値にする。
-    /// imageIndex は焼き込み直後は 0 で仮置きし、複数枚投稿では PostDraft.flattenedOverlayDTOs で
-    /// 実際の画像インデックスに差し替える (withImageIndex(_:))。
+    /// Convert to the DTO passed to UserPostService.createPostV2, implemented by another agent.
+    /// fontSize becomes the normalized value "pt / canvas width".
+    /// imageIndex is set to a placeholder 0 right after baking, and for multi-image posts
+    /// PostDraft.flattenedOverlayDTOs replaces it with the real image index (withImageIndex(_:)).
     func toDTO(canvasWidth: CGFloat) -> PostOverlayDTO {
         let normalizedFontSize = canvasWidth > 0 ? fontSize / Double(canvasWidth) : 0.03
         return PostOverlayDTO(
@@ -288,47 +298,49 @@ extension EditableOverlay {
     }
 }
 
-/// テンプレ背景 (QuoteBackgroundView) を編集/焼き込みで使う際の固定シードID。
-/// backgroundIndex を明示指定するため quoteId 自体は意味を持たない。
+/// Fixed seed ID used when the template background (QuoteBackgroundView) is used for editing/baking.
+/// backgroundIndex is set explicitly, so the quoteId itself has no meaning.
 let postFlowTemplateSeedID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
 
-// MARK: - DraftImage (複数枚投稿の1枚分の下書き状態)
+// MARK: - DraftImage (draft state for one image of a multi-image post)
 
-/// 1枚の画像分の下書き (背景 + 自由配置テキスト + 焼き込み結果)。
-/// PostDraft.images に最大4件保持し、PostBackgroundGridView で選択される都度追加される。
+/// Draft for one image (background + freely placed text + baked result).
+/// PostDraft.images holds up to 4, and one is added each time a background is selected in
+/// PostBackgroundGridView.
 struct DraftImage: Identifiable {
     let id = UUID()
     var background: PostBackground
     var overlays: [EditableOverlay] = []
 
-    /// Step2「次へ」で焼き込んだ結果 (この画像単体分)
+    /// Result baked by "次へ" ("Next") in Step2 (for this image only)
     var bakedImageData: Data?
     var bakedPreviewImage: UIImage?
-    /// 焼き込み時点のキャンバス幅で正規化した DTO (imageIndex は仮の 0、送信直前に付け替える)
+    /// DTOs normalized by the canvas width at baking time (imageIndex is a placeholder 0, reassigned
+    /// right before sending)
     var overlayDTOs: [PostOverlayDTO] = []
 }
 
-// MARK: - PostDraft (フロー全体で共有する下書き状態)
+// MARK: - PostDraft (draft state shared across the whole flow)
 
 final class PostDraft: ObservableObject {
-    /// 複数枚投稿 (最大4枚) の下書き配列
+    /// Draft array for a multi-image post (up to 4 images)
     @Published var images: [DraftImage] = []
-    /// 現在 Step2 (StoryTextEditorView) で編集中の images のインデックス
+    /// Index into images of the one currently being edited in Step2 (StoryTextEditorView)
     @Published var editingIndex: Int = 0
 
-    /// Step3 で入力するタイトル (# タグを含んだまま保存)
+    /// Title entered in Step3 (saved with the # tags still included)
     @Published var title: String = ""
 
-    /// 全画像の overlayDTOs を実際の imageIndex 付きでフラット化 (送信直前に呼ぶ)
+    /// Flatten the overlayDTOs of all images with their real imageIndex (call right before sending)
     var flattenedOverlayDTOs: [PostOverlayDTO] {
         images.enumerated().flatMap { index, image in
             image.overlayDTOs.map { $0.withImageIndex(index) }
         }
     }
 
-    /// 背景確定 (カメラ / グリッド共通)。新しい DraftImage を追加して編集対象にする。
-    /// エディタから「戻る」で選び直した場合に残る未焼き込みの幽霊画像は先に取り除く。
-    /// 最大4枚。成功で true
+    /// Confirm a background (shared by camera / grid). Adds a new DraftImage and makes it the edit
+    /// target. First removes any unbaked ghost image left behind when the user went back from the editor
+    /// to choose again. Max 4 images. Returns true on success
     @discardableResult
     func selectBackground(_ background: PostBackground) -> Bool {
         if let last = images.last, last.bakedImageData == nil {
@@ -346,23 +358,26 @@ final class PostDraft: ObservableObject {
 struct PostFlowView: View {
     @StateObject private var draft = PostDraft()
     @Environment(\.dismiss) private var dismiss
-    // NavigationPath でなく型付き配列にする: 「確認画面が既にスタックにあるか」で
-    // エディタ後の遷移を判定するため (count 判定はテンプレ/ライブラリ経由で破綻した)
+    // A typed array instead of NavigationPath: the transition after the editor is decided by "whether
+    // the confirm screen is already on the stack" (checking count broke when coming via
+    // template/library)
     @State private var path: [Route] = []
 
     private enum Route: Hashable {
         case editor
         case confirm
-        /// テンプレート選択 / 確定画面の [+] から追加の1枚を選ぶ背景グリッド
+        /// Background grid for choosing one more image, opened from template selection / the [+] on the
+        /// confirm screen
         case addBackground
-        /// 確定画面のサムネタップ → 焼き込み済みの1枚を再編集 (次へで確定画面に戻る)
+        /// Tap a thumbnail on the confirm screen → re-edit that baked image (Next returns to the confirm
+        /// screen)
         case editImage
     }
 
     var body: some View {
         NavigationStack(path: $path) {
-            // Step1 = 自前カメラ即起動 (2026-07-11 ユーザー確定、TikTok/BeReal式)。
-            // テンプレート/カラーは「テンプレートから選ぶ」→ 従来のグリッドへ
+            // Step1 = launch our own camera immediately (user decision 2026-07-11, TikTok/BeReal style).
+            // Templates/colors go through "テンプレートから選ぶ" ("Choose from templates") → the existing grid
             PostCameraView(
                 draft: draft,
                 onChosen: {
@@ -377,14 +392,14 @@ struct PostFlowView: View {
                 case .editor:
                     StoryTextEditorView(draft: draft) {
                         if path.contains(.confirm) {
-                            // 確認画面の [+] → 追加の背景選択 → このエディタ、からの「次へ」
-                            // 新しい確認画面は積まず、既存の確認画面まで戻る
+                            // "Next" from this editor, reached via [+] on the confirm screen → additional background selection.
+                            // Do not push a new confirm screen; go back to the existing one
                             path.removeLast(2)
                         } else {
-                            // 最初の1枚 (カメラ直 / テンプレ・ライブラリのグリッド経由どちらでも)
-                            // からの「次へ」→ 確認画面へ進む。
-                            // 旧実装の path.count 判定はグリッド経由 (2段) で「2つ戻る」が誤発動し、
-                            // カメラに戻される + 焼き込み済み画像が幽霊として残る大バグだった (2026-07-11)
+                            // "Next" from the first image (whether straight from the camera or via the template/library grid)
+                            // → go to the confirm screen.
+                            // The old path.count check wrongly triggered "go back 2" when coming via the grid (2 levels),
+                            // a major bug that sent the user back to the camera + left the baked image as a ghost (2026-07-11)
                             path.append(Route.confirm)
                         }
                     }
@@ -403,8 +418,9 @@ struct PostFlowView: View {
                         }
                     )
                 case .addBackground:
-                    // × はフロー全体を閉じる (2026-07-25 実機FB: 従来は × も戻るもカメラに戻り重複)。
-                    // ただし確認画面からの画像追加中は、× でドラフト全損しないよう従来の1段戻るに留める
+                    // × closes the whole flow (2026-07-25 real device feedback: previously both × and back went to the
+                    // camera, duplicating each other). However, while adding an image from the confirm screen, it stays
+                    // as the old one-level back so that × does not wipe the whole draft
                     PostBackgroundGridView(
                         draft: draft,
                         onChosen: {
@@ -414,17 +430,19 @@ struct PostFlowView: View {
                     )
                 case .editImage:
                     StoryTextEditorView(draft: draft) {
-                        // 再焼き込み完了 → 確定画面 (1つ下) へ戻る
+                        // Re-baking done → go back to the confirm screen (one level down)
                         path.removeLast()
                     }
                 }
             }
         }
-        // Step1 (カメラ、path が空) では従来通り下スワイプで閉じられる。
-        // エディタ/確認画面に進んだら下書きを守るため下スワイプ閉じを無効化する。
+        // In Step1 (camera, path is empty), swipe down closes it as before.
+        // Once the user moves on to the editor/confirm screen, swipe-down dismiss is disabled to protect
+        // the draft.
         .interactiveDismissDisabled(!path.isEmpty)
-        // 戻るでカメラ (ルート) まで完全に戻った = フローをやり直す意思。
-        // 焼き込み済みの下書きを残すと、次の撮影で幽霊1枚目として混入するため全消しする
+        // Going all the way back to the camera (root) = intent to restart the flow.
+        // If baked drafts were kept, they would slip into the next capture as a ghost 1st image, so clear
+        // everything
         .onChange(of: path) { _, newPath in
             if newPath.isEmpty && !draft.images.isEmpty {
                 draft.images.removeAll()
@@ -435,7 +453,8 @@ struct PostFlowView: View {
     }
 }
 
-// MARK: - i18n (既存 L と同じ「lang == .japanese ? jp : en」方式。LocalizedStrings.swift は編集禁止のためここに独立定義)
+// MARK: - i18n (same "lang == .japanese ? jp : en" style as the existing L.
+// LocalizedStrings.swift must not be edited, so it is defined separately here)
 
 enum PostFlowStrings {
     static func step1Title(_ lang: AppLanguage) -> String {
@@ -487,7 +506,7 @@ enum PostFlowStrings {
     }
 
     static func lockToggleLabel(_ lang: AppLanguage) -> String {
-        // 2026-07-17 英語をユーザー依頼で整文 (lockPromptHeadline の "Lock in" と揃える)
+        // 2026-07-17 English reworded at the user's request (matches "Lock in" in lockPromptHeadline)
         lang == .japanese ? "投稿後にロックを開始する" : "Lock in after posting"
     }
 
@@ -495,10 +514,12 @@ enum PostFlowStrings {
         lang == .japanese ? "閉じる" : "Close"
     }
 
-    // 実機FB第10弾 (2026-07-15): 煽り系コピーは撤去して普通の見出しに (サブタイトルは削除)
+    // Real device feedback round 10 (2026-07-15): removed the hype copy and made it a plain heading
+    // (subtitle removed)
     static func lockPromptHeadline(_ lang: AppLanguage) -> String {
-        // 2026-07-17 英語をユーザー依頼で整文: "Start a lock" は不自然 → "Lock in" (集中に入るの現行スラング、ブランドの規律感とも一致)
-        lang == .japanese ? "ロックを開始" : "Lock in" // 文言はユーザー添削待ち (日本語)
+        // 2026-07-17 English reworded at the user's request: "Start a lock" sounds unnatural → "Lock in"
+        // (current slang for getting into focus, and it also fits the brand's sense of discipline)
+        lang == .japanese ? "ロックを開始" : "Lock in" // Wording awaiting user review (Japanese)
     }
 
     static func lockStartCTA(_ lang: AppLanguage) -> String {

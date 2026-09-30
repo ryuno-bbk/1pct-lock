@@ -2,8 +2,8 @@
 //  UserAuthService.swift
 //  AppBlocker
 //
-//  Apple Sign-In + Supabase Auth 統合サービス
-//  既存 AuthorizationService (FamilyControls) との命名衝突回避のため UserAuth
+//  Apple Sign-In + Supabase Auth integration service
+//  Named UserAuth to avoid a name clash with the existing AuthorizationService (FamilyControls)
 //
 
 import Foundation
@@ -13,7 +13,7 @@ import CryptoKit
 import UIKit
 import Supabase
 
-/// Apple Sign-In + Supabase Auth の統合状態管理
+/// Manages the combined Apple Sign-In + Supabase Auth state
 @MainActor
 final class UserAuthService: ObservableObject {
 
@@ -29,36 +29,36 @@ final class UserAuthService: ObservableObject {
     @Published private(set) var avatarUrl: URL?
     @Published private(set) var isPro: Bool = false
     @Published private(set) var isSigningIn: Bool = false
-    /// H6 (2026-07-22 監査): restoreSession/signInWithApple がサーバーと突き合わせて
-    /// isSignedIn を確定できたかどうか。false のまま isSignedIn=true な状態は「オフライン起動時の
-    /// ローカル信頼フォールバック」を意味し、AppBlockerApp がフォアグラウンド復帰のたびに
-    /// restoreSession() を再試行するトリガーとして使う。
+    /// H6 (2026-07-22 audit): whether restoreSession/signInWithApple could confirm isSignedIn against the
+    /// server. isSignedIn=true while this is still false means "local-trust fallback on offline launch",
+    /// and AppBlockerApp uses it as the trigger to retry restoreSession() on every return to foreground.
     @Published private(set) var isSessionServerVerified = false
     @Published var errorMessage: String?
 
     private var client: SupabaseClient { SupabaseManager.shared.client }
     private var appleCoordinator: AppleSignInCoordinator?
 
-    /// H6: restoreSession() の多重実行ガード (起動時 .task とフォアグラウンド復帰の scenePhase
-    /// トリガーが競合しうるため、再入時は何もせず即 return する)
+    /// H6: guard against running restoreSession() more than once at a time (the launch .task and the
+    /// scenePhase trigger on return to foreground can race, so on re-entry it does nothing and returns)
     private var isRestoringSession = false
 
-    /// H6: 直近サインインに成功した userId の UserDefaults キー。オフライン起動 /
-    /// Supabase 一時障害時にローカル信頼でサインイン済み扱いするためのフォールバック値
+    /// H6: UserDefaults key for the userId of the last successful sign-in. Fallback value used to treat
+    /// the user as signed in by local trust on offline launch / temporary Supabase outage
     private static let lastKnownUserIdKey = "lastKnownUserId"
 
-    /// 073: 直近サーバーに送った言語 (rawValue)。同じ値を何度も送らないためのプロセス内キャッシュ。
-    /// 実際にサーバーへ書き込めた時だけ更新する (失敗時は次回呼び出しでリトライされるよう nil のまま残す)
+    /// 073: language (rawValue) last sent to the server. In-process cache so the same value is not sent
+    /// again. Updated only when the server write actually succeeded (on failure it stays nil so the next
+    /// call retries)
     private var lastSyncedLanguageRaw: String?
 
     private init() {}
 
     // MARK: - Session Restore
 
-    /// 起動時 (+ H6: フォアグラウンド復帰時の再検証) に呼び出し。Supabase SDK が Keychain から
-    /// 自動復元するのでセッションがあれば isSignedIn=true にするだけ。
-    /// H6: 多重実行ガード付き — 起動時 .task とフォアグラウンド復帰トリガーが競合しても
-    /// 後勝ちで isSignedIn を暴れさせない。
+    /// Called at launch (+ H6: re-verification on return to foreground). The Supabase SDK restores the
+    /// session from the Keychain automatically, so if there is a session this only sets isSignedIn=true.
+    /// H6: has a re-entry guard. Even if the launch .task and the foreground trigger race,
+    /// isSignedIn does not flip back and forth depending on which one finishes last.
     func restoreSession() async {
         guard !isRestoringSession else { return }
         isRestoringSession = true
@@ -69,27 +69,27 @@ final class UserAuthService: ObservableObject {
             self.userId = session.user.id
             self.isSignedIn = true
             self.isSessionServerVerified = true
-            // H6: オフライン起動時のローカル信頼フォールバック用に、直近サインイン成功の
-            // userId を永続化 (この関数の catch 側で使う)
+            // H6: persist the userId of the last successful sign-in for the local-trust fallback on offline
+            // launch (used in the catch branch of this function)
             UserDefaults.standard.set(session.user.id.uuidString, forKey: Self.lastKnownUserIdKey)
-            // enqueue 時の user_id 刻印用ミラー (H3)。失敗 (catch) 側では消さない —
-            // オフライン起動で消すと、その間の schedule セッションが「誰のものでもない行」として
-            // 破棄されてしまう (夢ミラーの F5 と同じ理由)
+            // Mirror used to stamp user_id at enqueue time (H3). Do not clear it in the failure (catch) branch.
+            // If it is cleared on offline launch, schedule sessions during that time are discarded as
+            // "rows that belong to nobody" (same reason as F5 for the dream mirror)
             AppGroupStorage.shared.saveCurrentUserId(session.user.id)
             await refreshProfile()
         } catch {
-            // H6 (2026-07-22 監査): オフライン起動 / Supabase 一時障害でここに落ちると、従来は
-            // 問答無用で isSignedIn=false にしてサインイン済みユーザーをオンボーディングへ
-            // 追い出していた (進行中の遮断の解除操作すら不能になる致命的な詰み)。
-            // 直近サインイン実績 (lastKnownUserId) があれば「一時的な失敗」とみなし、
-            // サーバー未検証のままローカル信頼で isSignedIn=true にする。
-            // AppGroup 側 (saveCurrentUserId) はここでは触らない — 成功時に書かれた値がそのまま残る。
+            // H6 (2026-07-22 audit): when an offline launch / temporary Supabase outage lands here, the old code
+            // always set isSignedIn=false and pushed a signed-in user out to onboarding
+            // (a fatal dead end where the user could not even unlock an active block).
+            // If there is a recent sign-in record (lastKnownUserId), treat it as a "temporary failure" and
+            // set isSignedIn=true by local trust, without server verification.
+            // The AppGroup side (saveCurrentUserId) is not touched here. The value written on success stays.
             if let lastKnownIdString = UserDefaults.standard.string(forKey: Self.lastKnownUserIdKey),
                let lastKnownId = UUID(uuidString: lastKnownIdString) {
                 self.userId = lastKnownId
                 self.isSignedIn = true
-                // isSessionServerVerified は false のまま (デフォルト値) — プロフィールは
-                // 劣化表示のまま維持する。clearProfileState() は呼ばない。
+                // isSessionServerVerified stays false (the default). The profile keeps
+                // its degraded display. clearProfileState() is not called.
             } else {
                 self.isSignedIn = false
                 self.userId = nil
@@ -99,15 +99,16 @@ final class UserAuthService: ObservableObject {
         }
     }
 
-    /// サインアウト/セッション消失時にプロフィール系 @Published を全てリセットする。
-    /// bio/dream を消し漏らすと、同端末でのアカウント切替時に前ユーザーの
-    /// (非公開含む) 夢が一瞬表示される (2026-07-07 Fable レビュー指摘)
+    /// Reset all profile-related @Published on sign-out / session loss.
+    /// If bio/dream is not cleared, when switching accounts on the same device the previous user's
+    /// dream (including private ones) shows for a moment (pointed out in the 2026-07-07 Fable review)
     ///
-    /// 注意: ここでは App Group の夢ミラー (AppGroupStorage.saveUserDream) は消さない。
-    /// clearProfileState は restoreSession() の catch (オフライン起動 / Supabase pause 等の
-    /// 一時的な通信失敗) からも呼ばれるため、ここで消すと本人はサインアウトしていないのに
-    /// 次回ログイン成功まで Shield から夢が消える regression になる (2026-07 修正)。
-    /// 夢ミラーのクリアは「本当にサインアウトした」ことが確定する signOut() 内でのみ行う。
+    /// Note: the App Group dream mirror (AppGroupStorage.saveUserDream) is not cleared here.
+    /// clearProfileState is also called from the catch of restoreSession() (offline launch, Supabase
+    /// pause and other temporary network failures), so clearing it here would be a regression: the dream
+    /// disappears from the Shield until the next successful login even though the user did not sign out
+    /// (fixed 2026-07). The dream mirror is cleared only in signOut(), where it is certain that the user
+    /// really signed out.
     private func clearProfileState() {
         self.displayName = nil
         self.handle = nil
@@ -120,9 +121,9 @@ final class UserAuthService: ObservableObject {
 
     // MARK: - Sign In with Apple
 
-    /// Apple Sign-In を実行。fullName スコープは要求しない方針 (S15)。
-    /// 表示名はオンボーディングの nameInput ステップでユーザーに直接入力させ、
-    /// サインイン成功後に `setDisplayName(_:)` で users.display_name に保存する。
+    /// Runs Apple Sign-In. Policy: do not request the fullName scope (S15).
+    /// The user types the display name directly in the nameInput step of onboarding, and it is
+    /// saved to users.display_name with `setDisplayName(_:)` after a successful sign-in.
     func signInWithApple() async {
         guard !isSigningIn else { return }
         isSigningIn = true
@@ -151,18 +152,18 @@ final class UserAuthService: ObservableObject {
             self.userId = session.user.id
             self.isSignedIn = true
             self.isSessionServerVerified = true
-            // H6: オフライン起動時のローカル信頼フォールバック用に、直近サインイン成功の
-            // userId を永続化 (restoreSession() の catch 側で使う)
+            // H6: persist the userId of the last successful sign-in for the local-trust fallback on offline
+            // launch (used in the catch branch of restoreSession())
             UserDefaults.standard.set(session.user.id.uuidString, forKey: Self.lastKnownUserIdKey)
             AppGroupStorage.shared.saveCurrentUserId(session.user.id)
 
-            // users 行は handle_new_user trigger が作成済。
+            // The users row has already been created by the handle_new_user trigger.
             await refreshProfile()
 
-            // 🔴 2026-08-06 審査リジェクト対応 (Guideline 4 / Sign in with Apple):
-            // Apple が名前を返したら、それを表示名として採用する。ユーザーに入力させない。
-            // 既に users.display_name がある場合 (再サインイン等) は上書きしない。
-            // Apple が名前を返すのは初回承認時だけなので、ここを逃すと二度と取れない。
+            // 🔴 Fix for the 2026-08-06 App Review rejection (Guideline 4 / Sign in with Apple):
+            // If Apple returns a name, use it as the display name. Do not make the user type it.
+            // If users.display_name already exists (re-sign-in etc.), do not overwrite it.
+            // Apple returns the name only on the first authorization, so if it is missed here it is gone for good.
             if let appleName = Self.formattedName(from: result.credential.fullName) {
                 let existing = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if existing.isEmpty {
@@ -170,7 +171,7 @@ final class UserAuthService: ObservableObject {
                 }
             }
         } catch let error as ASAuthorizationError where error.code == .canceled {
-            // ユーザーキャンセル: エラー表示しない
+            // User cancelled: do not show an error
         } catch {
             errorMessage = "Apple サインインに失敗しました"
             print("⚠️ Apple Sign-In error: \(error)")
@@ -180,11 +181,11 @@ final class UserAuthService: ObservableObject {
         isSigningIn = false
     }
 
-    /// Apple の `PersonNameComponents` を表示名の文字列にする (2026-08-06)。
-    /// ⚠️ ロケールで語順が変わる (日本語は「姓 名」、英語は "Given Family") ため、
-    /// 自前で連結せず PersonNameComponentsFormatter に任せる。
-    /// 空白のみ / 全要素 nil の場合は nil を返す (呼び出し側で「取れなかった」と扱う)。
-    /// display_name の長さ制限に合わせて 30 文字で切る。
+    /// Turns Apple's `PersonNameComponents` into a display name string (2026-08-06).
+    /// ⚠️ The word order depends on the locale (Japanese is "family given", English is "Given Family"),
+    /// so do not join the parts ourselves. Leave it to PersonNameComponentsFormatter.
+    /// If it is whitespace only / all components are nil, return nil (the caller treats it as "not
+    /// available"). Truncate to 30 characters to match the display_name length limit.
     private static func formattedName(from components: PersonNameComponents?) -> String? {
         guard let components else { return nil }
         let formatter = PersonNameComponentsFormatter()
@@ -197,8 +198,8 @@ final class UserAuthService: ObservableObject {
     // MARK: - Sign Out
 
     func signOut() async {
-        // 🔴 auth を切る「前」に消す。RPC は auth.uid() を見るので、後だと消せない。
-        //    残したままにすると、次にこの端末を使う人に前の持ち主宛ての通知が飛ぶ
+        // 🔴 Remove it BEFORE cutting auth. The RPC checks auth.uid(), so afterwards it cannot be removed.
+        //    If it is left, the next person using this device gets notifications meant for the previous owner
         await PushNotificationService.shared.removeTokenFromServer()
 
         do {
@@ -208,55 +209,59 @@ final class UserAuthService: ObservableObject {
         }
         self.isSignedIn = false
         self.userId = nil
-        // H6: 明示的なサインアウトではサーバー検証済みフラグも下ろす (次回は必ずサインイン/
-        // restoreSession の成功を経てから true にする)
+        // H6: on explicit sign-out also lower the server-verified flag (next time it becomes true only after
+        // a successful sign-in / restoreSession)
         self.isSessionServerVerified = false
         clearProfileState()
 
-        // M17 (監査2026-07-20): サインアウト後はオンボ画面に落ちて解除UIに到達できなくなるため、
-        // 遮断エンジン (タイマー/スケジュール/位置) を明示的に止めてから App Group を掃除する。
-        // 各 Manager の既存公開APIのみを使用 (新規の停止APIは作らない)。
-        // ⚠️ 挙動変更: これにより明示的なサインアウトでスケジュール/位置の設定・実行中セッションが
-        // 消える。設定はサーバー同期されておらず端末ローカルのため、再サインインしても復元されない。
+        // M17 (audit 2026-07-20): after sign-out the user lands on the onboarding screen and cannot reach
+        // the unlock UI, so explicitly stop the blocking engines (timer/schedule/location) before cleaning up
+        // the App Group. Uses only the existing public APIs of each Manager (no new stop API is added).
+        // ⚠️ Behavior change: because of this, an explicit sign-out removes the schedule/location settings
+        // and running sessions. Settings are not synced to the server and are local to the device, so they
+        // are not restored on re-sign-in.
         TimerManager.shared.stopTimer()
         ScheduleManager.shared.stopMonitoring()
-        // LocationManager には stopMonitoring() 相当の「全解除」公開APIが無いため、
-        // 既存の removeLocation(_:) を全登録地点に呼ぶことでジオフェンス解除+shield解除を代替する
-        // (removeLocation は呼ぶたびに unregisterGeofence + syncShield を行う既存の公開API)
+        // LocationManager has no public "remove all" API like stopMonitoring(), so calling the existing
+        // removeLocation(_:) on every registered location does the same job (removes geofences + the shield)
+        // (removeLocation is an existing public API that runs unregisterGeofence + syncShield on each call)
         for location in LocationManager.shared.registeredLocations {
             LocationManager.shared.removeLocation(location)
         }
-        // 保険: 登録地点が既に0件でも store に shield が残っていれば解除する (既存公開API)
+        // Safety net: even with 0 registered locations, remove the shield if one remains in the store
+        // (existing public API)
         LocationManager.shared.removeShield()
 
-        // 本当にサインアウトが確定した経路 (ここ、および delete_my_account 成功後に
-        // AccountDeletionService が呼ぶこの signOut()) でのみ App Group の夢ミラーを消す。
-        // restoreSession() の一時的な失敗経路では消さない (F5, 2026-07 修正)
+        // Clear the App Group dream mirror only on paths where sign-out is really confirmed (here, and this
+        // signOut() when AccountDeletionService calls it after delete_my_account succeeds).
+        // Do not clear it on the temporary failure path of restoreSession() (F5, fixed 2026-07)
         AppGroupStorage.shared.saveUserDream(nil)
-        // enqueue の user_id 刻印を止める (H3)。キュー本体はここでは消さない:
-        // 各行に user_id が刻印済みなので、未送信分は本人の再サインイン時に正しく flush される
+        // Stop stamping user_id on enqueue (H3). The queue itself is not cleared here:
+        // every row already has its user_id stamped, so unsent rows are flushed correctly when that user
+        // signs in again
         AppGroupStorage.shared.saveCurrentUserId(nil)
-        // H6: 明示的サインアウトではローカル信頼フォールバックの種を残さない
-        // (次回オフライン起動時に前ユーザーとして自動サインインしてしまうのを防ぐ)
+        // H6: on explicit sign-out, leave nothing behind for the local-trust fallback
+        // (prevents auto sign-in as the previous user on the next offline launch)
         UserDefaults.standard.removeObject(forKey: Self.lastKnownUserIdKey)
-        // 073: 端末共有時のアカウント切替で「次のアカウントの users.lang が
-        // (前アカウントと同じ rawValue だったため) 同期されない」事故を防ぐため、
-        // 本当にサインアウトが確定した経路でだけキャッシュを捨てる
-        // (clearProfileState は restoreSession の一時的失敗からも呼ばれるため、
-        // そちらではキャッシュを残す = 上の saveUserDream(nil) と同じ方針)
+        // 073: on a shared device, when switching accounts, the next account's users.lang could fail to sync
+        // (because it has the same rawValue as the previous account). To prevent that, drop the cache only on
+        // paths where sign-out is really confirmed
+        // (clearProfileState is also called from temporary restoreSession failures, so the cache is kept
+        // there = same policy as saveUserDream(nil) above)
         lastSyncedLanguageRaw = nil
 
-        // M16 (監査2026-07-20): 端末共有時に前ユーザーの位置座標/スケジュール設定/Shield名言キャッシュが
-        // 次ユーザーへ漏れるのを防ぐため、ユーザー固有データのみを個別に掃除する
-        // (pendingBlockSessions と proBlockingEntitled は対象外、詳細は clearUserSpecificData 参照)
+        // M16 (audit 2026-07-20): on a shared device, prevent the previous user's location coordinates /
+        // schedule settings / Shield quote cache from leaking to the next user by cleaning only
+        // user-specific data (pendingBlockSessions and proBlockingEntitled are excluded, see
+        // clearUserSpecificData for details)
         AppGroupStorage.shared.clearUserSpecificData()
     }
 
     // MARK: - Profile
 
-    /// users 行から display_name / handle / bio / avatar_url / is_pro を取得して反映。
-    /// 夢は独立テーブル user_dreams (024 v2) から別クエリで取得する。
-    /// 失敗時は前回値を維持 (ログのみ)。
+    /// Fetch display_name / handle / bio / avatar_url / is_pro from the users row and apply them.
+    /// The dream is fetched with a separate query from its own table user_dreams (024 v2).
+    /// On failure the previous values are kept (log only).
     func refreshProfile() async {
         guard let uid = userId else {
             clearProfileState()
@@ -293,7 +298,7 @@ final class UserAuthService: ObservableObject {
             print("⚠️ Failed to fetch profile: \(error)")
         }
 
-        // 夢: user_dreams (RLS で自分の行は常に見える)。行が無い = 未宣言
+        // Dream: user_dreams (RLS always shows your own row). No row = not declared
         struct DreamRow: Decodable {
             let dream: String?
             let isPublic: Bool
@@ -311,17 +316,18 @@ final class UserAuthService: ObservableObject {
                 .value
             self.dream = rows.first?.dream
             self.dreamIsPublic = rows.first?.isPublic ?? false
-            // Shield (案A) のサブタイトル用に App Group へミラー。起動時ロード (restoreSession/
-            // signInWithApple 経由の refreshProfile) でここを通るので、他端末での編集も次回起動時に反映される
+            // Mirror to the App Group for the Shield subtitle (plan A). The launch load (refreshProfile via
+            // restoreSession/signInWithApple) goes through here, so edits on another device show on next launch
             AppGroupStorage.shared.saveUserDream(self.dream)
         } catch {
             print("⚠️ Failed to fetch dream: \(error)")
         }
     }
 
-    /// C1: is_pro だけを単発で新鮮に取得する。成功時は self.isPro にも反映して値を返し、
-    /// 失敗 (オフライン / Supabase pause 等) は nil を返して「未確定」を呼び出し側に伝える。
-    /// refreshProfile は失敗時に前回値を維持するため「取得に成功したか」を区別できない — その穴を埋める専用フェッチ
+    /// C1: fetch only is_pro, fresh, in a single call. On success also apply it to self.isPro and return it.
+    /// On failure (offline / Supabase pause etc.) return nil to tell the caller it is "unknown".
+    /// refreshProfile keeps the previous value on failure, so it cannot tell whether the fetch succeeded.
+    /// This dedicated fetch fills that gap
     func fetchIsProFresh() async -> Bool? {
         guard let uid = userId else { return nil }
         struct Row: Decodable {
@@ -337,7 +343,7 @@ final class UserAuthService: ObservableObject {
                 .execute()
                 .value
             let fresh = row.isPro ?? false
-            self.isPro = fresh   // @Published → ProAccess の sink 経由で serverIsPro にも伝播する
+            self.isPro = fresh   // @Published → also propagates to serverIsPro via the ProAccess sink
             return fresh
         } catch {
             print("⚠️ fetchIsProFresh failed: \(error)")
@@ -345,15 +351,15 @@ final class UserAuthService: ObservableObject {
         }
     }
 
-    /// 自己紹介 (bio) を更新 (users.bio を UPDATE)。160文字以内、空文字は NULL 化。
+    /// Update the bio (UPDATE users.bio). Max 160 characters, an empty string becomes NULL.
     @discardableResult
     func updateBio(_ bio: String) async -> Bool {
         guard let uid = userId else { return false }
         let trimmed = bio.trimmingCharacters(in: .whitespacesAndNewlines)
         let value: String? = trimmed.isEmpty ? nil : String(trimmed.prefix(160))
 
-        // Optional を持つ Encodable struct は合成 Codable が nil キーを省略してしまい、
-        // 「bio を空にして保存」が DB に届かない。AnyJSON.null で明示的に null を送る
+        // For an Encodable struct with Optionals, synthesized Codable omits nil keys, so
+        // "save with an empty bio" never reaches the DB. Send null explicitly with AnyJSON.null
         let payload: [String: AnyJSON] = ["bio": value.map(AnyJSON.string) ?? .null]
         do {
             try await client
@@ -370,14 +376,15 @@ final class UserAuthService: ObservableObject {
         }
     }
 
-    /// 073: 閲覧者(本人)の端末言語 (users.lang) をサーバーに同期する。
-    /// fetch_mixed_feed_random の同一言語優先スコアリング (viewer_lang) の判定材料になる。
-    /// サインイン時 (AppBlockerApp.syncSignInState) と、設定の言語 Picker 変更時
-    /// (AppBlockerApp が UserDefaults.didChangeNotification を購読して検知) の両方から呼ばれる。
-    /// 前回サーバーに送った値と同じなら何もしない (didChangeNotification は言語以外の
-    /// UserDefaults 変更でも飛んでくるため、高頻度に呼ばれても無駄な通信をしないためのガード)。
-    /// 失敗時はログのみで握りつぶす (loadAuthors と同じ流儀。lang 同期の失敗で
-    /// サインインや言語切り替え自体のユーザー体験を壊してはいけない)
+    /// 073: sync the viewer's (own) device language (users.lang) to the server.
+    /// It is the input for the same-language priority scoring (viewer_lang) in fetch_mixed_feed_random.
+    /// Called both at sign-in (AppBlockerApp.syncSignInState) and when the language Picker in settings
+    /// changes (AppBlockerApp detects it by subscribing to UserDefaults.didChangeNotification).
+    /// Does nothing if the value is the same as the one last sent to the server (didChangeNotification
+    /// also fires for UserDefaults changes other than language, so this guard avoids useless network
+    /// calls even when it is called often).
+    /// On failure, only log and swallow the error (same style as loadAuthors. A failed lang sync must not
+    /// break the user experience of sign-in or of switching languages)
     func syncLanguage(_ lang: AppLanguage) async {
         guard let uid = userId else { return }
         guard lastSyncedLanguageRaw != lang.rawValue else { return }
@@ -397,17 +404,18 @@ final class UserAuthService: ObservableObject {
         }
     }
 
-    /// 「夢」(なりたい自分の一言宣言) を更新 (user_dreams へ upsert、024 v2)。
-    /// 120文字以内、空文字は NULL 化。isPublic は非公開が既定 (bio と異なり宣言的な内容のため)。
-    /// 非公開の夢は RLS (user_dreams_select_public_or_own) で本人以外から見えない。
+    /// Update the "dream" (a one-line declaration of who you want to become) (upsert into user_dreams,
+    /// 024 v2). Max 120 characters, an empty string becomes NULL. isPublic defaults to private (unlike
+    /// bio, the content is a declaration). RLS (user_dreams_select_public_or_own) hides private dreams
+    /// from everyone except the owner.
     @discardableResult
     func updateDream(_ dream: String, isPublic: Bool) async -> Bool {
         guard let uid = userId else { return false }
         let trimmed = dream.trimmingCharacters(in: .whitespacesAndNewlines)
         let value: String? = trimmed.isEmpty ? nil : String(trimmed.prefix(120))
 
-        // AnyJSON.null で明示的に null を送る (Encodable struct だと nil キーが省略され、
-        // 「夢を空にして保存」が DB に届かない)
+        // Send null explicitly with AnyJSON.null (with an Encodable struct the nil key is omitted, and
+        // "save with an empty dream" never reaches the DB)
         let payload: [String: AnyJSON] = [
             "user_id":   .string(uid.uuidString),
             "dream":     value.map(AnyJSON.string) ?? .null,
@@ -428,10 +436,11 @@ final class UserAuthService: ObservableObject {
         }
     }
 
-    /// ハンドルがサーバー側で利用可能かをリアルタイムに確認 (is_handle_available RPC)。
-    /// フォーマット不正はサーバーに問い合わせず .taken を即返す。
-    /// 通信エラーは .taken (使用中) と区別して .error を返す — オフラインや Supabase pause 時に
-    /// 「使用できません」と誤表示してオンボーディングを詰まらせないため (2026-07-07 Fable レビュー指摘)
+    /// Check in real time whether the handle is available on the server (is_handle_available RPC).
+    /// An invalid format returns .taken immediately without asking the server.
+    /// A network error returns .error, separate from .taken (in use). This keeps onboarding from getting
+    /// stuck by wrongly showing "使用できません" ("Not available") when offline or during a Supabase
+    /// pause (pointed out in the 2026-07-07 Fable review)
     func checkHandleAvailable(_ handle: String) async -> HandleAvailability {
         let normalized = HandleValidator.normalized(handle)
         guard HandleValidator.isValidFormat(normalized) else { return .taken }
@@ -448,7 +457,7 @@ final class UserAuthService: ObservableObject {
         }
     }
 
-    /// ハンドルを更新 (users.handle を UPDATE)。normalized + バリデーション後に反映。
+    /// Update the handle (UPDATE users.handle). Applied after normalizing + validation.
     @discardableResult
     func updateHandle(_ handle: String) async -> Bool {
         guard let uid = userId else { return false }
@@ -476,8 +485,8 @@ final class UserAuthService: ObservableObject {
         }
     }
 
-    /// 表示名を更新 (users.display_name を UPDATE)。
-    /// オンボーディング nameInput 直後と ProfileEditView 両方から呼ばれる。
+    /// Update the display name (UPDATE users.display_name).
+    /// Called both right after onboarding nameInput and from ProfileEditView.
     @discardableResult
     func setDisplayName(_ name: String) async throws -> String {
         guard let uid = userId else { throw ProfileError.notSignedIn }
@@ -498,11 +507,11 @@ final class UserAuthService: ObservableObject {
         return trimmed
     }
 
-    /// アバター画像を Storage にアップロードし、users.avatar_url を更新。
-    /// パス: `{uid}/avatar.jpg` 固定 (upsert で上書き)。
-    /// 戻り値: 反映された publicURL (?v=timestamp 付き、キャッシュ無効化)
-    /// 注意: Swift の uuidString は uppercase、Supabase auth.uid() は lowercase。
-    /// RLS ポリシーは storage.foldername で文字列比較するので必ず lowercased() で揃える。
+    /// Upload the avatar image to Storage and update users.avatar_url.
+    /// Path: fixed as `{uid}/avatar.jpg` (overwritten with upsert).
+    /// Returns: the applied publicURL (with ?v=timestamp, to bust the cache)
+    /// Note: Swift's uuidString is uppercase, Supabase auth.uid() is lowercase.
+    /// The RLS policy compares strings with storage.foldername, so always normalize with lowercased().
     @discardableResult
     func uploadAvatar(jpegData: Data) async throws -> URL {
         guard let uid = userId else { throw ProfileError.notSignedIn }
@@ -532,7 +541,7 @@ final class UserAuthService: ObservableObject {
         return versioned
     }
 
-    /// アバター画像を削除 (Storage オブジェクト削除 + users.avatar_url を NULL)。
+    /// Delete the avatar image (delete the Storage object + set users.avatar_url to NULL).
     func removeAvatar() async throws {
         guard let uid = userId else { throw ProfileError.notSignedIn }
         let path = "\(uid.uuidString.lowercased())/avatar.jpg"
@@ -540,12 +549,12 @@ final class UserAuthService: ObservableObject {
         do {
             _ = try await client.storage.from("avatars").remove(paths: [path])
         } catch {
-            // 既に存在しない場合はエラーになるが、DB 側を NULL にする処理は続行
+            // If it no longer exists this is an error, but setting the DB side to NULL still continues
             print("⚠️ Avatar storage remove (ignored if not found): \(error)")
         }
 
-        // AnyJSON.null で明示的に null を送る (Encodable struct だと nil キーが省略され、
-        // PATCH ボディが {} になって avatar_url が NULL 化されない)
+        // Send null explicitly with AnyJSON.null (with an Encodable struct the nil key is omitted,
+        // the PATCH body becomes {} and avatar_url is not set to NULL)
         try await client
             .from("users")
             .update(["avatar_url": AnyJSON.null])
@@ -566,8 +575,8 @@ final class UserAuthService: ObservableObject {
 
 // MARK: - Handle Availability
 
-/// checkHandleAvailable の結果。通信エラー (.error) を「使用中」(.taken) と
-/// 区別することで、呼び出し側がリトライ導線を出せる
+/// Result of checkHandleAvailable. Keeping a network error (.error) separate from "in use" (.taken)
+/// lets the caller show a retry path
 enum HandleAvailability {
     case available
     case taken
@@ -606,9 +615,9 @@ enum AppleSignInError: LocalizedError {
 
 // MARK: - Apple Sign-In Coordinator (NSObject)
 
-/// ASAuthorizationController のデリゲートを担当する NSObject ラッパー。
-/// UserAuthService から分離してあるのは、NSObject + @MainActor + ObservableObject の
-/// 同時宣言が Swift 6 デフォルト isolation で詰まるため。
+/// NSObject wrapper that acts as the ASAuthorizationController delegate.
+/// It is separated from UserAuthService because declaring NSObject + @MainActor + ObservableObject
+/// together gets stuck with the Swift 6 default isolation.
 private final class AppleSignInCoordinator: NSObject,
                                             ASAuthorizationControllerDelegate,
                                             ASAuthorizationControllerPresentationContextProviding {
@@ -630,12 +639,12 @@ private final class AppleSignInCoordinator: NSObject,
 
             let provider = ASAuthorizationAppleIDProvider()
             let request = provider.createRequest()
-            // 🔴 2026-08-06 審査リジェクト対応 (Guideline 4 Design / Sign in with Apple):
-            // 「Authentication Services が名前を提供しているのに、ユーザーに名前を入力させている」
-            // と指摘された。旧 S15 方針 (fullName を取らずオンボで手入力させる) を撤回し、
-            // .fullName を要求して Apple が返した名前をそのまま表示名に使う。
-            // ⚠️ Apple が fullName を返すのは「そのApple IDで初めてこのアプリを承認した時」だけ。
-            // 2回目以降は nil になるので、保存済みの users.display_name を正とすること。
+            // 🔴 Fix for the 2026-08-06 App Review rejection (Guideline 4 Design / Sign in with Apple):
+            // Apple pointed out: "Authentication Services provides the name, but the app asks the user to type
+            // their name". The old S15 policy (do not take fullName, have the user type it in onboarding) is
+            // withdrawn. Request .fullName and use the name Apple returns as the display name as is.
+            // ⚠️ Apple returns fullName only "the first time this app is authorized with that Apple ID".
+            // From the second time on it is nil, so treat the saved users.display_name as the source of truth.
             request.requestedScopes = [.fullName, .email]
             request.nonce = Self.sha256(nonce)
 

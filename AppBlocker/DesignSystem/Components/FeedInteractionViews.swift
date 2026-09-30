@@ -2,26 +2,28 @@
 //  FeedInteractionViews.swift
 //  AppBlocker
 //
-//  スワイプフィード系カード (FeedItemCard / FilteredFeedCard / AuthorFeedCard) 共通の
-//  インタラクション用小型サブビュー。
-//  - FollowPlusButton: アバター下に重ねるフォローボタン (押下 → チェックへ切替 → フェードアウト)
-//  - DoubleTapHeartBurst: ダブルタップした座標から浮かび上がるハートパーティクル 1 個分
+//  Small interaction subviews shared by the swipe feed cards (FeedItemCard / FilteredFeedCard /
+//  AuthorFeedCard).
+//  - FollowPlusButton: follow button overlaid under the avatar (press → switches to a check →
+//    fades out)
+//  - DoubleTapHeartBurst: one heart particle that floats up from the double-tapped point
 //
-//  巨大 View への scaleEffect 直付けは禁止のため、どちらもこの独立した小さな subview 内で
-//  アニメーションを完結させる (S16 実機 10fps 事故の教訓)。
+//  Attaching scaleEffect directly to a huge View is forbidden, so both complete their animation
+//  inside these small independent subviews (lesson from the S16 real device 10fps incident).
 //
 
 import SwiftUI
 
-// MARK: - Follow Plus Button (アバター下オーバーレイ用)
+// MARK: - Follow Plus Button (for the overlay under the avatar)
 
-/// アバターに重ねる円形フォローバッジ。
-/// 旧デザイン (墨塗り+白枠) は白背景と同化して不評だったため反転:
-/// fill = textPrimary (オフホワイト)、アイコン/外周リングは background (墨) で塗る。
-/// 押すと haptic + アイコンを checkmark に切替 (symbolEffect) → 0.9 秒保持 →
-/// 0.25 秒で opacity + scale フェードアウトして消える (reduceMotion 時は opacity のみ)。
-/// 呼び出し側は `showFollowBadge` が false の間だけこの View をツリーに含めること
-/// (フォロー解除で再表示される時に真新しいインスタンスとして再生成され、状態が自然にリセットされる)。
+/// Round follow badge overlaid on the avatar.
+/// The old design (ink fill + white border) blended into white backgrounds and was disliked, so it
+/// is inverted: fill = textPrimary (off-white), icon/outer ring painted with background (ink).
+/// On press: haptic + the icon switches to checkmark (symbolEffect) → held 0.9s →
+/// fades out with opacity + scale over 0.25s and disappears (opacity only with reduceMotion).
+/// The caller must include this View in the tree only while `showFollowBadge` is false
+/// (when it reappears after an unfollow, it is recreated as a fresh instance and its state resets
+/// naturally).
 struct FollowPlusButton: View {
     var size: CGFloat = 22
     let onTap: () -> Void
@@ -30,9 +32,9 @@ struct FollowPlusButton: View {
     @State private var isHidden = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// 見た目のフレーム/位置はそのままに、タップ判定領域だけ円の直径を広げて
-    /// 44pt 相当のタップターゲットを確保する (S16: 巨大 View への scaleEffect 直付け禁止の
-    /// 教訓に倣い、このバッジ subview 内だけで完結させる)。
+    /// Keep the visible frame/position as is, and widen only the hit area beyond the circle's diameter
+    /// to secure a tap target equivalent to 44pt (following the S16 lesson of not attaching scaleEffect
+    /// directly to a huge View, this is done entirely inside this badge subview).
     private struct ExpandedHitArea: Shape {
         var inset: CGFloat
         func path(in rect: CGRect) -> Path {
@@ -79,11 +81,11 @@ struct FollowPlusButton: View {
     }
 }
 
-// MARK: - Double Tap Heart Burst (ダブルタップ位置から浮かぶハート 1 個)
+// MARK: - Double Tap Heart Burst (one heart that floats up from the double-tap position)
 
-/// ダブルタップした座標のみに現れる、いいねパーティクル。
-/// 呼び出し側は座標ごとに UUID 管理した配列で複数同時発生に対応し、
-/// アニメーション終了 (約 0.65 秒) 後に配列から取り除くこと。
+/// Like particle that appears only at the double-tapped point.
+/// The caller handles multiple simultaneous bursts with an array managed by UUID per point, and
+/// removes each from the array after the animation ends (about 0.65s).
 struct DoubleTapHeartBurst: View {
     let position: CGPoint
 
@@ -122,7 +124,7 @@ struct DoubleTapHeartBurst: View {
     }
 }
 
-/// ダブルタップハート配列管理用の 1 要素 (タップ座標 + 識別子)
+/// One element for managing the double-tap heart array (tap point + identifier)
 struct HeartBurstToken: Identifiable {
     let id = UUID()
     let position: CGPoint

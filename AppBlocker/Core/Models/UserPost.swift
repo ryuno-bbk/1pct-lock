@@ -2,9 +2,10 @@
 //  UserPost.swift
 //  AppBlocker
 //
-//  UGC: ユーザー投稿モデル (text_jp / text_en 二言語構造、Quote と同じ)
-//  投稿v2 (S18〜): 背景 + 自由配置テキストを1枚のJPEGに焼き込む方式を追加
-//    - title / imagePath / overlays が非nilの投稿が新方式。旧投稿はtext_jp/text_enのまま共存。
+//  UGC: user post model (text_jp / text_en bilingual structure, same as Quote)
+//  Posts v2 (S18 onward): added a method that bakes the background + freely placed text into one JPEG
+//    - Posts with non-nil title / imagePath / overlays use the new method. Old posts keep
+//      text_jp/text_en and coexist.
 //
 
 import Foundation
@@ -19,22 +20,23 @@ struct UserPost: Identifiable, Codable, Equatable, Hashable {
     let likeCount: Int
     let commentCount: Int
     let createdAt: Date?
-    /// BackgroundImageProvider.imageFiles の index (nil = post.id hash で自動割当)
+    /// Index into BackgroundImageProvider.imageFiles (nil = assigned automatically by the post.id hash)
     let backgroundId: Int?
-    /// 投稿v2: タイトル (# タグを含みうる、任意、60文字以内)
+    /// Posts v2: title (may contain # tags, optional, up to 60 characters)
     let title: String?
-    /// 投稿v2: Storage `post-images` バケット内のパス ({uid}/{post_id}.jpg)。旧投稿は nil
+    /// Posts v2: path in the Storage `post-images` bucket ({uid}/{post_id}.jpg). nil for old posts
     let imagePath: String?
-    /// 投稿v2: 焼き込み前の生テキスト+配置情報 (検索/モデレ/将来の再編集用、表示には使わない)
+    /// Posts v2: raw text + placement info before baking (for search/moderation/future re-editing, not
+    /// used for display)
     let overlays: [PostOverlayDTO]?
-    /// 複数枚投稿: 画像枚数 (1〜4)。旧投稿/未設定は 1
+    /// Multi-image posts: number of images (1-4). 1 for old/unset posts
     let imageCount: Int
-    /// AI モデレーション判定 (027 SQL): "pending"|"approved"|"flagged"|"rejected"。
-    /// 旧レスポンス (列が無い場合) は nil のままデコードする。本人の投稿一覧のみ参照
-    /// (公開フィードはサーバー側 RPC が既にフィルタ済みなのでアプリ側判定は不要)
+    /// AI moderation verdict (027 SQL): "pending"|"approved"|"flagged"|"rejected".
+    /// Old responses (without the column) decode as nil. Only referenced in your own post list
+    /// (the public feed is already filtered by the server-side RPC, so no check is needed on the app side)
     let moderationStatus: String?
-    /// 投稿詳細が開かれた合計タップ数 (028 SQL、record_post_view で加算)。
-    /// プロフィールグリッドのセル右下に表示、全員に見える
+    /// Total number of taps that opened the post detail (028 SQL, incremented by record_post_view).
+    /// Shown at the bottom right of the cell in the profile grid, visible to everyone
     let viewCount: Int
 
     enum CodingKeys: String, CodingKey {
@@ -109,7 +111,7 @@ struct UserPost: Identifiable, Codable, Equatable, Hashable {
     }
 }
 
-// MARK: - 言語別表示ヘルパー (Quote と同じインターフェース)
+// MARK: - Per-language display helpers (same interface as Quote)
 
 extension UserPost {
     func displayPrimary(lang: AppLanguage, showOriginal: Bool) -> String {
@@ -132,32 +134,33 @@ extension UserPost {
         return jp
     }
 
-    /// 表示用タイトル (FeedItem.displayTitle と同じ、除去ルールの詳細は Quote.displayTitle 参照)
+    /// Title for display (same as FeedItem.displayTitle; for details of the removal rules see
+    /// Quote.displayTitle)
     var displayTitle: String? {
         Quote.displayTitle(from: title, tags: tags)
     }
 
-    /// 投稿v2: 焼き込み済み画像の Storage 公開URL (nil なら旧方式のテキスト投稿)
-    /// 複数枚投稿の場合は 1 枚目 (カバー) の URL
+    /// Posts v2: public Storage URL of the baked image (nil means an old-style text post)
+    /// For multi-image posts, the URL of the 1st image (cover)
     var imageUrl: URL? {
         guard let imagePath, !imagePath.isEmpty else { return nil }
         return try? SupabaseManager.shared.client.storage.from("post-images").getPublicURL(path: imagePath)
     }
 
-    /// 複数枚投稿: image_count 分の Storage 公開URL配列 (順序保持)。
-    /// パス規約: 1枚目 = imagePath そのもの、2枚目以降 = "{base}_2.jpg" 〜 "{base}_4.jpg"
+    /// Multi-image posts: array of public Storage URLs for image_count (order kept).
+    /// Path convention: 1st = imagePath itself, 2nd and later = "{base}_2.jpg" to "{base}_4.jpg"
     var imageUrls: [URL] {
         guard let imagePath, !imagePath.isEmpty, imagePath.hasSuffix(".jpg") else {
             return imageUrl.map { [$0] } ?? []
         }
-        let base = String(imagePath.dropLast(4)) // ".jpg" を除去
+        let base = String(imagePath.dropLast(4)) // Remove ".jpg"
         let count = max(imageCount, 1)
         let paths = (1...count).map { n in n == 1 ? imagePath : "\(base)_\(n).jpg" }
         return paths.compactMap { try? SupabaseManager.shared.client.storage.from("post-images").getPublicURL(path: $0) }
     }
 }
 
-// MARK: - FeedItem 変換 (自分の投稿フィード表示用)
+// MARK: - FeedItem conversion (for showing your own post feed)
 
 extension UserPost {
     func toFeedItem(authorName: String?, avatarUrl: String?, isProAuthor: Bool = false) -> FeedItem {
@@ -183,25 +186,26 @@ extension UserPost {
     }
 }
 
-// MARK: - 投稿v2: オーバーレイテキスト (生テキスト+配置情報)
+// MARK: - Posts v2: overlay text (raw text + placement info)
 
-/// 投稿v2の1テキストオーバーレイ。画像に焼き込み済みなので表示には使わないが、
-/// 検索/モデレ/将来の再編集のために overlays jsonb 列へそのまま保存する。
-/// 複数枚投稿 (S20): imageIndex で「何枚目の画像のオーバーレイか」(0始まり) を保持する。
-/// 既存行 (021 適用前に保存された overlays) には imageIndex キーが無いため、
-/// init(from:) で decodeIfPresent ?? 0 にして後方互換を保つ。
+/// One text overlay of posts v2. It is already baked into the image, so it is not used for display,
+/// but it is saved as is into the overlays jsonb column for search/moderation/future re-editing.
+/// Multi-image posts (S20): imageIndex holds "which image this overlay belongs to" (0-based).
+/// Existing rows (overlays saved before 021 was applied) have no imageIndex key, so
+/// init(from:) uses decodeIfPresent ?? 0 to stay backward compatible.
 struct PostOverlayDTO: Codable, Equatable, Hashable {
     let text: String
     let font: String        // "serif" | "sans" | ...
-    let color: String       // 文字色トークン ("offwhite" | "ink" | "#RRGGBB" ...)
+    let color: String       // Text color token ("offwhite" | "ink" | "#RRGGBB" ...)
     let plate: Bool
-    let x: Double            // 中心位置/キャンバス幅 0-1
+    let x: Double            // Center position / canvas width, 0-1
     let y: Double
-    let fontSize: Double     // pt/キャンバス幅 正規化
+    let fontSize: Double     // pt / canvas width, normalized
     let rotationDegrees: Double
     let alignment: String    // "left" | "center" | "right"
-    let imageIndex: Int      // 何枚目の画像か (0始まり)。旧データは 0 扱い
-    /// プレート背景色トークン。nil = 文字色から自動コントラスト (旧データも nil 扱い)
+    let imageIndex: Int      // Which image (0-based). Old data is treated as 0
+    /// Plate background color token. nil = automatic contrast from the text color (old data is also treated
+    /// as nil)
     let plateColor: String?
 
     enum CodingKeys: String, CodingKey {
@@ -249,7 +253,7 @@ struct PostOverlayDTO: Codable, Equatable, Hashable {
         self.plateColor      = try c.decodeIfPresent(String.self, forKey: .plateColor)
     }
 
-    /// imageIndex だけを差し替えたコピーを返す (PostDraft.flattenedOverlayDTOs で使用)
+    /// Returns a copy with only imageIndex replaced (used by PostDraft.flattenedOverlayDTOs)
     func withImageIndex(_ index: Int) -> PostOverlayDTO {
         PostOverlayDTO(
             text: text,

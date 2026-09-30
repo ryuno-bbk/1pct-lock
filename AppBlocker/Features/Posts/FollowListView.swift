@@ -2,11 +2,11 @@
 //  FollowListView.swift
 //  AppBlocker
 //
-//  フォロワー / フォロー中 のタブ切替一覧 (2026-07-30 D案改3、ユーザー確定
-//  「フォロワーのところ押したら上のタブ切り替えでフォロー中も見れるのはいいアイデア」)。
-//  マイページのフォロワー数タップから開く。フォロー中タブは既存 FollowedAccountsView を
-//  そのまま埋め込む (タイトルはタブ側の表示が生きる)。
-//  フォロワー一覧は 059 RPC get_my_followers (未適用なら空のまま = fail-soft)。
+//  Tabbed list of Followers / Following (2026-07-30 plan D rev. 3, confirmed by the user:
+//  "good idea: tapping followers lets you also see Following by switching the tabs at the top").
+//  Opened by tapping the follower count on My Page. The Following tab embeds the existing
+//  FollowedAccountsView as is (the title shown on the tab side is used).
+//  The follower list uses the 059 RPC get_my_followers (stays empty if not applied = fail-soft).
 //
 
 import SwiftUI
@@ -61,7 +61,7 @@ struct FollowListView: View {
         .task { await loadFollowers() }
     }
 
-    // MARK: - フォロワータブ
+    // MARK: - Followers tab
 
     private var followersList: some View {
         ScrollView {
@@ -84,7 +84,7 @@ struct FollowListView: View {
                         Image(systemName: "person.2.slash")
                             .font(.system(size: 50, weight: .thin))
                             .foregroundColor(AppColors.textTertiary)
-                        Text(lang == .japanese ? "まだフォロワーがいません" : "No followers yet")  // 文言はユーザー添削待ち
+                        Text(lang == .japanese ? "まだフォロワーがいません" : "No followers yet")  // Text waiting for user review
                             .font(.system(size: 18, weight: .bold))
                             .foregroundColor(AppColors.textPrimary)
                     }
@@ -106,13 +106,13 @@ struct FollowListView: View {
                 .value
             followers = rows
         } catch {
-            // 059 未適用/通信失敗 → 空一覧のまま (壊れない)
+            // 059 not applied / network failure → the list stays empty (does not break)
             print("⚠️ get_my_followers failed: \(error)")
         }
     }
 }
 
-// MARK: - フォロワー行 (アンフォローボタンなしのシンプル行)
+// MARK: - Follower row (simple row without an unfollow button)
 
 private struct FollowerRowCard: View {
     let user: FollowedUser
@@ -121,7 +121,7 @@ private struct FollowerRowCard: View {
         HStack(spacing: 12) {
             AvatarImage(urlString: user.avatarUrl, size: 44)
 
-            // ELITEバッジは 2026-07-20 に全撤去済みのため isPro は表示に使わない
+            // The ELITE badge was removed entirely on 2026-07-20, so isPro is not used for display
             Text(user.displayName?.isEmpty == false ? user.displayName! : "—")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(AppColors.textPrimary)

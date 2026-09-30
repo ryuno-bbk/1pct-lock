@@ -1,21 +1,21 @@
 -- ============================================================
 -- 010_b_pro_badge.sql
--- S13 Pro バッジ: users.is_pro カラム + 3 フィード RPC 拡張
+-- S13 Pro badge: users.is_pro column + extend the 3 feed RPCs
 -- ============================================================
--- 目的:
---   1. users.is_pro boolean カラム追加 (Pro 加入フラグ)
+-- Purpose:
+--   1. Add the users.is_pro boolean column (Pro subscription flag)
 --   2. fetch_mixed_feed_random / fetch_following_feed / fetch_tag_feed
---      の戻り値に is_pro_author boolean を追加
---   3. 公式偉人 (quotes 側) は users にいないので is_pro_author は常に false
---   4. UGC 投稿 (user_posts 側) のみ users.is_pro を返す
+--      : add is_pro_author boolean to their return values
+--   3. Official historical figures (quotes side) are not in users, so is_pro_author is always false
+--   4. Only UGC posts (user_posts side) return users.is_pro
 --
--- 注意: RETURNS TABLE の列追加は CREATE OR REPLACE 不可なので DROP → CREATE
+-- Note: adding columns to RETURNS TABLE cannot be done with CREATE OR REPLACE, so DROP → CREATE
 --
--- 実行順序: 009 完了後。何度実行しても安全 (IF NOT EXISTS + DROP IF EXISTS)
+-- Run order: after 009. Safe to run any number of times (IF NOT EXISTS + DROP IF EXISTS)
 -- ============================================================
 
 -- ============================================
--- 1. users.is_pro カラム追加
+-- 1. Add the users.is_pro column
 -- ============================================
 ALTER TABLE public.users
   ADD COLUMN IF NOT EXISTS is_pro boolean NOT NULL DEFAULT false;

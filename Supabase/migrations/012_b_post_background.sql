@@ -1,26 +1,27 @@
 -- ============================================================
 -- 012_b_post_background.sql
--- S14: UGC 投稿の背景画像をユーザー選択可能にする
+-- S14: let users choose the background image of UGC posts
 -- ============================================================
--- 目的:
---   1. user_posts.background_id integer カラム追加 (NULL 許容)
---      - NULL なら従来通り post.id hashValue で自動割当 (フォールバック)
---      - 0〜N で BackgroundImageProvider の imageFiles index を直接指定
---      - 現状 14 種なので 0〜13 を想定 (CHECK で上限は緩めに 0〜99 まで許可、将来の画像追加に備える)
---   2. fetch_mixed_feed_random / fetch_following_feed / fetch_tag_feed の戻り値に
---      background_id integer 列を追加
---      - 公式 quotes 側は NULL (従来通り q.id hash で自動割当)
---      - UGC user_posts 側は p.background_id を返す
+-- Purpose:
+--   1. Add an integer column user_posts.background_id (NULL allowed)
+--      - If NULL, it is assigned automatically by post.id hashValue as before (fallback)
+--      - 0-N directly specifies the imageFiles index of BackgroundImageProvider
+--      - Currently there are 14, so 0-13 is expected (the CHECK loosely allows up to 0-99, for images
+--        added in the future)
+--   2. Add an integer column background_id to the return values of fetch_mixed_feed_random /
+--      fetch_following_feed / fetch_tag_feed
+--      - NULL on the official quotes side (assigned automatically by the q.id hash as before)
+--      - The UGC user_posts side returns p.background_id
 --
--- 注意:
---   RETURNS TABLE 列追加は CREATE OR REPLACE 不可なので DROP → CREATE
---   010 の Pro バッジ拡張をベースに、is_pro_author の隣に background_id を追加
+-- Note:
+--   Adding RETURNS TABLE columns is not possible with CREATE OR REPLACE, so DROP → CREATE
+--   Based on the Pro badge extension of 010, background_id is added next to is_pro_author
 --
--- 実行順序: 011 完了後。何度実行しても安全 (IF NOT EXISTS + DROP IF EXISTS)
+-- Execution order: after 011. Safe to run any number of times (IF NOT EXISTS + DROP IF EXISTS)
 -- ============================================================
 
 -- ============================================
--- 1. user_posts.background_id カラム追加
+-- 1. Add the user_posts.background_id column
 -- ============================================
 ALTER TABLE public.user_posts
     ADD COLUMN IF NOT EXISTS background_id integer;

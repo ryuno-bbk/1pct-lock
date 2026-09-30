@@ -1,23 +1,24 @@
 -- ============================================================
 -- 057_post_limit_5_ethos_stage_quote.sql
--- ①投稿上限 10→5/24h (コスト) ②層2: ステージ写真の引用をエンタメ視聴と区別 (2026-07-30)
+-- (1) Post limit 10→5/24h (cost) (2) Layer 2: tell quoting stage photos apart from watching
+--     entertainment (2026-07-30)
 -- ============================================================
--- ①: ユーザー判断「5投稿にしてもいいなコスト的に」。1人あたりAI判定コスト天井
---    最大 14円/日 → 7円/日 (Sonnet時。Haiku主体ならさらに半分)。
---    クライアント側は PostConfirmView が残り枠を表示 (UserPostService.dailyPostLimit=5、
---    SQL と数字を同期させること)。
--- ②: 実弾FB — K-POPステージ写真が「ステージでのパフォーマンス画像はテーマに合わない」
---    の理由で層2 flag された。053 のロールモデル引用 pass がフィットネス項の末尾に
---    埋もれ、fail側「エンタメ視聴の様子」に食われた。独立 pass 項に昇格し、
---    fail 側にも除外を明記する。
+-- (1): User decision "5 posts is fine, cost-wise". Per-person ceiling on AI moderation cost
+--    max 14 yen/day → 7 yen/day (with Sonnet. Half again if mostly Haiku).
+--    On the client side, PostConfirmView shows the remaining slots (UserPostService.dailyPostLimit=5;
+--    keep the number in sync with the SQL).
+-- (2): Real-world feedback: a K-POP stage photo was flagged in layer 2 for the reason "a performance
+--    image on stage does not fit the theme". The role model quote pass from 053 was buried at the end
+--    of the fitness item and got swallowed by "エンタメ視聴の様子" ("scenes of watching entertainment") on the
+--    fail side. Promoted to its own pass item, and the exclusion is also stated on the fail side.
 --
--- 方式: enforce_post_rate_limit の CREATE OR REPLACE + ethos_rubric 全文書き換え
---       (053 の内容を内包、冪等)。safety_rubric (056) には触れない。
--- 適用: SQL Editor で実行するだけ、デプロイ不要。
--- ロールバック: 上限は 5 を 10 に書き換えて再実行 / ルーブリックは 053 を再実行。
+-- Method: CREATE OR REPLACE of enforce_post_rate_limit + full rewrite of ethos_rubric
+--       (includes the content of 053, idempotent). safety_rubric (056) is not touched.
+-- Apply: just run it in the SQL Editor, no deploy needed.
+-- Rollback: for the limit, change 5 to 10 and run again / for the rubric, run 053 again.
 -- ============================================================
 
--- ① 投稿上限 10 → 5
+-- (1) Post limit 10 → 5
 CREATE OR REPLACE FUNCTION public.enforce_post_rate_limit()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -31,7 +32,7 @@ BEGIN
     FROM public.user_posts
     WHERE user_id = NEW.user_id
       AND created_at > now() - interval '24 hours';
-    -- 057: 10 → 5 (AI判定コストの1人あたり天井をさらに半分へ。ユーザー判断 2026-07-30)
+    -- 057: 10 → 5 (halves the per-person ceiling on AI moderation cost again. User decision 2026-07-30)
     IF recent_count >= 5 THEN
         RAISE EXCEPTION 'daily post limit reached';
     END IF;
@@ -39,7 +40,7 @@ BEGIN
 END;
 $$;
 
--- ② 層2ルーブリック: ステージ/ライブ/宣材写真の引用を独立 pass 項に
+-- (2) Layer 2 rubric: quoting stage/live/promo photos becomes its own pass item
 UPDATE public.moderation_config
 SET ethos_rubric = $ethos$
 【層2: 「1%」エトス・ルーブリック】

@@ -2,22 +2,24 @@
 //  WidgetCacheService.swift
 //  AppBlocker
 //
-//  AreteWidget 用に「お気に入り名言」「ランダムプール」を App Group へ JSON で書き出すサービス。
-//  ウィジェット拡張は Supabase に直接アクセスせず、ここで書き出されたキャッシュだけを読む。
+//  Service that writes "favorite quotes" and a "random pool" as JSON to the App Group for
+//  AreteWidget. The widget extension does not access Supabase directly; it only reads the cache
+//  written here.
 //
 
 import Foundation
 import WidgetKit
 
-/// ウィジェットキャッシュ書き出しサービス (main app のみ)。
+/// Widget cache writing service (main app only).
 @MainActor
 final class WidgetCacheService {
 
     static let shared = WidgetCacheService()
 
-    /// ランダムプールの最大件数。多すぎると JSON が肥大化、少なすぎると同じ名言が頻出。
+    /// Maximum size of the random pool. Too many bloats the JSON, too few makes the same quotes show up
+    /// often.
     private let maxRandomPoolSize = 50
-    /// お気に入りプールの最大件数。
+    /// Maximum size of the favorites pool.
     private let maxFavoritePoolSize = 100
 
     private var defaults: UserDefaults? {
@@ -28,7 +30,7 @@ final class WidgetCacheService {
 
     // MARK: - Public
 
-    /// 全プールをまとめて書き出して timeline を reload。起動時 / サインイン時に呼ぶ。
+    /// Write all pools together and reload the timeline. Called at launch / sign-in.
     func refreshAll() {
         writeLanguage()
         writeRandomPool()
@@ -36,13 +38,13 @@ final class WidgetCacheService {
         reload()
     }
 
-    /// いいね変更時に呼ぶ。お気に入りプールのみ更新 + reload。
+    /// Called when likes change. Updates only the favorites pool + reload.
     func refreshFavorites() {
         writeFavoritePool()
         reload()
     }
 
-    /// 言語設定変更時に呼ぶ。
+    /// Called when the language setting changes.
     func refreshLanguage() {
         writeLanguage()
         reload()
@@ -50,9 +52,10 @@ final class WidgetCacheService {
 
     // MARK: - Private
 
-    /// 公式 quote + 自分以外の UGC からランダムにサンプリングしてプールに書き出す。
-    /// ⚠️ FeedService の recommended キャッシュは別 RPC 経由でブロック済みユーザーを除外しているが、
-    /// このプールではシンプルに QuoteService の在庫から作る (ウィジェットは個人化を強くしない設計)。
+    /// Randomly sample from official quotes + UGC by others and write them to the pool.
+    /// ⚠️ FeedService's recommended cache excludes blocked users through a separate RPC, but
+    /// this pool is simply built from QuoteService's stock (the widget is designed not to personalize
+    /// strongly).
     private func writeRandomPool() {
         let quotes = QuoteService.shared.quotes
         let entries = quotes.shuffled().prefix(maxRandomPoolSize).map { quote in
@@ -67,8 +70,8 @@ final class WidgetCacheService {
         write(Array(entries), key: WidgetCacheKey.randomPool)
     }
 
-    /// いいね済み quote をプールに書き出す。`likedQuoteIds` ∩ `QuoteService.quotes` で構築。
-    /// UGC のいいねは Quote オブジェクトを持っていないので、今回はランダムプール側に任せる。
+    /// Write liked quotes to the pool. Built from `likedQuoteIds` ∩ `QuoteService.quotes`.
+    /// Liked UGC has no Quote object, so for now it is left to the random pool.
     private func writeFavoritePool() {
         let likedIds = LikeService.shared.likedQuoteIds
         let allQuotes = QuoteService.shared.quotes
@@ -87,7 +90,8 @@ final class WidgetCacheService {
         write(Array(entries), key: WidgetCacheKey.favoritePool)
     }
 
-    /// 現在のメイン言語を App Group に書き出す (@AppStorage は standard UserDefaults なのでウィジェットから読めない)。
+    /// Write the current main language to the App Group (@AppStorage is standard UserDefaults, so the
+    /// widget cannot read it).
     private func writeLanguage() {
         let raw = UserDefaults.standard.string(forKey: "mainLanguage") ?? AppLanguage.deviceDefault.rawValue
         defaults?.set(raw, forKey: WidgetCacheKey.language)

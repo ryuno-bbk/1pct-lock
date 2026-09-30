@@ -2,24 +2,25 @@
 //  OnboardingHook.swift
 //  AppBlocker
 //
-//  診断オンボーディング PHASE 0: スプラッシュ (モノグラム起動アニメ) と
-//  フィードプレビュー (AI生成投稿の縦ループ) のフック。
+//  Diagnostic onboarding PHASE 0: hook of the splash (monogram launch animation) and
+//  the feed preview (vertical loop of AI-generated posts).
 //
-//  - モノグラムはアイコンPNGでなく図形を直接描く (AreteWatermark の b1Mark と同じ
-//    viewBox 100 換算: 棒 x44 y20 w12 h60 rx6 / ドット r9.5 中心 (26,31),(74,69))
-//  - フィードプレビューは Assets の "OnboardingFeed1"〜"OnboardingFeed6" を表示。
-//    画像未投入の間はモノクロのグラデーションでフォールバックし、開発を止めない
+//  - The monogram is drawn directly as shapes, not from the icon PNG (same as b1Mark in AreteWatermark,
+//    in viewBox 100 units: bar x44 y20 w12 h60 rx6 / dots r9.5 centers (26,31),(74,69))
+//  - The feed preview shows "OnboardingFeed1" to "OnboardingFeed6" from Assets.
+//    While the images are not added, it falls back to a monochrome gradient so development is not blocked
 //
 
 import SwiftUI
 
-// MARK: - 1. スプラッシュ (モノグラム起動)
+// MARK: - 1. Splash (monogram launch)
 
 struct MonogramSplashView: View {
     let onContinue: () -> Void
 
-    // 「刻印」演出の段階 (2026-07-17 全面刷新。旧「ドットが対角から飛んでくる」吸着演出は
-    // ユーザーFBで「ダサい」と却下 → 要素は移動させず、その場で結像させる方向に転換)
+    // Stages of the "engraving" animation (fully renewed 2026-07-17. The old snap-in animation where "the
+    // dots fly in from the diagonal" was rejected by user feedback as "lame" → changed direction: elements
+    // do not move, they come into focus in place)
     @State private var barGrown = false
     @State private var dot1Shown = false
     @State private var dot2Shown = false
@@ -54,19 +55,19 @@ struct MonogramSplashView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { onContinue() }
                 return
             }
-            // 1. 縦棒が中心から一気に伸びる (easeOutExpo 系カーブ)
+            // 1. The vertical bar grows quickly from the center (easeOutExpo-like curve)
             withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.55)) {
                 barGrown = true
             }
-            // 2. ドットは飛んでこない — その場でボケから結像する (ずらして2つ)
+            // 2. The dots do not fly in: they come into focus from a blur in place (two, staggered)
             withAnimation(.easeOut(duration: 0.45).delay(0.4)) { dot1Shown = true }
             withAnimation(.easeOut(duration: 0.45).delay(0.58)) { dot2Shown = true }
-            // 3. 全体がわずかに沈んで「置かれる」+ ハプティクス1回
+            // 3. The whole mark sinks slightly and is "set down" + one haptic
             withAnimation(.easeOut(duration: 0.45).delay(1.0)) { settled = true }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.05) {
                 QuizHaptics.light()
             }
-            // 4. ワードマークが下から浮き上がる
+            // 4. The wordmark rises up from below
             withAnimation(.easeOut(duration: 0.4).delay(1.15)) {
                 showWordmark = true
             }
@@ -77,10 +78,11 @@ struct MonogramSplashView: View {
     }
 }
 
-/// スプラッシュ専用のモノグラム (刻印コレオグラフィー用)。
-/// ジオメトリは MonogramMark と同一 (viewBox 100: 縦棒 50,50/w12h60、ドット r9.5 @(26,31)(74,69)) だが、
-/// ドットを移動でなく「ボケ→結像」(blur+scale+opacity) で出すためのパラメータを持つ。
-/// 汎用の MonogramMark は他所 (ローダーのマスク等) で使うため触らない
+/// Monogram only for the splash (for the engraving choreography).
+/// The geometry is the same as MonogramMark (viewBox 100: vertical bar 50,50/w12h60, dots r9.5
+/// @(26,31)(74,69)), but it has parameters to show the dots with "blur → focus"
+/// (blur+scale+opacity) instead of movement.
+/// The general MonogramMark is used elsewhere (the loader's mask etc.), so it is not touched
 private struct SplashMonogram: View {
     let barGrown: Bool
     let dot1Shown: Bool
@@ -102,7 +104,8 @@ private struct SplashMonogram: View {
             dot(x: 74, y: 69, shown: dot2Shown, s: s)
         }
         .frame(width: size, height: size)
-        // 結像後にわずかに沈んで等倍へ (「置かれた」感)。巨大View への scaleEffect 禁止 (S16) の対象外
+        // After coming into focus, it sinks slightly to 1x (a "set down" feel). Exempt from the ban on
+        // scaleEffect on huge Views (S16)
         .scaleEffect(settled ? 1.0 : 1.03)
     }
 
@@ -117,9 +120,10 @@ private struct SplashMonogram: View {
     }
 }
 
-/// 太字モノグラム (2026-07-29 ヒーロー画面用に新設)。プライマリアイコン「クラシック
-/// (太字モノグラム)」と同族のプロポーション: 棒とドットを MonogramMark より肉厚に。
-/// ベクター描画なので背景 (煙) を四角く隠さない (アイコンPNG直置きだと黒タイルが煙を遮る)
+/// Bold monogram (added 2026-07-29 for the hero screen). Same family of proportions as the primary
+/// icon "Classic" (bold monogram): the bar and dots are thicker than in MonogramMark.
+/// It is drawn as vectors, so it does not hide the background (smoke) behind a square (placing the icon
+/// PNG directly would make a black tile block the smoke)
 struct MonogramMarkBold: View {
     let size: CGFloat
 
@@ -127,13 +131,13 @@ struct MonogramMarkBold: View {
         let s = size / 100
 
         ZStack {
-            // 縦棒: 幅12→20、角丸も肉厚に
+            // Vertical bar: width 12→20, thicker rounded corners too
             RoundedRectangle(cornerRadius: 10 * s)
                 .fill(AppColors.textPrimary)
                 .frame(width: 20 * s, height: 62 * s)
                 .position(x: 50 * s, y: 50 * s)
 
-            // ドット: r9.5→r13
+            // Dots: r9.5→r13
             Circle()
                 .fill(AppColors.textPrimary)
                 .frame(width: 26 * s, height: 26 * s)
@@ -148,23 +152,24 @@ struct MonogramMarkBold: View {
     }
 }
 
-/// 1% モノグラム (縦棒 + 対角ドット2つ)。assembled=false の間はドットが対角の外に散っている
+/// 1% monogram (vertical bar + 2 diagonal dots). While assembled=false, the dots are scattered outside
+/// the diagonal
 struct MonogramMark: View {
     let assembled: Bool
     let size: CGFloat
 
     var body: some View {
-        let s = size / 100   // viewBox 100 換算
+        let s = size / 100   // In viewBox 100 units
 
         ZStack {
-            // 縦棒 (x44 y20 w12 h60 rx6)
+            // Vertical bar (x44 y20 w12 h60 rx6)
             RoundedRectangle(cornerRadius: 6 * s)
                 .fill(AppColors.textPrimary)
                 .frame(width: 12 * s, height: 60 * s)
                 .scaleEffect(y: assembled ? 1 : 0.01, anchor: .center)
                 .position(x: 50 * s, y: 50 * s)
 
-            // ドット (r9.5, 中心 (26,31) / (74,69))
+            // Dots (r9.5, centers (26,31) / (74,69))
             Circle()
                 .fill(AppColors.textPrimary)
                 .frame(width: 19 * s, height: 19 * s)
@@ -183,12 +188,12 @@ struct MonogramMark: View {
     }
 }
 
-// MARK: - 投稿画像アセット (テキストは画像に焼き込み済み)
+// MARK: - Post image assets (the text is already baked into the images)
 
-/// フィードプレビューの1投稿。画像はテキスト焼き込み済み、正方形で表示する。
-/// username / title / likes / comments はダミー (Fable 割当)。likes / comments は表示に使わない
-/// (2026-09-26 反応数の表示を撤去。HookPostCard 参照)。
-/// avatar はユーザーが後で送るアイコン asset 名 (nil ならプレースホルダ表示)。
+/// One post in the feed preview. The image has the text baked in and is shown square.
+/// username / title / likes / comments are dummies (assigned by Fable). likes / comments are not used
+/// for display (the reaction counts were removed on 2026-09-26. See HookPostCard).
+/// avatar is the name of an icon asset the user will send later (a placeholder is shown if nil).
 struct HookFeedPost: Identifiable {
     let id = UUID()
     let image: String
@@ -199,8 +204,8 @@ struct HookFeedPost: Identifiable {
     var avatar: String? = nil
 }
 
-/// フィードプレビューに流す「良い投稿」13枚 (Assets/OnboardingPosts)。
-/// 焼き込みは Docs/onboarding_image_prompts.md 参照。無ければグラデーションでフォールバック
+/// 13 "good posts" shown in the feed preview (Assets/OnboardingPosts).
+/// For the baked-in text see Docs/onboarding_image_prompts.md. If missing, falls back to a gradient
 enum OnboardingFeedAssets {
     static let good: [HookFeedPost] = [
         HookFeedPost(image: "gym-mirror-female",     username: "@rina_lifts", title: "脚の日は逃げない。今日も潰してきた", likes: 214, comments: 18),
@@ -217,26 +222,27 @@ enum OnboardingFeedAssets {
         HookFeedPost(image: "study-cafe-coffee",     username: "@mari_reads", title: "カフェで2時間。集中できた",         likes: 121, comments: 9),
         HookFeedPost(image: "business-stock-chart",  username: "@invest_k",   title: "淡々と積み立てるだけ",              likes: 88,  comments: 5)
     ]
-    /// モデレーションページに出す「削除対象」9枚 (2026-07-29 ユーザー支給の新素材に全面差し替え。
-    /// 旧6枚は日本語焼き込み入りで海外ユーザーに不自然だった → 新素材は全てテキスト無しの
-    /// 日英共通。並びは同カテゴリが隣接しないよう 酒/ギャンブル/ジャンク/遊び/夜更かし を交互配置)
+    /// 9 "to be removed" images shown on the moderation page (fully replaced on 2026-07-29 with new
+    /// material provided by the user. The old 6 had Japanese text baked in and looked unnatural to overseas
+    /// users → the new material has no text at all and is shared by JP/EN. They are ordered so that the
+    /// same category is never adjacent: alcohol/gambling/junk food/play/staying up late alternate)
     static let moderate: [String] = [
-        "moderate-izakaya-beer",      // 居酒屋ビール乾杯 (JP)
-        "moderate-pachinko",          // パチンコ (ギャンブル)
-        "moderate-burger-drivethru",  // 車内バーガー
-        "moderate-karaoke",           // カラオケ
-        "moderate-party-cups",        // ハウスパーティー赤カップ (海外)
-        "moderate-ramen-jiro",        // 二郎系ラーメン (JP)
-        "moderate-bowling",           // ボウリング
-        "moderate-movie-popcorn",     // 夜更かし映画+ポップコーン
-        "moderate-pizza-night"        // ピザ+映画
+        "moderate-izakaya-beer",      // Izakaya beer toast (JP)
+        "moderate-pachinko",          // Pachinko (gambling)
+        "moderate-burger-drivethru",  // Burger in a car
+        "moderate-karaoke",           // Karaoke
+        "moderate-party-cups",        // House party red cups (overseas)
+        "moderate-ramen-jiro",        // Jiro-style ramen (JP)
+        "moderate-bowling",           // Bowling
+        "moderate-movie-popcorn",     // Late-night movie + popcorn
+        "moderate-pizza-night"        // Pizza + movie
     ]
-    // 旧アセット (moderate-drinking-izakaya-toast / moderate-junkfood-burger /
+    // Old assets (moderate-drinking-izakaya-toast / moderate-junkfood-burger /
     // moderate-game-controller / moderate-drinking-bar / moderate-junkfood-chips /
-    // moderate-game-desk) は未参照のままAssetsに残置 — 削除はユーザー確認後
+    // moderate-game-desk) are left in Assets, unreferenced. Delete only after the user confirms
 }
 
-// MARK: - 2. フィードプレビュー (フック)
+// MARK: - 2. Feed preview (hook)
 
 struct FeedPreviewHookView: View {
     let onStart: () -> Void
@@ -245,19 +251,19 @@ struct FeedPreviewHookView: View {
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
     private var lang: AppLanguage { AppLanguage(rawValue: mainLanguageRaw) ?? .english }
 
-    /// 背景のケンバーンズ (超スローズーム)。onAppear で 1.06→1.0
+    /// Ken Burns effect on the background (very slow zoom). 1.06→1.0 on onAppear
     @State private var backdropSettled = false
     @State private var showWordmark = false
     @State private var showTagline = false
 
     var body: some View {
         ZStack {
-            // ARISE型ヒーロー (2026-07-29 ユーザー指定で全面刷新。参考=海外モチベ系アプリの
-            // ファーストビュー: 雰囲気背景 + 中央に巨大ワードマーク + タグライン + 白ピルCTA)。
-            // 審査演出 (JudgmentFeedView) はモデレ画面へ移設した。
+            // ARISE-style hero (fully renewed 2026-07-29, user-specified. Reference = the first view of overseas
+            // motivation apps: atmospheric background + huge wordmark in the center + tagline + white pill CTA).
+            // The judgment animation (JudgmentFeedView) was moved to the moderation screen.
             heroBackdrop
 
-            // 暗幕: ワードマークとCTAの可読性確保 (上下を締める)
+            // Dark overlay: keeps the wordmark and CTA readable (darkens the top and bottom)
             LinearGradient(
                 colors: [
                     AppColors.background.opacity(0.55),
@@ -270,10 +276,11 @@ struct FeedPreviewHookView: View {
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
-                // 上部: クラシックアイコンの「くり抜き」グリフ (2026-07-29 実機FB5回目で確定:
-                // タイル直置きは「上がアプリアイコンみたいになる」で却下 → 実アイコンPNGから
-                // 輝度→アルファ変換で切り出した真っ白グリフ (HeroClassicGlyph imageset、
-                // 生成スクリプトはPIL・メモリ参照)。本物由来なのでドット比率のズレは構造的に無い
+                // Top: the "cut-out" glyph of the Classic icon (settled in real-device feedback round 5 on 2026-07-29:
+                // placing the tile directly was rejected because "the top looks like an app icon" → a pure white glyph
+                // cut out from the real icon PNG with a luminance→alpha conversion (HeroClassicGlyph imageset, the
+                // generation script is PIL, see memory notes). It comes from the real icon, so by structure the dot
+                // ratios cannot be off
                 Image("HeroClassicGlyph")
                     .resizable()
                     .scaledToFit()
@@ -282,11 +289,12 @@ struct FeedPreviewHookView: View {
 
                 Spacer()
 
-                // 中央: 巨大ワードマーク (Montserrat Black Italic = ARISE系のヘビーイタリック表示体。
-                // OFLライセンス、Resources/Fonts + Info.plist UIAppFonts で登録。
-                // ⚠️ ワードマーク専用 — UI本文には使わない (フォント統一原則はシステムフォントのまま)。
-                // フォント未登録環境では Font.custom が自動でシステムフォントにフォールバックする)
-                // 登場 = ブランドの「ボケ→結像」文法 (blur 8→0 + 沈み 18pt + 0.96→等倍、0.9s)
+                // Center: huge wordmark (Montserrat Black Italic = a heavy italic display face in the ARISE style.
+                // OFL license, registered via Resources/Fonts + Info.plist UIAppFonts.
+                // ⚠️ Wordmark only: do not use it for UI body text (the font consistency rule keeps the system font).
+                // In environments where the font is not registered, Font.custom falls back to the system font
+                // automatically)
+                // Entrance = the brand's "blur → focus" pattern (blur 8→0 + sink 18pt + 0.96→1x, 0.9s)
                 Text("1%")
                     .font(.custom("Montserrat-BlackItalic", size: 104))
                     .foregroundColor(AppColors.textPrimary)
@@ -296,8 +304,9 @@ struct FeedPreviewHookView: View {
                     .scaleEffect(showWordmark ? 1 : 0.96)
                     .offset(y: showWordmark ? 0 : 18)
 
-                // タグライン: 英語=「Not for everyone.」ユーザー確定 (2026-07-29)。
-                // 日本語は検討中のため暫定で同文を使用 — 候補: 「上位1%のためのSNS」(ユーザー発言)
+                // Tagline: English = "Not for everyone.", confirmed by the user (2026-07-29).
+                // Japanese is still under consideration, so the same sentence is used for now. Candidate: "the social
+                // network for the top 1%" (the user's words)
                 Text("Not for everyone.")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundColor(AppColors.textSecondary)
@@ -331,18 +340,19 @@ struct FeedPreviewHookView: View {
                 backdropSettled = true; showWordmark = true; showTagline = true
                 return
             }
-            // 背景: 超スローで寄りが引く (ケンバーンズ)。
-            // 文字: ボケ→結像+浮上を段階的に (2026-07-29 FB「もっと目立つように」→
-            // 時間を伸ばし・ずらしを深く。スプラッシュ廃止でここがアプリの第一声になった)
+            // Background: a very slow zoom out (Ken Burns).
+            // Text: blur → focus + rise, in stages (2026-07-29 feedback "make it stand out more" → longer timing
+            // and deeper staggering. With the splash removed, this became the first thing the app shows)
             withAnimation(.easeOut(duration: 14)) { backdropSettled = true }
             withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.95).delay(0.25)) { showWordmark = true }
             withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.85).delay(0.65)) { showTagline = true }
         }
     }
 
-    /// 背景アート。Assets に "HeroBackdrop" imageset を入れると自動で表示される
-    /// (ユーザーがAI生成予定 2026-07-29)。未投入の間は**動く煙** (HeroSmoke.metal の
-    /// 手続き生成FBM、動画アセット不要・無限ループ) + 中央のかすかなグロウでフォールバック
+    /// Background art. If you add a "HeroBackdrop" imageset to Assets, it is shown automatically
+    /// (the user plans to generate it with AI, 2026-07-29). Until it is added, it falls back to **moving
+    /// smoke** (procedural FBM in HeroSmoke.metal, no video asset needed, infinite loop) + a faint glow in
+    /// the center
     @ViewBuilder
     private var heroBackdrop: some View {
         if UIImage(named: "HeroBackdrop") != nil {
@@ -360,19 +370,20 @@ struct FeedPreviewHookView: View {
     }
 }
 
-// SmokeBackdrop は DesignSystem/Components/SmokeBackdrop.swift へ共有化 (2026-07-30、
-// 公式プロフィールヒーローでも使うため。実装・見た目は不変)
+// SmokeBackdrop was moved to DesignSystem/Components/SmokeBackdrop.swift for sharing (2026-07-30,
+// because it is also used in the official profile hero. Implementation and look unchanged)
 
-/// 実フィード (FeedListCard) に寄せたカードレス投稿UI (ヘッダ=アバター+名前 / 4:5画像 /
-/// 画像内オーバーレイのいいね・コメントアイコン) が縦にゆっくり流れ続ける無限ループ。
+/// An infinite loop where cardless post UI modeled on the real feed (FeedListCard) (header = avatar +
+/// name / 4:5 image / like and comment icons overlaid inside the image) keeps flowing slowly vertically.
 ///
-/// シームレスループの実装: カード列を2セット縦に並べ、1セットぶんの高さ (setHeight) だけ
-/// 等速スクロールしたら offset を 0 に巻き戻す。巻き戻り先 (offset=0, 1セット目の先頭) と
-/// 巻き戻り元 (offset=-setHeight, 2セット目の先頭) はまったく同じ内容なので、切り替わりが
-/// 視覚的に発生しない。ポイントは setHeight が「実際にレイアウトされた1セットの高さ」と
-/// 完全一致していること — 手計算の推定値だとフォント/行間の誤差で数ptズレ、そこで
-/// 一瞬「瞬間移動」して見える。そのため PreferenceKey で1セット目の高さを実測し、
-/// 実測値が届くまでは推定値をフォールバックとして使う。
+/// Seamless loop implementation: stack 2 sets of the card column vertically, and after scrolling at a
+/// constant speed by exactly one set's height (setHeight), rewind offset to 0. The rewind target
+/// (offset=0, top of set 1) and the rewind source (offset=-setHeight, top of set 2) have exactly the
+/// same content, so no switch is visible. The key point is that setHeight must match "the actually
+/// laid-out height of one set" exactly: a hand-calculated estimate is off by a few pt because of
+/// font/line-spacing errors, and at that point it looks like it "teleports" for a moment. So the height
+/// of set 1 is measured with a PreferenceKey, and the estimate is used as a fallback until the measured
+/// value arrives.
 private struct FeedMarquee: View {
     let posts: [HookFeedPost]
 
@@ -380,16 +391,17 @@ private struct FeedMarquee: View {
     private let hPadding: CGFloat = 16
     private var duration: Double { Double(posts.count) * 4.6 }
 
-    /// アニメーションの起点時刻。context.date (壁時計) をそのまま使わず経過時間に変換することで、
-    /// 大きな絶対時刻値による浮動小数点誤差の余地をなくす
+    /// Start time of the animation. Converting context.date (wall clock) to elapsed time instead of using it
+    /// as is removes room for floating-point error from large absolute time values
     @State private var startDate = Date()
-    /// 1セットの実測高さ。届くまでは推定値 (下記 estimatedSetHeight) をフォールバック表示に使う
+    /// Measured height of one set. Until it arrives, the estimate (estimatedSetHeight below) is used for the
+    /// fallback display
     @State private var measuredSetHeight: CGFloat?
 
     var body: some View {
         GeometryReader { geo in
             let cardW = geo.size.width - hPadding * 2
-            // 画像は 4:5。カード高さ推定 = ヘッダ(~42: アバター30+スペーシング) + 画像(cardW*5/4)
+            // Images are 4:5. Card height estimate = header (~42: avatar 30 + spacing) + image (cardW*5/4)
             let imgH = cardW * 5.0 / 4.0
             let estimatedSetHeight = CGFloat(posts.count) * (imgH + 42 + gap)
             let setHeight = measuredSetHeight ?? estimatedSetHeight
@@ -424,7 +436,8 @@ private struct FeedMarquee: View {
         .padding(.horizontal, hPadding)
     }
 
-    /// 1セット目相当。実際にレイアウトされた高さを PreferenceKey 経由で測って measuredSetHeight に反映する
+    /// Equivalent to set 1. Measures the actually laid-out height via a PreferenceKey and reflects it into
+    /// measuredSetHeight
     private func measuredCardStack(imgW: CGFloat, imgH: CGFloat) -> some View {
         cardStack(imgW: imgW, imgH: imgH)
             .background(
@@ -438,7 +451,7 @@ private struct FeedMarquee: View {
     }
 }
 
-/// FeedMarquee の1セットぶんの実測高さを子から親へ伝えるための PreferenceKey
+/// PreferenceKey that passes the measured height of one FeedMarquee set from child to parent
 private struct MarqueeSetHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
@@ -446,26 +459,30 @@ private struct MarqueeSetHeightKey: PreferenceKey {
     }
 }
 
-/// 実フィード (FeedListCard, 2026-07-10 カードレス仕様) の視覚文法を踏襲したカード:
-/// ヘッダ (アバター+名前) は画像の外・上に置く、カード背景/枠線は持たない、
-/// 角丸18は画像だけが持つ、画像は fit+同画像ぼかし埋め、いいね♥/コメント💬は
-/// 画像内右下にアイコンのみでオーバーレイ、画像内左下に「例」バッジ。
-/// アバターはユーザー提供予定 (asset があれば表示、無ければプレースホルダ)。ネットワークなし、自己完結。
-/// 2026-09-26: 捏造した反応数 (いいね 数百〜約8万 / コメント 数十〜約4,200) の表示を撤去し、
-/// 左下のバッジを「例」表記に置き換えた (実在の投稿・反応に見せない。数字は別の値で埋めない)
+/// A card that follows the visual style of the real feed (FeedListCard, 2026-07-10 cardless spec):
+/// the header (avatar + name) is placed outside and above the image, no card background/border,
+/// only the image has rounded corners 18, the image is fit + blurred fill of the same image, like ♥ /
+/// comment 💬 are overlaid as icons only at the bottom right inside the image, and an "例" ("Example")
+/// badge sits at the bottom left inside the image.
+/// Avatars will be provided by the user (shown if the asset exists, otherwise a placeholder). No
+/// network, self-contained.
+/// 2026-09-26: removed the display of made-up reaction counts (likes from a few hundred to about
+/// 80,000 / comments from a few dozen to about 4,200), and replaced the bottom-left badge with the "例"
+/// ("Example") label (so it does not look like real posts/reactions. The numbers are not filled with
+/// other values)
 private struct HookPostCard: View {
     let post: HookFeedPost
     let imgW: CGFloat
     let imgH: CGFloat
 
-    // 「例」バッジの言語出し分け用: FeedPreviewHookView と同じ AppStorage キーを直接読む
-    // (init シグネチャは変更しない = lang を引数追加しない)
+    // For choosing the language of the "例" ("Example") badge: reads the same AppStorage key as
+    // FeedPreviewHookView directly (the init signature is not changed = lang is not added as an argument)
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
     private var lang: AppLanguage { AppLanguage(rawValue: mainLanguageRaw) ?? .english }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // ヘッダ: アバター + ユーザー名 (画像の外。カードレスなので背景/枠線を持たない)
+            // Header: avatar + user name (outside the image. Cardless, so no background/border)
             HStack(spacing: 9) {
                 avatar
                 Text(post.username)
@@ -475,15 +492,17 @@ private struct HookPostCard: View {
             }
             .padding(.horizontal, 2)
 
-            // 4:5 の画像枠。画像は全体を見せる (見切れさせない = scaledToFit)。
-            // 余白は同じ画像のぼかしで埋める (黒帯を出さない IG/BeReal 式)。角丸は画像だけが持つ
+            // 4:5 image frame. The whole image is shown (not cut off = scaledToFit).
+            // The remaining space is filled with a blur of the same image (IG/BeReal style with no black bars).
+            // Only the image has rounded corners
             ZStack {
                 if UIImage(named: post.image) != nil {
                     Image(post.image).resizable().scaledToFill()
                         .frame(width: imgW, height: imgH).clipped().blur(radius: 18).opacity(0.55)
-                        // ぼかしは TimelineView 30fps 駆動のマルキーで毎フレーム再計算される GPU コストが大きいため、
-                        // このレイヤーだけ Metal オフスクリーンで一度だけラスタライズする
-                        // (S16 の 10fps 事故と同系統のコスト。見た目は不変、このレイヤーのみ影響。FeedListCard.swift の imageFitBlur と同じパターン)
+                        // The blur is recomputed every frame by the marquee driven by TimelineView at 30fps and its GPU cost
+                        // is high, so only this layer is rasterized once offscreen with Metal
+                        // (the same kind of cost as the S16 10fps incident. Looks the same, affects only this layer. Same
+                        // pattern as imageFitBlur in FeedListCard.swift)
                         .drawingGroup()
                     Image(post.image).resizable().scaledToFit()
                         .frame(width: imgW, height: imgH)
@@ -501,9 +520,10 @@ private struct HookPostCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// 画像内左下: 「例」バッジ (旧いいね数バッジと同じ位置・見た目。2026-09-26 に数字を撤去)
+    /// Bottom left inside the image: "例" ("Example") badge (same position and look as the old like-count
+    /// badge. The number was removed on 2026-09-26)
     private var exampleBadge: some View {
-        Text(lang == .japanese ? "例" : "Example") // 文言はユーザー添削待ち
+        Text(lang == .japanese ? "例" : "Example") // Text waiting for user review
             .font(.system(size: 13, weight: .bold))
             .foregroundColor(.white)
             .padding(.horizontal, 10)
@@ -512,8 +532,8 @@ private struct HookPostCard: View {
             .padding(10)
     }
 
-    /// 画像内右下: いいね + コメント (実フィードと同じ BeReal 式アイコンのみオーバーレイ)。
-    /// アイコン下のカウント数字 (捏造値) は 2026-09-26 に撤去。数字は出さない
+    /// Bottom right inside the image: like + comment (same BeReal-style icon-only overlay as the real feed).
+    /// The count numbers under the icons (made-up values) were removed on 2026-09-26. No numbers are shown
     private var actionIcons: some View {
         VStack(spacing: 10) {
             VStack(spacing: 2) {
@@ -544,7 +564,7 @@ private struct HookPostCard: View {
             Image(name).resizable().scaledToFill()
                 .frame(width: 30, height: 30).clipShape(Circle())
         } else {
-            // ユーザーがアイコンを送るまでのプレースホルダ (名前頭文字)
+            // Placeholder until the user sends icons (initial of the name)
             Circle()
                 .fill(AppColors.secondaryBackground)
                 .frame(width: 30, height: 30)

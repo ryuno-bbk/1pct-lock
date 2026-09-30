@@ -2,14 +2,16 @@
 //  MixedFeedView.swift
 //  AppBlocker
 //
-//  混在フィード (公式 quotes + UGC user_posts)。上部に「おすすめ / フォロー中」セグメント。
-//  2026-07-10 BeReal 風改修: 全画面 TikTok ページング → FeedCardListView (4:5 カードリスト)。
-//  カード実装 / モデレーションメニュー / コメントページ遷移はすべて FeedCardListView に集約。
+//  Mixed feed (official quotes + UGC user_posts). A "おすすめ / フォロー中"
+//  ("Recommended / Following") segment at the top.
+//  2026-07-10 BeReal-style rework: full-screen TikTok paging → FeedCardListView (4:5 card list).
+//  Card implementation / moderation menu / navigation to the comment page all live in FeedCardListView.
 //
 
 import SwiftUI
 
-/// 画像保存失敗時の alert 表示用。`isPermissionError` true なら「設定を開く」ボタンを追加表示する。
+/// For showing the alert when saving an image fails. If `isPermissionError` is true, an extra
+/// "設定を開く" ("Open Settings") button is shown.
 struct SaveImageAlert: Identifiable {
     let id = UUID()
     let message: String
@@ -23,10 +25,10 @@ struct MixedFeedView: View {
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
 
     @State private var selectedSegment: Segment = .recommended
-    /// タブ再タップ更新中に、引っ張って更新と同じ「くるくる」をセグメントバーの下に出す
-    /// (2026-08-04 実機FB)。SwiftUI の refreshable はプログラムから発火できないため
-    /// (公開APIが無い)、同じ見た目を safeAreaInset の高さアニメーションで自前で作る。
-    /// 高さが増える = スクロール領域が押し下げられるので「引っ張られた」見え方になる
+    /// While the tab is being refreshed by a re-tap, show the same spinner as pull-to-refresh under the
+    /// segment bar (2026-08-04 real-device feedback). SwiftUI's refreshable cannot be triggered from code
+    /// (there is no public API), so the same look is built by hand with a height animation of
+    /// safeAreaInset. The height grows = the scroll area is pushed down, so it looks as if it was "pulled"
     @State private var isTabRefreshing = false
 
     enum Segment: Hashable {
@@ -52,14 +54,15 @@ struct MixedFeedView: View {
                     }
                 }
             }
-            // セグメントバーは safeAreaInset で上に固定する。こうすると pull-to-refresh の
-            // くるくるがバーの「下」に出て、おすすめ/フォロー中の文字に被らない (実機FB 2026-07-10)
+            // The segment bar is pinned at the top with safeAreaInset. This way the pull-to-refresh spinner
+            // appears "under" the bar and does not overlap the "おすすめ"/"フォロー中" ("Recommended"/"Following")
+            // labels (real-device feedback 2026-07-10)
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     segmentBar
 
-                    // タブ再タップ更新中のくるくる。バーの「下」に出すのは
-                    // pull-to-refresh の時と同じ位置 (おすすめ/フォロー中の文字に被らない)
+                    // Spinner while the tab is being refreshed by a re-tap. It is shown "under" the bar,
+                    // in the same position as for pull-to-refresh (it does not overlap the Recommended/Following labels)
                     if isTabRefreshing {
                         ProgressView()
                             .tint(.white)
@@ -70,8 +73,8 @@ struct MixedFeedView: View {
                 }
                 .animation(.spring(response: 0.32, dampingFraction: 0.82), value: isTabRefreshing)
             }
-            // 取得失敗を黙って握りつぶさない (2026-07-31)。更新が空振りした時に
-            // 「何も起きない」ではなく理由が出るようにする。数秒で自動的に消える
+            // Do not silently swallow fetch failures (2026-07-31). When a refresh fails, show the reason instead
+            // of "nothing happens". It disappears automatically after a few seconds
             .overlay(alignment: .top) {
                 if let error = feedService.lastFeedError {
                     Text(error)
@@ -92,15 +95,16 @@ struct MixedFeedView: View {
             .animation(.easeOut(duration: 0.2), value: feedService.lastFeedError)
             .navigationBarHidden(true)
         }
-        // 選択中のフィードタブ再タップ → 表示中セグメントを引っ張って更新と同じ内容で再取得
-        // (2026-08-04 ユーザー要望)。取得関数は refreshable が呼ぶものと同一。
-        // 通知は「既にフィードタブにいる時」しか飛ばないので、裏のタブで受けることはない
+        // Re-tap of the selected feed tab → re-fetch the visible segment with the same content as
+        // pull-to-refresh (2026-08-04 user request). The fetch function is the same one refreshable calls.
+        // The notification is only sent "when already on the feed tab", so it is never received in a
+        // background tab
         .onReceive(NotificationCenter.default.publisher(for: .reloadFeedTab)) { _ in
             reloadCurrentSegment()
         }
         .task {
-            // おすすめ / フォロー中 / 累計ロック統計は互いに独立しているので並列に読み込む
-            // (直列だと合計待ち時間が3つの合計になり、初回表示が体感で遅い)
+            // Recommended / Following / total lock stats are independent of each other, so load them in parallel
+            // (in series, the total wait would be the sum of all 3, and the first display feels slow)
             async let recommended: Void = feedService.recommendedFeed.isEmpty ? feedService.loadRecommended() : ()
             async let following: Void = feedService.followingFeed.isEmpty ? feedService.loadFollowing() : ()
             async let stats: Void = sessionTracker.loadStats()
@@ -116,18 +120,22 @@ struct MixedFeedView: View {
                 segmentButton(.recommended, title: L.feedRecommended(lang))
                 segmentButton(.following,   title: L.feedFollowing(lang))
             }
-            // ストリークバッジはフィードには置かない (ユーザー指定 2026-07-06: タイマーとマイページのみ)
-            // 虫眼鏡ボタンは 2026-07-15 検索タブ (SearchView) 新設に伴い撤去
+            // No streak badge in the feed (user-specified 2026-07-06: only on the timer and My Page)
+            // The magnifying glass button was removed on 2026-07-15 when the search tab (SearchView) was added
         }
-        // 虫眼鏡撤去時に幅を張っていた HStack{Spacer()} も消えてバーがラベル幅まで縮み、
-        // 黒背景が全幅に届かない退行が出た (実機FB第11弾 2026-07-16)。明示的に全幅へ戻す
+        // When the magnifying glass was removed, the HStack{Spacer()} that stretched the width was also
+        // removed, so the bar shrank to the label width and the black background did not reach the full
+        // width, a regression (real-device feedback round 11, 2026-07-16). Set it back to full width explicitly
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
         .padding(.top, 4)
         .padding(.bottom, 8)
-        // 実機FB第14弾 (2026-07-16): 背景帯は完全廃止して透明に (ユーザー第一案)。
-        // マテリアル (第12弾) は灰色に濁り、黒スクリム (第13弾) は帯の境界線が見えて両方不合格。
-        // 文字は segmentButton 内の黒シャドウで立たせる (TikTok と同じ構造 = 帯の境界問題が構造的に消える)
+        // Real-device feedback round 14 (2026-07-16): the background band was removed entirely and made
+        // transparent (the user's first choice).
+        // The material (round 12) turned a muddy gray, and the black scrim (round 13) showed the band's border
+        // line; both failed.
+        // The text stands out with a black shadow inside segmentButton (same structure as TikTok = the band
+        // border problem disappears by structure)
     }
 
     private func segmentButton(_ segment: Segment, title: String) -> some View {
@@ -161,14 +169,14 @@ struct MixedFeedView: View {
         } else {
             FeedCardListView(
                 items: feedService.recommendedFeed,
-                recordsViews: false,  // ホームのスクロール通過は「タップ」ではない (post_views 汚染防止)
+                recordsViews: false,  // Scrolling past posts on home is not a "tap" (prevents polluting post_views)
                 onBlocked: { reloadBothFeeds() },
-                // タブ再タップ更新中 (isTabRefreshing) の引き下げは取得をスキップする
-                // (2026-08-04 レビュー指摘: ガード無しだと同じ取得が並行2本走り、
-                //  last-writer-wins でリストが2回入れ替わって見える。どうせ同じデータを
-                //  取りに行っている最中なので、くるくるだけ見せて2本目は投げない)
+                // Skip the fetch on pull-down while the tab is being refreshed by a re-tap (isTabRefreshing)
+                // (2026-08-04 review finding: without the guard, the same fetch runs twice in parallel,
+                //  and with last-writer-wins the list looks like it is replaced twice. We are already fetching
+                //  the same data anyway, so only show the spinner and do not send a second one)
                 onRefresh: { if !isTabRefreshing { await feedService.loadRecommended() } },
-                showsAds: true  // 広告はホームフィード限定 (2026-07-31 広告v1)
+                showsAds: true  // Ads only in the home feed (2026-07-31 ads v1)
             )
         }
     }
@@ -184,18 +192,19 @@ struct MixedFeedView: View {
         } else {
             FeedCardListView(
                 items: feedService.followingFeed,
-                recordsViews: false,  // ホームのスクロール通過は「タップ」ではない (post_views 汚染防止)
+                recordsViews: false,  // Scrolling past posts on home is not a "tap" (prevents polluting post_views)
                 onBlocked: { reloadBothFeeds() },
-                // おすすめ側と同じ二重取得ガード (2026-08-04 レビュー指摘)
+                // Same double-fetch guard as the Recommended side (2026-08-04 review finding)
                 onRefresh: { if !isTabRefreshing { await feedService.loadFollowing() } },
-                showsAds: true  // 広告はホームフィード限定 (2026-07-31 広告v1)
+                showsAds: true  // Ads only in the home feed (2026-07-31 ads v1)
             )
         }
     }
 
-    /// 表示中のセグメントだけを再取得する (タブ再タップ用)。
-    /// FeedService 側に多重実行ガードが無く、タブは連打しやすいので取得中は無視する。
-    /// 取得中は isTabRefreshing でくるくるを出す (見た目は pull-to-refresh と同じ)。
+    /// Re-fetch only the visible segment (for a tab re-tap).
+    /// FeedService has no guard against concurrent runs, and the tab is easy to tap repeatedly, so taps are
+    /// ignored while fetching.
+    /// While fetching, isTabRefreshing shows the spinner (same look as pull-to-refresh).
     private func reloadCurrentSegment() {
         guard !isTabRefreshing else { return }
         let feedIsEmpty: Bool
@@ -208,19 +217,20 @@ struct MixedFeedView: View {
             feedIsEmpty = feedService.followingFeed.isEmpty
         }
 
-        // 空フィードの時はバー下のくるくるを出さない (2026-08-04 レビュー指摘:
-        // isLoading && isEmpty で中央の loadingView が出るため、両方出すと2枚になる)
+        // Do not show the spinner under the bar when the feed is empty (2026-08-04 review finding:
+        // isLoading && isEmpty shows the loadingView in the center, so showing both would make 2 spinners)
         isTabRefreshing = !feedIsEmpty
-        // 取得は非構造化 Task で行う (FeedCardListView の refreshable と同じ理由:
-        // ビュー再構成で URLSession ごとキャンセルされるのを避ける)
+        // The fetch runs in an unstructured Task (same reason as refreshable in FeedCardListView:
+        // avoids being canceled together with the URLSession when the view is rebuilt)
         Task {
             let started = Date()
             switch selectedSegment {
             case .recommended: await feedService.loadRecommended()
             case .following:   await feedService.loadFollowing()
             }
-            // 取得が速すぎるとくるくるが瞬きのように消えるので最低 0.6 秒は見せる
-            // (refreshable 側の 0.5 秒と同じ思想。こちらは指を離す待ちが無いぶん少し長く)
+            // If the fetch is too fast, the spinner disappears like a blink, so show it for at least 0.6 seconds
+            // (same idea as the 0.5 seconds on the refreshable side. A bit longer here because there is no wait
+            // for the finger to lift)
             let elapsed = Date().timeIntervalSince(started)
             if elapsed < 0.6 {
                 try? await Task.sleep(nanoseconds: UInt64((0.6 - elapsed) * 1_000_000_000))
@@ -279,7 +289,7 @@ struct MixedFeedView: View {
     }
 }
 
-// MARK: - Tag Feed View (ハッシュタグタップ → タグ別混在フィード)
+// MARK: - Tag Feed View (hashtag tap → mixed feed per tag)
 
 struct TagFeedView: View {
     let tag: String
@@ -304,8 +314,8 @@ struct TagFeedView: View {
             } else {
                 FeedCardListView(
                     items: items,
-                    recordsViews: false,  // タグ別フィードもスクロール一覧であり投稿詳細タップではない
-                    onTagTapOverride: { _ in /* タグフィード内は何もしない */ },
+                    recordsViews: false,  // The per-tag feed is also a scrolling list, not a tap on a post detail
+                    onTagTapOverride: { _ in /* do nothing inside the tag feed */ },
                     onBlocked: {
                         let currentTag = tag
                         Task { items = await FeedService.shared.fetchTagFeed(tag: currentTag) }

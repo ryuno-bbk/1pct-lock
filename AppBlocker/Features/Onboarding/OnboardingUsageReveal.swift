@@ -2,92 +2,103 @@
 //  OnboardingUsageReveal.swift
 //  AppBlocker
 //
-//  診断オンボーディング NEW ステップ (2026-07 再設計): Q3 (1日時間) の直後に挿入。
-//  実測スクリーンタイムは DeviceActivityReport (UsageReportExtension) が拡張の中で描画する
-//  (実測値は拡張の外に持ち出せない)。本ファイルはその埋め込みと、拡張が描画されない時の
-//  フォールバック表示を持つ。
+//  Diagnostic onboarding NEW step (2026-07 redesign): inserted right after Q3 (daily hours).
+//  The measured Screen Time is drawn by DeviceActivityReport (UsageReportExtension) inside the extension
+//  (measured values cannot be taken out of the extension). This file holds that embedding and the
+//  fallback display for when the extension does not render.
 //
-//  内部フロー (すべて1つの OnboardingStep 内の @State phase で進行):
-//    PHASE 1 loading  — 1% モノグラムのスプラッシュ演出 (「分析中…」の脈動ドットは廃止)
-//    PHASE 2 reveal   — 予想 vs 実際の比較 (拡張) → CTA で進む
-//    PHASE 3 topApps  — 使用量トップ3 (拡張) → onContinue()
+//  Internal flow (everything runs on @State phase inside one OnboardingStep):
+//    PHASE 1 loading  : 1% monogram splash animation (the pulsing "Analyzing..." dots were removed)
+//    PHASE 2 reveal   : guess vs actual comparison (extension) → go forward with the CTA
+//    PHASE 3 topApps  : top 3 apps by usage (extension) → onContinue()
 //
-//  実測データが遅い/取得不可の場合のフォールバックは実データを一切持たない:
-//  reveal は本人の予想 (Q3 の回答) だけを「自分の予想」として出し、topApps は
-//  topAppsCard の中身 (skeletonBarWidthRatios、ニュートラルなスケルトン行) を出す。
-//  2026-09-26: 旧フォールバックの「自己申告 × 2.2 を実際の使用時間とした比較チャート」と
-//  「予想より多く使っています」見出しは捏造値だったため撤去。
+//  The fallback for slow or unavailable measured data holds no real data at all:
+//  reveal shows only the user's own guess (the Q3 answer) as "自分の予想" ("Your guess"), and topApps
+//  shows the content of topAppsCard (skeletonBarWidthRatios, neutral skeleton rows).
+//  2026-09-26: removed the old fallback's "comparison chart that treated self-report × 2.2 as the actual
+//  usage time" and the "予想より多く使っています" ("You use it more than you expected") heading,
+//  because they were fabricated values.
 //
 
 import SwiftUI
 import DeviceActivity
 
 struct UsageRevealStepView: View {
-    /// Q3 (1日何時間スマホを見ているか) の回答。拡張へ渡す予想値と、
-    /// 拡張が描画されない時のフォールバック表示 (自分の予想) に使う
+    /// Answer to Q3 (how many hours a day you look at your phone). Used for the guess value passed to the
+    /// extension, and for the fallback display (your guess) when the extension does not render
     let dailyHours: QuizDailyHours?
     let onContinue: () -> Void
 
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
     @State private var phase: RevealPhase = .loading
 
-    /// reveal フェーズのフォールバック表示 (自己申告の予想のみ) の不透明度。
-    /// 実機で「棒グラフ出現の瞬間、捏造値(16h)のプレースホルダー棒が0.1秒だけ見えてから
-    /// 実測レポートに置き換わる」フリッカーが報告された (2026-07-17)。原因はプレースホルダーが
-    /// 即時表示されるのに対し、上に重なる DeviceActivityReport (拡張) の描画完了がわずかに
-    /// 遅れること。対策として reveal 突入直後は不透明度0で隠し、拡張が普通に描画を終える
-    /// であろう時間 (約0.8秒) が過ぎてから初めてフェードインさせる。
-    /// → 拡張が通常どおり描画される限り、このプレースホルダーはユーザーの目に一切触れない。
-    /// 拡張の描画が遅い/失敗した場合だけ、0.8秒後にフォールバックとして現れる。
-    /// 2026-09-26: 捏造値 (自己申告×2.2) の棒は撤去し、中身は本人の予想だけになった。
-    /// 拡張より先に別の画面が一瞬見えるフリッカー自体は同じく起きうるので、遅延はそのまま維持。
-    /// topApps 側のニュートラルなスケルトンは「読み込み中」の表現として正当なので対象外 (即時表示のまま)
+    /// Opacity of the fallback display in the reveal phase (self-reported guess only).
+    /// A flicker was reported on a real device (2026-07-17): "the moment the bar chart appears, a placeholder
+    /// bar with a fabricated value (16h) is visible for 0.1 seconds, then it is replaced by the measured
+    /// report". The cause: the placeholder is shown immediately, while the DeviceActivityReport (extension)
+    /// on top of it finishes drawing slightly later. As a fix, right after entering reveal we hide it with
+    /// opacity 0, and fade it in only after the time the extension would normally need to finish drawing
+    /// (about 0.8 seconds).
+    /// → As long as the extension draws normally, the user never sees this placeholder at all.
+    /// Only when the extension draws slowly or fails does it appear as a fallback after 0.8 seconds.
+    /// 2026-09-26: the bar with the fabricated value (self-report × 2.2) was removed; it now holds only the
+    /// user's guess. The flicker itself (another view visible for a moment before the extension) can still
+    /// happen, so the delay is kept as is.
+    /// The neutral skeleton on the topApps side is a legitimate "loading" display, so it is excluded (still
+    /// shown immediately)
     @State private var revealPlaceholderOpacity: Double = 0
 
-    /// レポート層 (DeviceActivityReport) の不透明度。
-    /// reveal→topApps の context 切替時、拡張が新シーンを描き終わるまで古い比較チャート
-    /// (実測値の棒) が 0.1 秒ほど残って見える実機FB (2026-07-17) → 切替の間だけレポート層を
-    /// 隠し、下の topApps スケルトン (正当な読み込み表現) を見せてから再フェードインする
+    /// Opacity of the report layer (DeviceActivityReport).
+    /// Real-device feedback (2026-07-17): on the reveal→topApps context switch, the old comparison chart
+    /// (measured bars) stays visible for about 0.1 seconds until the extension finishes drawing the new
+    /// scene → hide the report layer only during the switch, show the topApps skeleton below (a legitimate
+    /// loading display), then fade it back in
     @State private var reportOpacity: Double = 1
 
-    /// レポートのマウントはステップ遷移アニメーション (スライド+フェード 0.42s) の完了後に遅らせる。
-    /// SwiftUI の opacity は ZStack の子それぞれに乗算適用されるため、遷移フェード中は
-    /// 「不透明なはずのローディング幕」も半透明になり、下にマウント済みのレポート (暖機中の
-    /// 拡張が前回パスの描画を即時表示することがある) が一瞬透けて見える (2026-07-25 実機FB:
-    /// 解析中へ遷移する瞬間のヒストグラムのチラつき)。遷移完了後にマウントすれば構造的に起きない
+    /// Delay mounting the report until the step transition animation (slide + fade 0.42s) finishes.
+    /// SwiftUI opacity is multiplied into each child of the ZStack, so during the transition fade even the
+    /// "loading curtain that should be opaque" becomes semi-transparent, and the report already mounted
+    /// below it (a warmed-up extension may show the previous pass's drawing immediately) shows through for
+    /// a moment (2026-07-25 real-device feedback: histogram flicker at the moment of the transition to
+    /// analyzing). If we mount after the transition finishes, this cannot happen by structure
     @State private var reportMounted = false
 
     private var lang: AppLanguage { AppLanguage(rawValue: mainLanguageRaw) ?? .english }
 
     private enum RevealPhase { case loading, reveal, topApps }
 
-    // MARK: - 予想 (自己申告)
+    // MARK: - Guess (self-reported)
 
-    /// 自己申告の1日時間 (中央値)
+    /// Self-reported daily hours (median)
     private var estimateDailyHours: Double { dailyHours?.medianHours ?? 4 }
 
-    /// フォールバック表示に出す予想。本人が選んだ選択肢の文言そのもの (例: "4〜6時間")。
-    /// 中央値 (medianHours) は計算用の代表値で本人の回答ではないため、表示には使わない。
-    /// 未回答 (nil) なら値は出さない
+    /// Guess shown in the fallback display. The exact text of the option the user picked
+    /// (e.g. "4〜6時間" ("4-6 hours")).
+    /// The median (medianHours) is a representative value for calculations, not the user's answer, so it is
+    /// not used for display.
+    /// If unanswered (nil), no value is shown
     private var estimateAnswerLabel: String? { dailyHours?.label(lang) }
 
-    // 「実際の使用時間」のプレースホルダ (自己申告 × 2.2、上限16h) と、それを使っていた
-    // 比較チャート・「予想より多く」見出しは 2026-09-26 に撤去 (捏造値のため)。
-    // 実測値は拡張の外に持ち出せないので、拡張が描画されない時に本体側で出せる「実際の値」は無い
+    // The placeholder for "実際の使用時間" ("Actual usage time") (self-report × 2.2, capped at 16h), the
+    // comparison chart that used it, and the "予想より多く" ("More than expected") heading were removed on
+    // 2026-09-26 (because they were fabricated values).
+    // Measured values cannot be taken out of the extension, so when the extension does not render, the
+    // main app has no "actual value" it can show
 
     var body: some View {
         ZStack {
-            // 実測レポート層は「このステップに入った瞬間から常駐」させ、ローディング演出
-            // (2〜3秒) の裏で拡張プロセスを暖機する。
-            // 旧実装は reveal 到達時に初めて DeviceActivityReport をマウントしていたため、
-            // 拡張のコールドスタート描画遅延で 1回目に必ずプレースホルダ (中央グラフ+灰トップ3) が
-            // 見え、トップ3画面へ往復して暖機された2回目でようやく実測レポート (CTA寄りグラフ+
-            // 実アプリ) が出る、という「レイアウトが2つある」ように見える持ち越しバグの原因だった
-            // (2026-07-25 修正)。単一インスタンスのまま context だけ切替える構成は維持
-            // (2個目白紙バグの唯一の回避策)
+            // The measured report layer stays mounted "from the moment this step is entered", so the extension
+            // process warms up behind the loading animation (2-3 seconds).
+            // The old implementation mounted DeviceActivityReport only when reveal was reached. Because of the
+            // extension's cold-start drawing delay, the first time always showed the placeholder (centered chart +
+            // gray top 3), and only the second time, after going to the top-3 screen and back (warmed up), did the
+            // measured report (chart near the CTA + real apps) appear. That was the cause of the carry-over bug
+            // that made it look like "there are two layouts" (fixed 2026-07-25). The setup that keeps a single
+            // instance and switches only the context is kept
+            // (the only workaround for the "second one is blank" bug)
             reportLayer
 
-            // ローディングスプラッシュは不透明オーバーレイ。裏で暖機中のレポートを覆い隠す
+            // The loading splash is an opaque overlay. It covers the report warming up behind it
             if phase == .loading {
                 loadingView
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -96,21 +107,21 @@ struct UsageRevealStepView: View {
             }
         }
         .onAppear {
-            // Report 拡張への入力 (自己申告の予想値+言語) を先に App Group へ書いておく。
-            // ローダーの2〜3秒が拡張のプリウォームも兼ねる
+            // Write the Report extension's input (self-reported guess + language) to the App Group first.
+            // The loader's 2-3 seconds also serve as the extension's prewarm
             AppGroupStorage.shared.saveOnboardingRevealInputs(
                 estimateMinutes: Int((estimateDailyHours * 60).rounded()),
                 languageRaw: lang == .japanese ? "japanese" : "english"
             )
 
-            // レポートはステップ遷移アニメ完了後にマウント (詳細は reportMounted のコメント)。
-            // App Group への入力書き込み (上) より必ず後になるので、拡張は正しい予想値で描画する
+            // Mount the report after the step transition animation finishes (details in the reportMounted comment).
+            // This is always after the App Group input write (above), so the extension draws with the correct guess
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 reportMounted = true
             }
 
             guard phase == .loading else { return }
-            // モノグラム演出を2〜3秒ホールド (Reduce Motion 時は短縮)
+            // Hold the monogram animation for 2-3 seconds (shorter when Reduce Motion is on)
             let delay = UIAccessibility.isReduceMotionEnabled ? 0.4 : Double.random(in: 2.0...3.0)
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 withAnimation(.easeOut(duration: 0.4)) { phase = .reveal }
@@ -118,48 +129,49 @@ struct UsageRevealStepView: View {
         }
     }
 
-    // MARK: - Phase 1: ローディング (モノグラムスプラッシュ)
+    // MARK: - Phase 1: Loading (monogram splash)
 
     private var loadingView: some View {
         VStack(spacing: 28) {
             Spacer()
-            // アプリの実アイコン (1% モノグラム) の静止形に斜めの光帯が走るシマーローダー
-            // (2026-07-17 刷新。旧「2点が跳ねて入れ替わる」はユーザーFBで却下)
+            // Shimmer loader: a diagonal band of light runs across the still form of the app's real icon (1% monogram)
+            // (renewed 2026-07-17. The old "two dots bounce and swap" was rejected by user feedback)
             MonogramSwapLoader(size: 108)
-            // 「解析中」のグロウ文字 (2026-07-17 ユーザー要望。旧「1%」ワードマークを置換 —
-            // モノグラムがブランドを担うので、文字は今なにをしているかを言う)
+            // Glowing "解析中" ("Analyzing") text (2026-07-17 user request. Replaces the old "1%" wordmark:
+            // the monogram carries the brand, so the text says what is happening right now)
             GlowingAnalyzingText(lang: lang)
             Spacer()
         }
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: - Phase 2: 予想 vs 実際
+    // MARK: - Phase 2: Guess vs actual
 
     private var reportLayer: some View {
         VStack(spacing: 0) {
-            // 実測レポート (UsageReportExtension) を最前面に重ねる。
-            // レポートが描画されれば不透明黒背景でプレースホルダを完全に覆い、
-            // 描画されない/遅い場合は下のプレースホルダ (自己申告ベース) が見える。
-            // DeviceActivityReport は単一インスタンスのまま context だけ切り替える
+            // Put the measured report (UsageReportExtension) on the top layer.
+            // When the report renders, its opaque black background fully covers the placeholder;
+            // when it does not render or is slow, the placeholder below (based on the self-report) is visible.
+            // DeviceActivityReport stays a single instance and only its context is switched
             ZStack {
-                // プレースホルダ (拡張未描画時のフォールバック)。暖機済みなら拡張が上を覆う。
-                // loading/reveal は comparison 用プレースホルダを敷く (topApps は topApps 用)
+                // Placeholder (fallback while the extension has not drawn). If warmed up, the extension covers it.
+                // loading/reveal lay down the comparison placeholder (topApps uses the topApps one)
                 if phase == .topApps {
                     placeholderTopAppsContent
                 } else {
-                    // フォールバックのフリッカー対策 (詳細は revealPlaceholderOpacity のコメント)
+                    // Flicker fix for the fallback (details in the revealPlaceholderOpacity comment)
                     placeholderRevealContent
                         .opacity(revealPlaceholderOpacity)
                 }
-                // loading と reveal はどちらも comparison を出し続けるため、loading 中に暖めた
-                // comparison レポートがそのまま reveal で使え、再コールドスタートしない。
-                // topApps への切替は .id で「インスタンスごと再生成」する (2026-07-25 実機FB:
-                // 同一インスタンスの context 差し替えだと初回だけ topApps シーンが描画されず、
-                // 戻って再突入 (=ビュー再生成) すると出る症状 → 再生成が効いている状況証拠。
-                // 同時マウントは常に1個なので「2個目白紙」バグ (2026-07-13) は踏まない。
-                // データクエリはフィルタ同一で暖機済みのため再描画は速く、切替中の空白は
-                // 下のスケルトン+reportOpacity の演出が既にカバーしている)
+                // loading and reveal both keep showing comparison, so the comparison report warmed up during loading
+                // is used as is in reveal, with no second cold start.
+                // Switching to topApps recreates the whole instance with .id (2026-07-25 real-device feedback:
+                // when only the context of the same instance was replaced, the topApps scene did not render the first
+                // time only, and it appeared after going back and entering again (= view recreated) → circumstantial
+                // evidence that recreating works.
+                // Only one is ever mounted at a time, so we do not hit the "second one is blank" bug (2026-07-13).
+                // The data query uses the same filter and is already warm, so redraw is fast, and the blank moment
+                // during the switch is already covered by the skeleton below + the reportOpacity animation)
                 if reportMounted {
                     usageReport(.init(phase == .topApps ? "onboardingTopApps" : "onboardingComparison"))
                         .id(phase == .topApps ? "report-topApps" : "report-comparison")
@@ -176,17 +188,18 @@ struct UsageRevealStepView: View {
                 }
             }
 
-            // CTA は常設し、ローディング中は opacity で隠すだけにする (2026-07-25 レビュー修正)。
-            // `if` で外すと loading→reveal でレポート層の高さが CTA 分変わり、
-            // 暖機したレイアウトと表示レイアウトのサイズがズレる (拡張のリモートビューが
-            // フェード中に再レイアウトされてガタつくリスク)。枠を固定して暖機を表示サイズと一致させる
+            // The CTA is always present; during loading it is only hidden with opacity (2026-07-25 review fix).
+            // If it is removed with `if`, the report layer's height changes by the CTA's height on loading→reveal,
+            // and the warmed-up layout and the displayed layout differ in size (risk that the extension's remote
+            // view re-lays out and jitters during the fade). Fix the frame so the warm-up matches the display size
             PrimaryButton(lang == .japanese ? "次へ" : "Next") {
                 if phase == .reveal {
-                    // context 切替フリッカー対策 (詳細は reportOpacity のコメント):
-                    // ①レポート層を隠す → ②phase 切替 (下はスケルトンが見える) →
-                    // ③新シーンの描画が終わる頃に再フェードイン。
-                    // レポートを消す前にプレースホルダを即座に 0 へ (2026-07-25 実機FB:
-                    // レポートのフェードアウトで下のフォールバック (当時は捏造値チャート 11h 等) が一瞬露出していた)
+                    // Flicker fix for the context switch (details in the reportOpacity comment):
+                    // ① hide the report layer → ② switch phase (the skeleton below is visible) →
+                    // ③ fade back in around when the new scene finishes drawing.
+                    // Set the placeholder to 0 immediately, before hiding the report (2026-07-25 real-device feedback:
+                    // the report's fade-out briefly exposed the fallback below (at the time, a fabricated-value chart
+                    // such as 11h))
                     revealPlaceholderOpacity = 0
                     withAnimation(.easeOut(duration: 0.1)) { reportOpacity = 0 }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
@@ -206,14 +219,16 @@ struct UsageRevealStepView: View {
         }
     }
 
-    /// 自己申告のみのフォールバック表示 (レポート未描画時)。実測が無いので「実際の使用時間」・
-    /// 「予想より多く」・比較チャートは出さず、本人の予想だけを「自分の予想」として見せる (2026-09-26)
+    /// Fallback display with only the self-report (while the report has not drawn). There is no measured
+    /// data, so "実際の使用時間" ("Actual usage time"), "予想より多く" ("More than expected") and the
+    /// comparison chart are not shown; only the user's guess is shown as "自分の予想" ("Your guess")
+    /// (2026-09-26)
     private var placeholderRevealContent: some View {
         VStack(spacing: 0) {
             Spacer().frame(height: 72)
 
             Text(revealHeadline)
-                .font(.system(size: 26, weight: .bold)) // 拡張の見出しと同一書体 (2026-07-27 統一)
+                .font(.system(size: 26, weight: .bold)) // Same typeface as the extension's heading (unified 2026-07-27)
                 .foregroundColor(AppColors.textPrimary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -221,25 +236,30 @@ struct UsageRevealStepView: View {
 
             Spacer()
 
-            // 予想の1本棒のみ (棒の高さは固定で、値を表さない)。旧実装は自己申告×2.2 の捏造値との
-            // 比較チャート / 「実際の使用時間」の1本棒を出していた (2026-09-26 撤去)
+            // Only the single bar for the guess (the bar height is fixed and does not represent the value). The
+            // old implementation showed a comparison chart against the fabricated value (self-report × 2.2) / a
+            // single bar for "実際の使用時間" ("Actual usage time") (removed 2026-09-26)
             SingleUsageBar(valueLabel: estimateAnswerLabel, lang: lang)
 
-            // 拡張の ComparisonReportView と同じ下寄せ (Spacer 44) に揃える。旧実装はここが
-            // 可変 Spacer() でチャートが画面中央に来ていたため、拡張 (CTA寄り) と位置が食い違い
-            // 「グラフの場所が2つある」ように見えていた (2026-07-25 修正)
+            // Match the bottom alignment (Spacer 44) of the extension's ComparisonReportView. In the old
+            // implementation this was a flexible Spacer(), so the chart sat in the center of the screen, did not
+            // match the extension's position (near the CTA), and it looked like "the chart is in two places"
+            // (fixed 2026-07-25)
             Spacer().frame(height: 44)
         }
     }
 
-    // MARK: - 実測レポート埋め込み (UsageReportExtension)
+    // MARK: - Embedded measured report (UsageReportExtension)
 
-    /// 集計期間 (昨日までの丸7日間)。@State で固定して再レンダーごとに DateInterval が変わり
-    /// レポートが再クエリされ続けるのを防ぐ。
-    /// 端を日付境界に揃える理由 (2026-07-19 実機FB「平均が実際より少なく出る」の修正):
-    /// 旧実装は「今この瞬間〜7日前の同時刻」だったため、先頭・末尾に不完全な日 (部分データ) が
-    /// 2つ混ざり、拡張側は日次セグメント数で割るので平均が系統的に低く出ていた。
-    /// 今日 (進行中で不完全) を含めず、日付境界で切った丸7日にすることで正しい1日平均になる
+    /// Aggregation period (7 full days up to yesterday). Fixed with @State so that the DateInterval does
+    /// not change on every re-render and keep re-querying the report.
+    /// Why the ends are aligned to day boundaries (fix for 2026-07-19 real-device feedback "the average
+    /// shows lower than actual"):
+    /// the old implementation used "from this moment to the same time 7 days ago", so two incomplete days
+    /// (partial data) were mixed in at the start and the end, and the extension divides by the number of
+    /// daily segments, so the average came out systematically low.
+    /// Excluding today (in progress and incomplete) and using 7 full days cut at day boundaries gives the
+    /// correct daily average
     @State private var reportInterval: DateInterval = {
         let cal = Calendar.current
         let todayStart = cal.startOfDay(for: Date())
@@ -247,7 +267,8 @@ struct UsageRevealStepView: View {
         return DateInterval(start: start, end: todayStart)
     }()
 
-    /// 過去7日・日次セグメントのフィルタ。Context の rawValue は拡張側の宣言と完全一致必須
+    /// Filter for the past 7 days with daily segments. The Context rawValue must match the extension's
+    /// declaration exactly
     private func usageReport(_ context: DeviceActivityReport.Context) -> some View {
         let filter = DeviceActivityFilter(
             segment: .daily(during: reportInterval),
@@ -259,21 +280,24 @@ struct UsageRevealStepView: View {
     }
 
     private var revealHeadline: String {
-        // フォールバックは実測を持たないので「実際の使用時間」「予想より多く使っています」は出さない
-        // (どちらも実測があって初めて言える文言。出すのは拡張側 TotalActivityView だけ)。
-        // 見出しは既存ラベル「自分の予想」を流用し、新規文言は作らない (2026-09-26)
-        lang == .japanese ? "自分の予想" : "Your guess" // 文言はユーザー添削待ち (既存ラベルの流用)
+        // The fallback has no measured data, so it does not show "実際の使用時間" ("Actual usage time") or
+        // "予想より多く使っています" ("You use it more than you expected")
+        // (both are texts that can only be said with measured data. Only the extension's TotalActivityView
+        // shows them). The heading reuses the existing label "自分の予想" ("Your guess"); no new text is
+        // written (2026-09-26)
+        lang == .japanese ? "自分の予想" : "Your guess" // Text waiting for user review (reuses an existing label)
     }
 
-    // MARK: - Phase 3: 使用量トップ3
+    // MARK: - Phase 3: Top 3 by usage
 
-    /// スケルトン行の名前バー幅比率 (0...1)。以前はここに「YouTube 7時間18分」等の具体的な
-    /// 捏造データを並べていたが、実測レポートの描画が遅れた瞬間にこのプレースホルダが見えると
-    /// 本物のデータと誤認されるリスクがあったため、中身を持たないニュートラルなスケルトン行に
-    /// 変更した (2026-07 クリーンアップ)。行ごとに幅を変えて不揃いなスケルトンらしさだけ残す
+    /// Width ratios (0...1) of the name bars in the skeleton rows. Previously this held concrete fabricated
+    /// data such as "YouTube 7h 18m", but if this placeholder was visible the moment the measured report was
+    /// late to render, there was a risk it would be mistaken for real data, so it was changed to neutral
+    /// skeleton rows with no content (2026-07 cleanup). Each row has a different width, only to keep an
+    /// uneven skeleton look
     private let skeletonBarWidthRatios: [CGFloat] = [0.62, 0.46, 0.52]
 
-    /// プレースホルダ表示 (レポート未描画時のフォールバック)
+    /// Placeholder display (fallback while the report has not drawn)
     private var placeholderTopAppsContent: some View {
         VStack(spacing: 0) {
             Spacer().frame(height: 72)
@@ -313,20 +337,23 @@ struct UsageRevealStepView: View {
     }
 }
 
-// MARK: - 実測レポートの事前暖機 (2026-07-25 実機FB第26弾)
+// MARK: - Prewarming the measured report (2026-07-25 real-device feedback round 26)
 
-/// 生年月日/性別ステップの裏に見えない DeviceActivityReport をマウントし、
-/// 拡張プロセスの起動 + DeviceActivity クエリを事前に済ませておく。
-/// 実機観測: usageReveal 到達時のコールドスタートはローディング演出 (2〜3秒) より遅く、
-/// 1回目は比較チャートすらプレースホルダ (当時は捏造値) のまま + トップ3不発。一度通した「2回目」は
-/// 即描画される → クエリ/プロセスが暖まってさえいれば速い、が事前暖機の根拠。
-/// ⚠️ サイズは 1×1 固定 (2026-07-27 確定): FB27で「縦縮み」の犯人を1×1レイアウトキャッシュと
-/// 誤診して全画面化したが、実態は縮んだグラフ=プレースホルダの別実装 (現在は拡張と完全一致に修正済み)。
-/// しかも全画面化した回はトップ3まで不発に退行 (1×1だったFB27はトップ3成功) → 実績のある1×1へ巻き戻し。
-/// ⚠️ フィルタは UsageRevealStepView.reportInterval / usageReport と完全一致させること
-/// (deviceactivityd のクエリキャッシュを共有させるため)。
-/// ⚠️ マウントは quizBirthDate/quizGender のみ (usageReveal と同時マウントすると
-/// 「2個目が白紙」の既知バグを踏む。間に quizDailyHours を挟んで共存を構造的に防ぐ)
+/// Mount an invisible DeviceActivityReport behind the birth date / gender steps, so that the extension
+/// process launch + the DeviceActivity query are done in advance.
+/// Observed on a real device: the cold start when reaching usageReveal is slower than the loading
+/// animation (2-3 seconds), and the first time even the comparison chart stays the placeholder (a
+/// fabricated value at the time) + the top 3 fails. The "second time", after passing once, draws
+/// immediately → it is fast as long as the query/process is warm; that is the basis for prewarming.
+/// ⚠️ The size is fixed at 1×1 (settled 2026-07-27): in feedback round 27 we misdiagnosed the 1×1
+/// layout cache as the cause of the "vertical shrink" and made it full screen, but in fact the shrunken
+/// chart was a separate implementation of the placeholder (now fixed to match the extension exactly).
+/// Also, the full-screen run regressed so that even the top 3 failed (round 27, which was 1×1,
+/// succeeded on the top 3) → rolled back to the proven 1×1.
+/// ⚠️ The filter must match UsageRevealStepView.reportInterval / usageReport exactly
+/// (so that they share the deviceactivityd query cache).
+/// ⚠️ Mount only on quizBirthDate/quizGender (mounting at the same time as usageReveal hits the known
+/// "second one is blank" bug. quizDailyHours sits in between to prevent coexistence by structure)
 struct UsageReportWarmUpView: View {
     private let interval: DateInterval = {
         let cal = Calendar.current
@@ -345,26 +372,29 @@ struct UsageReportWarmUpView: View {
             )
         )
         .frame(width: 1, height: 1)
-        .opacity(0.02) // 完全 0 だと描画スキップされる可能性があるため僅かに残す (黒背景上で不可視)
+        .opacity(0.02) // Keep a tiny amount because a full 0 may cause drawing to be skipped (invisible on the black background)
         .allowsHitTesting(false)
     }
 }
 
-// MARK: - フォーマットヘルパー
+// MARK: - Format helpers
 
-// (formatDuration / QuizDailyHours.revealRangeLabel は 2026-07-27 の拡張表記統一で死コード化し削除)
-// (reportDurationLabel と比較チャート UsageComparisonChart は 2026-09-26 の捏造値撤去で死コード化し削除。
-//  実測値は拡張の外に出せないため、本体側の比較チャートは捏造値でしか埋められない)
+// (formatDuration / QuizDailyHours.revealRangeLabel became dead code after the 2026-07-27 unification
+// of the extension's notation and were deleted)
+// (reportDurationLabel and the comparison chart UsageComparisonChart became dead code after the
+// 2026-09-26 removal of fabricated values and were deleted.
+//  Measured values cannot be taken out of the extension, so a comparison chart in the main app could
+//  only be filled with fabricated values)
 
-// MARK: - ローダー (% の2点スワップ)
+// MARK: - Loader (swap of the two dots of %)
 
-/// アプリの実アイコン (MonogramMark = 1% モノグラム) と**全く同じジオメトリ**のローダー
-/// (2026-07-17 全面刷新)。旧「%の2点が棒を飛び越えて入れ替わる」演出はユーザーFBで
-/// 「跳ねる・回る系はダサい」と却下 → 動きを「光」だけに絞る:
-/// 静止した 1% モノグラムの上を、斜めの光帯 (シマー) が一定周期で走り抜ける。
-/// 光帯はモノグラム形状でマスクされるため、グリフの中だけが順に光る。
-/// 高級ブランドのスケルトンローディングと同じ文法で、形は一切動かさない。
-/// Reduce Motion 時は静止したモノグラムのみ
+/// A loader with **exactly the same geometry** as the app's real icon (MonogramMark = 1% monogram)
+/// (fully renewed 2026-07-17). The old animation "the two dots of % jump over the bar and swap" was
+/// rejected by user feedback as "bouncing/spinning animations are lame" → the motion is limited to
+/// "light" only: a diagonal band of light (shimmer) runs across the still 1% monogram at a fixed
+/// interval. The light band is masked by the monogram shape, so only the inside of the glyphs lights up
+/// in turn. Same approach as the skeleton loading of luxury brands; the shape never moves.
+/// With Reduce Motion, only the still monogram
 private struct MonogramSwapLoader: View {
     let size: CGFloat
 
@@ -379,8 +409,9 @@ private struct MonogramSwapLoader: View {
                 .opacity(0.9)
 
             if !reduceMotion {
-                // 斜めの光帯。offset をグリフ幅より外→外へ走らせ、repeatForever の
-                // 折り返しジャンプはマスク外で起きるため見えない (ポーズ区間も兼ねる)
+                // Diagonal light band. The offset runs from outside the glyph width to outside on the other side, so
+                // the wrap-around jump of repeatForever happens outside the mask and is not visible (it also serves as
+                // the pause)
                 LinearGradient(
                     stops: [
                         .init(color: .clear, location: 0),
@@ -397,8 +428,8 @@ private struct MonogramSwapLoader: View {
             }
         }
         .frame(width: size, height: size)
-        // ゆっくり呼吸 (2026-07-17 ユーザーFB「アニメーションつけなくていいの?」への追加。
-        // 移動系は使わない原則のまま、スケールの微振動だけ足す)
+        // Slow breathing (added 2026-07-17 in response to user feedback "Shouldn't it have an animation?".
+        // Keeping the rule of no movement-type animation, only a slight scale oscillation is added)
         .scaleEffect(breathe ? 1.025 : 1.0)
         .onAppear {
             guard !reduceMotion else { return }
@@ -412,10 +443,11 @@ private struct MonogramSwapLoader: View {
     }
 }
 
-/// 「解析中」のグロウ文字 (2026-07-17 ユーザー要望)。
-/// 同じ文字列をブラー化した下層を重ね、その不透明度だけを呼吸させて白いハローを作る
-/// (ブラー半径は固定 = 毎フレームのブラー再計算を避ける。blur 負荷の教訓)。
-/// 末尾の3点は解析の進行感として順に点灯する。Reduce Motion 時は静止
+/// Glowing "解析中" ("Analyzing") text (2026-07-17 user request).
+/// A blurred lower layer of the same string is stacked under it, and only its opacity breathes to make
+/// a white halo (the blur radius is fixed = avoids recomputing the blur every frame. A lesson learned
+/// about blur cost).
+/// The three trailing dots light up in order to show analysis progress. Still when Reduce Motion is on
 private struct GlowingAnalyzingText: View {
     let lang: AppLanguage
 
@@ -450,7 +482,7 @@ private struct GlowingAnalyzingText: View {
 
     private var textContent: some View {
         HStack(alignment: .center, spacing: 3) {
-            Text(lang == .japanese ? "解析中" : "Analyzing") // 文言はユーザー添削待ち
+            Text(lang == .japanese ? "解析中" : "Analyzing") // Text waiting for user review
                 .font(.system(size: 16, weight: .semibold))
 
             HStack(spacing: 3) {
@@ -460,17 +492,20 @@ private struct GlowingAnalyzingText: View {
                         .opacity(litDots > i ? 1 : 0.25)
                 }
             }
-            .padding(.top, 6)   // ベースライン付近に揃える
+            .padding(.top, 6)   // Align near the baseline
         }
         .foregroundColor(AppColors.textPrimary)
     }
 }
 
-/// フォールバックの単一バー表示 (本人の予想)。棒の高さは固定で、値を表さない。
-/// ⚠️ 拡張 (TotalActivityView.singleBar) と同一ジオメトリ厳守 (2026-07-27 実機FB: 拡張と寸法が
-/// 食い違うと、プレースホルダが出た時だけ「グラフが縮んでずれる」ように見えた)。拡張側を変えたら追随
+/// Fallback single-bar display (the user's guess). The bar height is fixed and does not represent the
+/// value.
+/// ⚠️ Must keep the same geometry as the extension (TotalActivityView.singleBar) (2026-07-27 real-device
+/// feedback: when the dimensions differed from the extension, the chart seemed to "shrink and shift"
+/// only when the placeholder appeared). If you change the extension side, follow it here
 private struct SingleUsageBar: View {
-    /// 本人が選んだ予想の文言 (例: "4〜6時間")。nil なら値は出さない (枠の高さだけ確保)
+    /// Text of the guess the user picked (e.g. "4〜6時間" ("4-6 hours")). If nil, no value is shown (only
+    /// the frame height is reserved)
     let valueLabel: String?
     let lang: AppLanguage
 
@@ -478,8 +513,8 @@ private struct SingleUsageBar: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            // 2026-09-26: 以前はここに捏造値 (自己申告×2.2) を不可視で置いていた。
-            // 現在は本人の予想をそのまま出す (見出し「自分の予想」の下)
+            // 2026-09-26: previously a fabricated value (self-report × 2.2) was placed here invisibly.
+            // Now the user's guess is shown as is (under the heading "自分の予想" ("Your guess"))
             Text(valueLabel ?? " ")
                 .font(.system(size: 40, weight: .bold))
                 .foregroundColor(AppColors.textPrimary)
@@ -499,17 +534,17 @@ private struct SingleUsageBar: View {
     }
 }
 
-// MARK: - 使用量トップ3 (スケルトン、実測レポート未描画時のフォールバック)
+// MARK: - Top 3 by usage (skeleton, fallback while the measured report has not drawn)
 
-/// トップ3の1行。以前はここに実在するアプリ名 (YouTube 等) + 捏造した使用時間 + 色付き
-/// アイコンタイルを表示していたが、実測レポート (UsageReportExtension) の描画が遅れて
-/// これが一瞬でも見えた場合に「本物のデータ」と誤認されるリスクがあった。
-/// アプリ名/時間/アイコンの色を一切持たないニュートラルな灰色バーのスケルトンに変更し、
-/// レイアウトの footprint (アイコン40x40 / 2行 / バー高6) だけは実データ版と同一に保つ
-/// (2026-07 クリーンアップ)
+/// One row of the top 3. Previously this showed a real app name (YouTube etc.) + a made-up usage time +
+/// a colored icon tile, but if the measured report (UsageReportExtension) was late to draw and this was
+/// visible even for a moment, there was a risk of it being mistaken for "real data".
+/// Changed to a neutral gray-bar skeleton with no app name / time / icon color, while keeping only the
+/// layout footprint (icon 40x40 / 2 lines / bar height 6) identical to the real-data version
+/// (2026-07 cleanup)
 private struct SkeletonTopAppRow: View {
-    /// 名前バーの幅比率 (0...1、行の横幅に対する割合)。行ごとに変えて
-    /// 不揃いなスケルトンらしさだけ残す
+    /// Width ratio of the name bar (0...1, fraction of the row width). Different per row,
+    /// only to keep an uneven skeleton look
     let nameBarWidthRatio: CGFloat
 
     private var skeletonColor: Color { AppColors.textTertiary.opacity(0.18) }

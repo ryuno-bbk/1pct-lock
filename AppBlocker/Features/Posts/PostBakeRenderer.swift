@@ -2,10 +2,10 @@
 //  PostBakeRenderer.swift
 //  AppBlocker
 //
-//  StoryTextEditorView の「次へ」タップ時に呼ばれる焼き込み処理。
-//  編集キャンバス (端末依存サイズ) と同じ構図を width=1080 の固定サイズで再構成し、
-//  ImageRenderer で 1 枚の JPEG に合成する。ImageExportService.swift の
-//  ImageRenderer 利用パターン (scale=1, フレーム固定) に倣う。
+//  Baking process called when "次へ" ("Next") is tapped in StoryTextEditorView.
+//  Rebuilds the same composition as the edit canvas (device-dependent size) at a fixed size of
+//  width=1080, and composites it into one JPEG with ImageRenderer. Follows the ImageRenderer usage
+//  pattern (scale=1, fixed frame) in ImageExportService.swift.
 //
 
 import SwiftUI
@@ -14,11 +14,12 @@ import UIKit
 @MainActor
 enum PostBakeRenderer {
 
-    /// 焼き込み解像度の基準幅 (Instagram Story 等と同じオーダー)
+    /// Base width of the baking resolution (same order as Instagram Story etc.)
     static let renderWidth: CGFloat = 1080
 
-    /// 焼き込みを実行し、(JPEG Data, プレビュー用 UIImage) を返す。
-    /// canvasSize はエディタ画面の GeometryReader サイズ (正規化座標の基準)。
+    /// Runs the bake and returns (JPEG Data, UIImage for preview).
+    /// canvasSize is the GeometryReader size of the editor screen (the basis of the normalized
+    /// coordinates).
     static func bake(
         background: PostBackground,
         overlays: [EditableOverlay],
@@ -38,7 +39,8 @@ enum PostBakeRenderer {
         .environment(\.colorScheme, .dark)
 
         let renderer = ImageRenderer(content: content)
-        // BakeCompositionView 自体が renderSize に .frame されているので scale=1 でちょうど狙った解像度になる
+        // BakeCompositionView itself is framed to renderSize, so scale=1 gives exactly the intended
+        // resolution
         renderer.scale = 1.0
         renderer.isOpaque = true
 
@@ -50,8 +52,8 @@ enum PostBakeRenderer {
     }
 }
 
-/// ImageRenderer に渡す合成 View。scaleEffect は使わず、正規化 fontSize を
-/// renderSize.width から実 pt へ展開して直接描画する (焼き込みボケ防止)。
+/// Composite View passed to ImageRenderer. It does not use scaleEffect; it expands the normalized
+/// fontSize to real pt from renderSize.width and draws directly (prevents blurry baking).
 private struct BakeCompositionView: View {
     let background: PostBackground
     let overlays: [EditableOverlay]
@@ -63,9 +65,9 @@ private struct BakeCompositionView: View {
             backgroundLayer
 
             ForEach(overlays) { overlay in
-                // k = renderSize.width / canvasSize.width。fontSize と同じ倍率で
-                // プレート余白/角丸/シャドウも拡大しないと、エディタで見た比率より
-                // ぎゅっと詰まったプレート/弱いシャドウで焼き込まれる (2026-07-11 修正)
+                // k = renderSize.width / canvasSize.width. Unless the plate padding/corner radius/shadow are scaled
+                // by the same factor as fontSize, the bake comes out with a more cramped plate / weaker shadow
+                // than the proportions seen in the editor (fixed 2026-07-11)
                 let k = canvasSize.width > 0 ? renderSize.width / canvasSize.width : 1
                 let fontPt = canvasSize.width > 0
                     ? CGFloat(overlay.fontSize / Double(canvasSize.width)) * renderSize.width
@@ -86,8 +88,8 @@ private struct BakeCompositionView: View {
     private var backgroundLayer: some View {
         switch background {
         case .photo(let image):
-            // 4:5 キャンバスをフィル (aspectFill + クロップ)。エディタと同じ見た目で焼き込む。
-            // canvasSize が 4:5 のため renderSize も 4:5 (1080×1350) になり、カメラ写真は余白なく焼ける
+            // Fill the 4:5 canvas (aspectFill + crop). Bakes with the same look as the editor.
+            // canvasSize is 4:5, so renderSize is also 4:5 (1080×1350), and camera photos bake with no margins
             ZStack {
                 Color.black
                 Image(uiImage: image)

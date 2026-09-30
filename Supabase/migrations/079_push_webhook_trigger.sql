@@ -1,30 +1,30 @@
 -- ============================================================
--- 079: user_notifications の INSERT を send-push へ流す Webhook トリガ
+-- 079: Webhook trigger that sends INSERTs into user_notifications to send-push
 --
--- ✅ 2026-08-28 に本番適用済み (実際のシークレットを埋めて実行した)。
+-- ✅ Applied to production on 2026-08-28 (run with the real secret filled in).
 --
--- 🔴 このファイルはそのまま流せない。
---   `__PUSH_WEBHOOK_SECRET__` を実際の値に置換してから実行すること。
---   値をこのファイルに書き込んで commit しないこと (Git に平文で残るため)。
---   本番に入っている現物は下記で確認できる:
+-- 🔴 This file cannot be run as is.
+--   Replace `__PUSH_WEBHOOK_SECRET__` with the real value before running it.
+--   Do not write the value into this file and commit it (it would stay in Git in plain text).
+--   The version actually in production can be checked with:
 --     select pg_get_triggerdef(oid) from pg_trigger
 --      where tgname = 'trg_user_notifications_push';
 --
--- なぜ Dashboard の Database Webhook ではなく SQL なのか:
---   Dashboard の「Database Webhooks」は結局この形のトリガを作るだけ。
---   SQL にしておけば構成がリポジトリに残り、手作業のポチポチが要らない。
---   moderate-post 側は Dashboard 登録のままなので、そちらを触るときは注意。
+-- Why SQL and not a Database Webhook in the Dashboard:
+--   The Dashboard's "Database Webhooks" only creates a trigger of this form anyway.
+--   With SQL, the configuration stays in the repository and no manual clicking is needed.
+--   The moderate-post side is still registered via the Dashboard, so be careful when touching it.
 --
--- 🔴 INSERT をブロックしない:
---   supabase_functions.http_request は内部で pg_net を使う非同期リクエスト。
---   トリガは即座に戻るので、いいね/コメント/フォロー自体が
---   プッシュ送信の遅延や失敗に巻き込まれることはない。
+-- 🔴 Does not block the INSERT:
+--   supabase_functions.http_request is an async request that uses pg_net internally.
+--   The trigger returns immediately, so likes/comments/follows themselves are never
+--   dragged into push send delays or failures.
 --
--- 🔴 既存の未読は飛ばない:
---   AFTER INSERT のため過去行は対象外。有効化した瞬間に
---   溜まっていた過去の通知が一斉送信される事故は構造的に起きない。
+-- 🔴 Existing unread notifications are not sent:
+--   Because it is AFTER INSERT, past rows are out of scope. An accident where the backlog of
+--   past notifications all goes out at once the moment it is enabled cannot happen by design.
 --
--- 戻すとき:
+-- To revert:
 --   drop trigger if exists trg_user_notifications_push on public.user_notifications;
 -- ============================================================
 

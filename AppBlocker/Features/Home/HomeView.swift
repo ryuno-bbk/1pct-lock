@@ -2,7 +2,7 @@
 //  HomeView.swift
 //  AppBlocker
 //
-//  メイン画面（モード切替 + 各モード設定）
+//  Main screen (mode switch + settings for each mode)
 //
 
 import SwiftUI
@@ -24,8 +24,8 @@ struct HomeView: View {
     @State private var selectedMinutes: Int = 30
     @State private var showCustomDurationPicker = false
     @State private var showChallengePicker = false
-    /// 解除方法の Pro 課題をタップした時のペイウォール。
-    /// (モード自体のゲートは各モード画面側が持っている — selectMode のコメント参照)
+    /// Paywall shown when the user taps a Pro challenge in the unlock methods.
+    /// (The gate for the modes themselves is held by each mode screen. See the comment on selectMode.)
     @State private var showChallengePaywall = false
     @ObservedObject private var challengeService = UnlockChallengeService.shared
     @State private var showingPicker = false
@@ -33,11 +33,13 @@ struct HomeView: View {
     @State private var hintToastMessage: String?
     @State private var showSessionComplete = false
     @State private var sessionCompleteFooterMessage: String?
-    /// スケジュール/位置ロックの稼働状況シート (常駐バナー廃止の代替。実機FB 2026-07-15:
-    /// バナーが増えるほどモード切替が下に押されるため、右上ボタン+ボトムシートに移設)
+    /// Status sheet for schedule/location locks (replaces the always-visible banners. Real device
+    /// feedback 2026-07-15: the more banners there were, the further down the mode switch was pushed,
+    /// so it moved to a top-right button + bottom sheet)
     @State private var showLockManager = false
-    /// F3: scheduleAppCountText() は UserDefaults 読み込み + PropertyListDecoder デコードを伴うため、
-    /// body 内で毎秒 (タイマー実行中の remainingSeconds publish 経由) 再評価されるのを防ぐためキャッシュする
+    /// F3: scheduleAppCountText() reads UserDefaults and decodes with PropertyListDecoder, so it is
+    /// cached to prevent it from being re-evaluated every second inside body (via the remainingSeconds
+    /// publish while the timer runs)
     @State private var cachedScheduleAppCountText: String = ""
 
     private var lang: AppLanguage {
@@ -59,12 +61,12 @@ struct HomeView: View {
                         headerSection
                         modeSegment
 
-                        // 解除方法。🔴 ここは3モード共通の位置なので、1箇所置けば
-                        //    タイマー/スケジュール/位置の全部に出る。
-                        //    ⚠️ 最終的な位置は実機を見てから決める (2026-08-28 保留)
-                        // 🔴 実装済みの課題が1つしか無い間は出さない。
-                        //    選択肢1つのピッカーはユーザーを混乱させるだけ。
-                        //    次の課題 (ノート+ペン / スクロール / 投稿) が入れば自動で復活する
+                        // Unlock method. 🔴 This position is shared by all 3 modes, so placing it in one spot makes it
+                        //    appear in timer/schedule/location.
+                        //    ⚠️ Decide the final position after checking on a real device (on hold 2026-08-28)
+                        // 🔴 Do not show it while only one challenge is implemented.
+                        //    A picker with a single option only confuses the user.
+                        //    It comes back automatically once the next challenge (notebook + pen / scroll / post) is added
                         if UnlockChallenge.pickable.filter(\.isImplemented).count >= 2 {
                         UnlockChallengeCard(
                             challenge: isAnyLockRunning
@@ -91,7 +93,7 @@ struct HomeView: View {
                     .padding(.bottom, 100)
                 }
 
-                // 停止確認オーバーレイ
+                // Stop confirmation overlay
                 if showStopConfirmation {
                     StopConfirmationView(
                         isPresented: $showStopConfirmation,
@@ -110,14 +112,14 @@ struct HomeView: View {
                     selected: $challengeService.selected,
                     onRequestPro: {
                         showChallengePicker = false
-                        // シートを閉じてから出さないと重なって出ない
+                        // It must be shown after the sheet is closed, otherwise they overlap and it does not appear
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                             showChallengePaywall = true
                         }
                     }
                 )
-                // 2026-09-05 実機FB: .medium (約50%) だとハードロックモードが見切れていた。
-                // 5つ全部が一度に見える高さで開き、必要なら .large まで引き上げられる
+                // 2026-09-05 real device feedback: with .medium (about 50%) the hard lock mode was cut off.
+                // Open at a height where all 5 are visible at once, and allow pulling up to .large if needed
                 .presentationDetents([.fraction(0.75), .large])
             }
             .sheet(isPresented: $showChallengePaywall) {
@@ -151,9 +153,9 @@ struct HomeView: View {
                     blockingService.saveQuoteForShield(quote)
                 }
                 refreshScheduleAppCountText()
-                // Extension が BG で shield を適用した直後は isShieldActive フラグが古いことがある
-                // (15秒タイマーの隙間)。表示のたびに冪等リコンサイルで実状態に揃える
-                // (2026-07-15 実機FB: 稼働中なのに管理ピルが待機中表示)
+                // Right after the Extension applies the shield in the background, the isShieldActive flag can be
+                // stale (the gap in the 15-second timer). Every time it is shown, an idempotent reconcile syncs it
+                // to the real state (2026-07-15 real device feedback: the manager pill showed waiting while active)
                 scheduleManager.checkScheduleState()
             }
             .onChange(of: selectedModeRaw) { _, _ in
@@ -173,8 +175,8 @@ struct HomeView: View {
             }
             .onChange(of: timerManager.didCompleteAt) { _, newValue in
                 guard newValue != nil else { return }
-                // 継続ロック中の判定は既存トーストと同じロジックを流用し、
-                // 完了画面のフッター注記として引き渡す (トースト自体は廃止)
+                // The check for an ongoing lock reuses the same logic as the existing toast,
+                // and is passed to the completion screen as a footer note (the toast itself was removed)
                 if blockingService.isScheduleActive {
                     sessionCompleteFooterMessage = L.homeStillLockedSchedule(lang)
                 } else if blockingService.isLocationActive {
@@ -183,9 +185,10 @@ struct HomeView: View {
                     sessionCompleteFooterMessage = nil
                 }
 
-                // L16: ロック管理シート (.sheet) 表示中に fullScreenCover を出そうとすると
-                // presentation が衝突して完了画面が出ない/挙動不定になる。シートが出ていれば
-                // 先に閉じ、dismiss が落ち着いてから (jumpToModeFromSheet と同じ 0.4s の間) 完了画面を出す
+                // L16: Presenting a fullScreenCover while the lock manager sheet (.sheet) is shown makes the
+                // presentations collide, so the completion screen does not appear or behaves unpredictably. If the
+                // sheet is shown, close it first, then show the completion screen after the dismiss settles (the
+                // same 0.4s delay as jumpToModeFromSheet)
                 if showLockManager {
                     showLockManager = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
@@ -198,20 +201,20 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Mode Title (ヘッダの大タイトル = 選択中モードの説明)
+    // MARK: - Mode Title (large header title = description of the selected mode)
 
     private var modeTitle: String {
         switch selectedMode {
         case .timer:
-            return lang == .japanese ? "決めた時間だけロック" : "Lock for a set time" // 文言はユーザー添削待ち
+            return lang == .japanese ? "決めた時間だけロック" : "Lock for a set time" // Wording awaiting user review
         case .schedule:
-            return lang == .japanese ? "時間帯で自動ロック" : "Lock on a schedule" // 文言はユーザー添削待ち
+            return lang == .japanese ? "時間帯で自動ロック" : "Lock on a schedule" // Wording awaiting user review
         case .location:
-            return lang == .japanese ? "場所で自動ロック" : "Lock by location" // 文言はユーザー添削待ち
+            return lang == .japanese ? "場所で自動ロック" : "Lock by location" // Wording awaiting user review
         }
     }
 
-    // MARK: - Hint Toast (Shield 初回ヒント / 継続ロック通知、S11 の画像保存トーストと同じパターン)
+    // MARK: - Hint Toast (first-time Shield hint / ongoing lock notice, same pattern as the S11 image-save toast)
 
     @ViewBuilder
     private var hintToastOverlay: some View {
@@ -250,9 +253,10 @@ struct HomeView: View {
                     .font(AppTypography.subheadline)
                     .foregroundColor(AppColors.textSecondary)
 
-                // タイトル = 選択中モードの説明 (2026-07-15 実機FB: 固定挨拶タイトルをやめ、
-                // セグメント下にあった小さいキャプションをここへ昇格)。
-                // 読点なし+1行固定+自動縮小で変な位置の改行を防ぐ (同日FB)
+                // Title = description of the selected mode (2026-07-15 real device feedback: dropped the fixed
+                // greeting title and promoted the small caption that was under the segment control to here).
+                // No commas + fixed to 1 line + auto shrink, to prevent line breaks at odd positions (feedback the
+                // same day)
                 Text(modeTitle)
                     .font(AppTypography.largeTitle)
                     .foregroundColor(AppColors.textPrimary)
@@ -262,9 +266,10 @@ struct HomeView: View {
 
             Spacer()
 
-            // 連続日数 (2026-07-30 D案改2: プロフィールから移設し、ここ=ロックタブ右上が定位置。
-            // 本人にしか見えない画面なので公開/非公開の概念なし。2026-07-15の炎バッジ廃止とは別物で、
-            // これは実測ストリークの控えめな数字表示)
+            // Consecutive days (2026-07-30 plan D rev 2: moved from the profile, its fixed place is here = top
+            // right of the lock tab. This screen is only visible to the user, so there is no public/private
+            // concept. This is separate from the flame badge removed on 2026-07-15; it is a modest number
+            // display of the measured streak)
             if sessionTracker.streakDays > 0 {
                 HStack(spacing: 4) {
                     Image(systemName: "flame.fill")
@@ -284,10 +289,11 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: - Lock Manager (右上ピル + ボトムシート)
+    // MARK: - Lock Manager (top-right pill + bottom sheet)
 
-    /// スケジュール/位置ロックが 1 つでも設定済みの時だけ出す管理ピル。
-    /// モックv1 案A: ドット+件数。稼働中があれば緑ドット+稼働件数、なければグレードット+設定件数
+    /// Manager pill shown only when at least 1 schedule/location lock is configured.
+    /// Mockup v1 plan A: dot + count. If any are active, green dot + active count; otherwise gray dot +
+    /// configured count
     @ViewBuilder
     private var lockManagerButton: some View {
         let totalRows = scheduleManager.configs.count + (hasLocationConfig ? 1 : 0)
@@ -313,7 +319,8 @@ struct HomeView: View {
         }
     }
 
-    /// ロック管理シートの行のうち、いま実際に稼働している数 (シート表示と同じ数え方)
+    /// Number of lock manager sheet rows that are actually active right now (counted the same way as the
+    /// sheet)
     private var activeLockRowCount: Int {
         let activeSchedules = scheduleManager.configs.filter {
             $0.isEnabled && scheduleManager.isShieldActive && scheduleManager.isWithinSchedule(config: $0)
@@ -322,11 +329,12 @@ struct HomeView: View {
         return activeSchedules + locationActive
     }
 
-    /// 稼働状況シート。行 UI とタップ挙動 (Pro ゲート込みの selectMode) は旧バナーをそのまま流用。
-    /// シートを閉じてから遷移しないと paywall シートと presentation が衝突するため少し遅らせる
+    /// Status sheet. The row UI and tap behavior (selectMode, including the Pro gate) are reused as-is
+    /// from the old banners. Navigating before the sheet closes makes its presentation collide with the
+    /// paywall sheet, so it is delayed slightly
     private var lockManagerSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(lang == .japanese ? "ロックの管理" : "Manage locks") // 文言はユーザー添削待ち
+            Text(lang == .japanese ? "ロックの管理" : "Manage locks") // Wording awaiting user review
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(AppColors.textPrimary)
                 .padding(.top, 28)
@@ -343,7 +351,8 @@ struct HomeView: View {
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
         .onAppear {
-            // シートを開いた瞬間に実状態へ揃える (稼働中なのに待機中と出る鮮度問題の対策)
+            // Sync to the real state the moment the sheet opens (fix for the freshness issue where it shows
+            // waiting while active)
             scheduleManager.checkScheduleState()
         }
     }
@@ -355,7 +364,7 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Status Banners (スケジュール/位置情報の稼働状況行。ロック管理シート内で表示)
+    // MARK: - Status Banners (status rows for schedule/location. Shown inside the lock manager sheet)
 
     @ViewBuilder
     private var statusBanners: some View {
@@ -367,10 +376,10 @@ struct HomeView: View {
                 StatusBannerRow(
                     isActive: isRowActive,
                     title: !config.isEnabled
-                        ? (lang == .japanese ? "スケジュール オフ" : "Schedule off") // 文言はユーザー添削待ち
+                        ? (lang == .japanese ? "スケジュール オフ" : "Schedule off") // Wording awaiting user review
                         : isRowActive
-                            ? (lang == .japanese ? "スケジュール稼働中" : "Schedule active") // 文言はユーザー添削待ち
-                            : (lang == .japanese ? "スケジュール待機中" : "Schedule waiting"), // 文言はユーザー添削待ち
+                            ? (lang == .japanese ? "スケジュール稼働中" : "Schedule active") // Wording awaiting user review
+                            : (lang == .japanese ? "スケジュール待機中" : "Schedule waiting"), // Wording awaiting user review
                     summary: scheduleSummaryText(config)
                 ) {
                     jumpToModeFromSheet(.schedule)
@@ -381,8 +390,8 @@ struct HomeView: View {
                 StatusBannerRow(
                     isActive: !locationManager.activeLocationIds.isEmpty,
                     title: !locationManager.activeLocationIds.isEmpty
-                        ? (lang == .japanese ? "位置情報ロック稼働中" : "Location lock active") // 文言はユーザー添削待ち
-                        : (lang == .japanese ? "位置情報ロック待機中" : "Location lock waiting"), // 文言はユーザー添削待ち
+                        ? (lang == .japanese ? "位置情報ロック稼働中" : "Location lock active") // Wording awaiting user review
+                        : (lang == .japanese ? "位置情報ロック待機中" : "Location lock waiting"), // Wording awaiting user review
                     summary: locationSummaryText
                 ) {
                     jumpToModeFromSheet(.location)
@@ -391,19 +400,20 @@ struct HomeView: View {
         }
     }
 
-    /// モード切替。2026-07-19 ゲート方針転換: モード自体は無課金でも開ける (設定を作らせて
-    /// 価値を見せる)。課金ゲートは各モード画面の「実行 (ONにする)」の瞬間に移設
-    /// (ScheduleBlockView / LocationBlockView 側の showProPaywall 参照)
-    /// タイマーかスケジュールのどちらかが実際に遮断中か。
-    /// 🔴 遮断中は解除方法を変えさせない。セッションには開始時の課題が焼き付いているので、
-    ///    走行中に設定だけ変えるとカードの表示と実際の課題がズレる (2026-08-28 実機報告)
+    /// Mode switch. 2026-07-19 gate policy change: the modes themselves can be opened without paying (let
+    /// users build a setup and see the value). The purchase gate moved to the moment of "run (turn ON)"
+    /// on each mode screen (see showProPaywall in ScheduleBlockView / LocationBlockView)
+    /// Whether the timer or the schedule is actually blocking right now.
+    /// 🔴 Do not allow changing the unlock method while blocking. The session has the challenge from its
+    ///    start baked in, so changing only the setting mid-run makes the card display and the real
+    ///    challenge disagree (2026-08-28 real device report)
     ///
-    /// 🔴 ここで isWithinAnySchedule() を呼ばないこと。
-    ///    HomeView は常駐タブで 1Hz タイマーにより body が毎秒再評価されるため
-    ///    (2026-08-09 のフリーズ調査で特定済みの既知の急所)、Calendar の日時計算を
-    ///    スケジュール数ぶん毎秒回すことになる。
-    ///    isShieldActive は 15秒ごとのリコンサイルが維持している @Published なので、
-    ///    読むだけで計算が走らない
+    /// 🔴 Do not call isWithinAnySchedule() here.
+    ///    HomeView is an always-resident tab and its body is re-evaluated every second by a 1Hz timer
+    ///    (a known weak spot identified in the 2026-08-09 freeze investigation), so this would run
+    ///    Calendar date calculations once per schedule every second.
+    ///    isShieldActive is an @Published value kept up to date by the reconcile every 15 seconds,
+    ///    so reading it does not trigger any calculation
     private var isAnyLockRunning: Bool {
         timerManager.isRunning || scheduleManager.isShieldActive
     }
@@ -417,7 +427,7 @@ struct HomeView: View {
     private static let weekdayShortNamesJa: [Int: String] = [1: "日", 2: "月", 3: "火", 4: "水", 5: "木", 6: "金", 7: "土"]
     private static let weekdayShortNamesEn: [Int: String] = [1: "Sun", 2: "Mon", 3: "Tue", 4: "Wed", 5: "Thu", 6: "Fri", 7: "Sat"]
 
-    /// スケジュールバナーの要約行 (例: "平日 22:00–07:00 · 12アプリ")
+    /// Summary line for the schedule banner (e.g. "平日 22:00-07:00 · 12アプリ" ("Weekdays 22:00-07:00 · 12 apps"))
     private func scheduleSummaryText(_ config: ScheduleConfig) -> String {
         let weekdaySet = Set(config.weekdays)
         let weekdayText: String
@@ -428,7 +438,7 @@ struct HomeView: View {
         } else if weekdaySet == Set([1, 7]) {
             weekdayText = lang == .japanese ? "週末" : "Weekends"
         } else {
-            // F4: カスタム曜日の略称も lang に応じて切り替える (以前は日本語固定)
+            // F4: Custom weekday abbreviations also switch by lang (previously fixed to Japanese)
             let names = lang == .japanese ? Self.weekdayShortNamesJa : Self.weekdayShortNamesEn
             let separator = lang == .japanese ? "・" : ", "
             weekdayText = config.weekdays.sorted()
@@ -442,8 +452,9 @@ struct HomeView: View {
         return "\(weekdayText) \(start)–\(end) · \(cachedScheduleAppCountText)"
     }
 
-    /// F3: UserDefaults 読み込み + PropertyListDecoder デコードを伴う重い処理。
-    /// body から直接呼ばず、onAppear / selectedModeRaw 変化時 / currentConfig publish 時にのみ再計算しキャッシュする。
+    /// F3: Heavy work that reads UserDefaults and decodes with PropertyListDecoder.
+    /// Not called directly from body. Recalculated and cached only on onAppear / when selectedModeRaw
+    /// changes / when currentConfig publishes.
     private func refreshScheduleAppCountText() {
         guard let selection = scheduleManager.loadSelectionFromAppGroup() else {
             cachedScheduleAppCountText = lang == .japanese ? "0アプリ" : "0 apps"
@@ -460,12 +471,13 @@ struct HomeView: View {
         }
     }
 
-    /// 位置情報が1件でも保存されていればバナーを表示 (有効/無効を問わず「設定済み」扱い)
+    /// Show the banner if at least 1 location is saved (treated as "configured" whether enabled or
+    /// disabled)
     private var hasLocationConfig: Bool {
         !locationManager.registeredLocations.isEmpty
     }
 
-    /// 位置情報バナーの要約行 (例: "「自宅」半径100m · 2箇所")
+    /// Summary line for the location banner (e.g. "「自宅」半径100m · 2箇所" ("Home" radius 100m · 2 places))
     private var locationSummaryText: String {
         guard let first = locationManager.registeredLocations.first else { return "" }
         let radius = Int(first.radius)
@@ -498,8 +510,8 @@ struct HomeView: View {
         return Button {
             selectMode(mode)
         } label: {
-            // アイコン+ラベルの2段構成でトグル自体の存在感を上げる (2026-07-19 ユーザーFB:
-            // スケジュール/位置情報の入口が地味だと Pro 機能に気づかれない)
+            // Two-tier icon + label layout to make the toggle itself stand out more (2026-07-19 user feedback:
+            // if the entry points for schedule/location are plain, people do not notice the Pro features)
             VStack(spacing: 5) {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: modeIconName(mode))
@@ -536,7 +548,7 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Timer Section (内蔵タイマー UI)
+    // MARK: - Timer Section (built-in timer UI)
 
     @ViewBuilder
     private var timerSection: some View {
@@ -549,13 +561,13 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Timer Setup Card (時間を主役にしたヒーロー表示 + プリセットピル)
+    // MARK: - Timer Setup Card (hero display with the time as the main element + preset pills)
 
     private let presetMinutes: [Int] = [30, 60, 120]
 
     private var timerSetupCard: some View {
         VStack(spacing: 24) {
-            // 大きな時間表示 (ヒーロー)
+            // Large time display (hero)
             HStack {
                 Spacer()
                 VStack(spacing: 4) {
@@ -603,7 +615,7 @@ struct HomeView: View {
             }
 
             presetPill(
-                label: lang == .japanese ? "カスタム" : "Custom", // 文言はユーザー添削待ち
+                label: lang == .japanese ? "カスタム" : "Custom", // Wording awaiting user review
                 isSelected: showCustomDurationPicker
             ) {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -613,13 +625,13 @@ struct HomeView: View {
         }
     }
 
-    /// プリセット時間のピル表示ラベル (例: 30分 / 1時間 / 2時間)
+    /// Display label for the preset time pills (e.g. "30分" / "1時間" / "2時間" ("30 min" / "1 hour" / "2 hours"))
     private func presetLabel(_ minutes: Int) -> String {
         if minutes % 60 == 0 {
             let hours = minutes / 60
-            return lang == .japanese ? "\(hours)時間" : "\(hours)h" // 文言はユーザー添削待ち
+            return lang == .japanese ? "\(hours)時間" : "\(hours)h" // Wording awaiting user review
         }
-        return lang == .japanese ? "\(minutes)分" : "\(minutes)m" // 文言はユーザー添削待ち
+        return lang == .japanese ? "\(minutes)分" : "\(minutes)m" // Wording awaiting user review
     }
 
     private func presetPill(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
@@ -640,7 +652,7 @@ struct HomeView: View {
         }
     }
 
-    /// カスタム時間ピッカー (既存スライダー UI をそのまま流用、カスタム選択時のみ表示)
+    /// Custom duration picker (reuses the existing slider UI as-is, shown only when custom is selected)
     private var customDurationPicker: some View {
         VStack(spacing: 8) {
             Slider(
@@ -665,7 +677,7 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - App Selection Card (共通部品 AppSelectCard に統一 — 3モードで同一UI)
+    // MARK: - App Selection Card (unified into the shared component AppSelectCard, same UI in all 3 modes)
 
     private var appSelectionCard: some View {
         AppSelectCard(selection: blockingService.selectedApps, lang: lang) {
@@ -703,7 +715,7 @@ struct HomeView: View {
                 .foregroundColor(AppColors.textPrimary)
                 .monospacedDigit()
 
-            // 進捗バー
+            // Progress bar
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 4)
@@ -722,7 +734,7 @@ struct HomeView: View {
                 .font(AppTypography.subheadline)
                 .foregroundColor(AppColors.textSecondary)
 
-            // 停止ボタン → 確認画面を表示
+            // Stop button → show the confirmation screen
             Button {
                 withAnimation(.easeInOut(duration: 0.3)) {
                     showStopConfirmation = true
@@ -783,12 +795,13 @@ struct HomeView: View {
     // MARK: - Actions
 
     private func startTimer() {
-        // settle 版: くるくるを最低 ~1.8s 出して、shield 適用直後の遷移レース由来のフリーズを緩和
+        // settle version: show the spinner for at least ~1.8s to reduce the freeze caused by the transition
+        // race right after the shield is applied
         Task { await blockingService.startTimerBlockingWithSettle(durationMinutes: selectedMinutes) }
     }
 }
 
-// MARK: - Status Banner Row (スケジュール/位置情報 共通の常駐インジケータ行)
+// MARK: - Status Banner Row (always-visible indicator row shared by schedule/location)
 
 private struct StatusBannerRow: View {
     let isActive: Bool
@@ -830,55 +843,58 @@ private struct StatusBannerRow: View {
     }
 }
 
-// MARK: - Stop Confirmation View（5秒クールダウン + フィード風全画面名言）
+// MARK: - Stop Confirmation View (5-second cooldown + feed-style full-screen quote)
 
 struct StopConfirmationView: View {
     @Binding var isPresented: Bool
     let lang: AppLanguage
     let onConfirm: () -> Void
 
-    /// このセッションに課された解除課題。
-    /// 🔴 現在の設定ではなく「セッション開始時に焼き付けた値」を渡すこと
-    ///    (UnlockChallengeService.challenge(forSession:))。現在値を読むと、
-    ///    ロック中に設定を緩めるだけで逃げられてしまう
+    /// The unlock challenge assigned to this session.
+    /// 🔴 Pass the "value baked in at session start", not the current setting
+    ///    (UnlockChallengeService.challenge(forSession:)). If it reads the current value,
+    ///    the user can escape just by loosening the setting during the lock
     var challenge: UnlockChallenge = .longPress
 
-    /// 中断すると完遂率が下がるか。スケジュールからも使えるよう外から渡す
-    /// (以前は TimerManager を直接読んでいたためタイマー専用だった)
+    /// Whether aborting lowers the completion rate. Passed in from outside so the schedule can use it too
+    /// (it used to read TimerManager directly, so it was timer-only)
     var affectsCompletionRateOverride: Bool? = nil
 
-    /// 夢は UserAuthService (in-app 既存ソース) から観測。App Group ミラーは別エージェントが並行実装中のため、
-    /// このビューはあくまで in-app の @Published 値を読むだけに留める。
+    /// The dream is observed from UserAuthService (existing in-app source). The App Group mirror is being
+    /// implemented in parallel by another agent, so this view only reads the in-app @Published value.
     @ObservedObject private var userAuth = UserAuthService.shared
 
     @State private var quote: Quote?
-    // 実機FB第11弾 (2026-07-16): 「5秒待ってからタップ」を廃止し、長押しでのみ終了できる方式へ。
-    // 長押しは待ち時間より能動的な摩擦 (自分の意思で押し続けないと終了できない)
+    // Real device feedback round 11 (2026-07-16): removed "wait 5 seconds, then tap" and switched to
+    // ending by long press only. A long press is more active friction than waiting (you cannot end it
+    // unless you keep pressing by your own choice)
     @State private var isHolding = false
     @State private var holdProgress: Double = 0
-    /// 長押し2秒の自前計時 (実機FB第15弾: ジェスチャーの完了コールバックが再描画で発火しない対策)
+    /// Our own timing of the 2-second long press (real device feedback round 15: fix for the gesture's
+    /// completion callback not firing because of redraws)
     @State private var holdTask: Task<Void, Never>?
     @State private var showDeclaration = false
-    /// 🔴 表示するページは開く瞬間に1回だけ確定させ、リクエストごと持つ。
-    ///    fullScreenCover の中で毎回 shuffled() を呼ぶと、HomeView が1秒ごとに
-    ///    body を再評価するたびに並びが作り直され、見たページの記録がリセットされる
-    ///    (2026-08-29 実機で「勝手に変わる」「あと2件から進まない」として発現)
+    /// 🔴 Decide the pages to show only once, at the moment it opens, and keep them in the request.
+    ///    If shuffled() is called inside the fullScreenCover every time, the order is rebuilt each time
+    ///    HomeView re-evaluates body every second, and the record of viewed pages resets
+    ///    (showed up on a real device on 2026-08-29 as "it changes by itself" and "stuck at 2 left")
     @State private var scrollRequest: ScrollChallengeRequest?
 
-    /// 終了に必要な長押し秒数
+    /// Number of seconds of long press needed to end
     private let holdSeconds: Double = 2.0
 
     @ObservedObject private var timerManager = TimerManager.shared
 
-    /// このセッションを中断すると完遂率が下がるか。
-    /// 033 の定義: 完遂率の母数は「予定 10 分以上のタイマーロック」のみ。
-    /// 短いタイマーは母数に入らないので、警告を出すと嘘になる
+    /// Whether aborting this session lowers the completion rate.
+    /// Definition in 033: the completion rate denominator is only "timer locks planned for 10 minutes or
+    /// more". Short timers are not in the denominator, so showing the warning would be a lie
     private var affectsCompletionRate: Bool {
         if let affectsCompletionRateOverride { return affectsCompletionRateOverride }
         return (timerManager.currentConfig?.durationMinutes ?? 0) >= 10
     }
 
-    /// 宣言済みの夢 (空文字/未宣言は nil 扱い)。夢は実データであり、プレースホルダーは作らない
+    /// The declared dream (empty string / not declared is treated as nil). The dream is real data; no
+    /// placeholder is made
     private var dreamText: String? {
         guard let trimmed = userAuth.dream?.trimmingCharacters(in: .whitespacesAndNewlines),
               !trimmed.isEmpty else {
@@ -889,8 +905,9 @@ struct StopConfirmationView: View {
 
     var body: some View {
         ZStack {
-            // 夢がある場合は純黒 (夢テキストを主役にするため名言背景は使わない)。
-            // 夢が未宣言の場合のみ、従来通りフィードと同じ名言背景にフォールバックする
+            // If there is a dream, pure black (the quote background is not used, so the dream text is the main
+            // element). Only if no dream is declared, fall back to the same quote background as the feed, as
+            // before
             Group {
                 if dreamText == nil, let quote = quote {
                     QuoteBackgroundView(quoteId: quote.id)
@@ -904,19 +921,21 @@ struct StopConfirmationView: View {
             VStack(spacing: 0) {
                 Spacer()
 
-                // 中央: 夢主役 (宣言済みの場合) / 名言フォールバック (未宣言の場合)
+                // Center: dream as the main element (if declared) / quote fallback (if not declared)
                 VStack(spacing: 24) {
-                    // 実機FB第12弾 (案1「終了は儀式」) + 第14弾修正: 長押し中にフェードアウトするのは
-                    // **夢ブロックだけ** (確認文と下部ボタンは残す、ユーザー確定)。holdProgress 駆動で離せば戻る
+                    // Real device feedback round 12 (idea 1 "ending is a ritual") + round 14 fix: during the long press
+                    // **only the dream block** fades out (the confirmation text and the bottom buttons stay, confirmed
+                    // by the user). Driven by holdProgress, so it comes back when released
                     VStack(spacing: 20) {
                         if let dreamText {
                             VStack(spacing: 10) {
-                                Text(lang == .japanese ? "あなたの目標" : "Your goal") // 文言はユーザー添削待ち
+                                Text(lang == .japanese ? "あなたの目標" : "Your goal") // Wording awaiting user review
                                     .font(.system(size: 13, weight: .medium))
                                     .foregroundColor(.white.opacity(0.5))
                                     .tracking(1.5)
 
-                                // 実機FB第13弾: 夢はこの画面の主役なので一回り大きく (25→30 bold)
+                                // Real device feedback round 13: the dream is the main element of this screen, so make it one size
+                                // larger (25→30 bold)
                                 Text(dreamText)
                                     .font(.system(size: 30, weight: .bold))
                                     .foregroundColor(.white)
@@ -945,21 +964,23 @@ struct StopConfirmationView: View {
                     }
                     .opacity(1 - holdProgress)
 
-                    Text(lang == .japanese ? "本当にセッションを終了しますか?" : "End this session?") // 文言はユーザー添削待ち
+                    Text(lang == .japanese ? "本当にセッションを終了しますか?" : "End this session?") // Wording awaiting user review
                         .font(.system(size: 15, weight: .medium))
                         .foregroundColor(.white.opacity(0.6))
-                    // F1: 「終了すると連続◯日が途切れます」警告は削除。
-                    // TimerManager.stopTimer() はセッションを status="aborted" + duration 付きで記録し、
-                    // get_streak_days はその日に記録があれば継続扱いにするため、この警告は事実に反していた。
+                    // F1: Removed the "ending will break your N-day streak" warning.
+                    // TimerManager.stopTimer() records the session as status="aborted" with duration, and
+                    // get_streak_days treats the day as continued if there is a record that day, so this warning was
+                    // factually wrong.
 
-                    // 終了は夢の直下で長押し (フェードが指のすぐ上で見えるよう下部ボタン群から移動、実機FB第12弾)
+                    // Ending is a long press right under the dream (moved from the bottom button group so the fade is
+                    // visible just above the finger, real device feedback round 12)
                     endSessionControl
 
-                    // 2026-07-31 実機FB: 完遂率は実際に下がるので告知する (「そんなの知らなかった」を防ぐ)。
-                    // 撤去した連続日数の警告と違い、これは事実。位置は長押しリンクの「下」= 注意書きの扱いで、
-                    // 色は付けない (金は主張が強すぎるとユーザー却下)。
-                    // 033 の定義どおり「予定10分以上のタイマー」だけが完遂率の母数なので、
-                    // 対象セッションの時だけ出す = 嘘の警告を出さない
+                    // 2026-07-31 real device feedback: the completion rate really does drop, so tell the user (prevents
+                    // "I didn't know that"). Unlike the removed streak warning, this is a fact. It sits "below" the long
+                    // press link = treated as a note, with no color (the user rejected gold as too loud).
+                    // Per the definition in 033, only "timers planned for 10 minutes or more" are in the completion rate
+                    // denominator, so show it only for those sessions = never show a false warning
                     if affectsCompletionRate {
                         Text(L.stopConfirmCompletionWarning(lang))
                             .font(.system(size: 12))
@@ -972,21 +993,24 @@ struct StopConfirmationView: View {
 
                 Spacer()
 
-                // 下部: 2ボタン構成 (終了リンクは夢の直下へ移動、実機FB第12弾)。
-                // 第14弾: 長押し中もフェードアウトしない (薄くなるのは夢ブロックだけ、ユーザー確定)
+                // Bottom: 2-button layout (the end link moved right under the dream, real device feedback round 12).
+                // Round 14: these do not fade out during the long press either (only the dream block fades,
+                // confirmed by the user)
                 VStack(spacing: 18) {
-                    // 実機FB第11弾: 「続ける」はロック停止の文脈でおかしい →「作業に戻る」へ
-                    PrimaryButton(lang == .japanese ? "作業に戻る" : "Back to work") { // 文言はユーザー添削待ち
+                    // Real device feedback round 11: "続ける" ("Continue") is odd in the context of stopping a lock →
+                    // "作業に戻る" ("Back to work")
+                    PrimaryButton(lang == .japanese ? "作業に戻る" : "Back to work") { // Wording awaiting user review
                         dismiss()
                     }
 
-                    // 終了の代替導線: おすすめフィードへ飛ばして他人の進捗を見せる (2026-07-16 ユーザー要望。
-                    // セッションは終了しない = 続けるの亜種)
+                    // Alternative path instead of ending: jump to the recommended feed and show other people's progress
+                    // (2026-07-16 user request. The session does not end = a variant of continue)
                     Button {
                         dismiss()
                         NotificationCenter.default.post(name: .switchToFeedTab, object: nil)
                     } label: {
-                        // 2026-08-04 ユーザー確定:「他の人」→「ライバル」。中核ループの言葉に揃える
+                        // 2026-08-04 confirmed by the user: "他の人" ("other people") → "ライバル" ("rivals"). Matches the
+                        // wording of the core loop
                         Text(lang == .japanese ? "ライバルの進捗を見る" : "See your rivals' progress")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundColor(.white.opacity(0.75))
@@ -1014,7 +1038,8 @@ struct StopConfirmationView: View {
                     onConfirm()
                     withAnimation { isPresented = false }
                 },
-                // 🔴 やっぱり作業を続ける = 解除をやめて中断画面ごと閉じる (ロックは継続)
+                // 🔴 Keep working after all = cancel the unlock and close the interruption screen too (the lock
+                // continues)
                 onKeepWorking: {
                     scrollRequest = nil
                     withAnimation { isPresented = false }
@@ -1034,11 +1059,12 @@ struct StopConfirmationView: View {
         }
     }
 
-    // MARK: - End Session Control (課題ごとの終了手段)
+    // MARK: - End Session Control (end method per challenge)
 
-    /// 課された課題に応じて終了手段を出し分ける。
-    /// 🔴 未実装の課題は長押しに倒す。ここで何も出さないと解除手段が消えて詰む。
-    ///    (腕立て・スクワットは 2026-08-29 に廃止。UnlockChallenge の冒頭コメント参照)
+    /// Show a different end method depending on the assigned challenge.
+    /// 🔴 Unimplemented challenges fall back to long press. If nothing is shown here, the unlock method
+    /// disappears and the user is stuck.
+    ///    (Push-ups and squats were removed on 2026-08-29. See the comment at the top of UnlockChallenge)
     @ViewBuilder
     private var endSessionControl: some View {
         switch challenge {
@@ -1061,21 +1087,22 @@ struct StopConfirmationView: View {
         }
     }
 
-    /// スクロール課題で何件見せるか。⚠️ 実機で試してから調整する値
+    /// How many items to show in the scroll challenge. ⚠️ Value to tune after testing on a real device
     private static let scrollRequiredCount = 5
 
-    /// 表示中のスクロール課題。
-    /// 🔴 ページを一緒に持たせて「提示」と「中身」を不可分にする。
-    ///    別々の @State にすると、提示が先に走った一瞬だけ中身が空になり
-    ///    「見せるものがありません」が瞬間的に出る (2026-08-29 実機報告)
+    /// The scroll challenge being shown.
+    /// 🔴 Hold the pages in it so that "presenting" and "content" cannot be separated.
+    ///    If they are separate @State values, the content is empty for a moment when the presentation
+    ///    runs first, and "見せるものがありません" ("Nothing to show") flashes briefly
+    ///    (2026-08-29 real device report)
     struct ScrollChallengeRequest: Identifiable {
         let id = UUID()
         let pages: [ScrollChallengeView.Page]
     }
 
-    /// 🔴 開く前にページを確定させてから提示する。
-    ///    画像は毎回ランダム順にする (1枚目が固定だとすぐ慣れる) が、
-    ///    シャッフルは「開く瞬間に1回だけ」であって、描画のたびではない
+    /// 🔴 Fix the pages before opening, then present.
+    ///    Images are in random order every time (a fixed first image gets familiar quickly), but
+    ///    the shuffle happens "only once at the moment it opens", not on every render
     private func prepareScrollChallenge(isImages: Bool) async {
         let pages: [ScrollChallengeView.Page]
         if isImages {
@@ -1087,38 +1114,41 @@ struct StopConfirmationView: View {
             if FeedService.shared.recommendedFeed.isEmpty {
                 await FeedService.shared.loadRecommended(limit: 20)
             }
-            // 🔴 2026-09-09 ユーザー指摘: 以前は prefix() で先頭から取っていたため、
-            //    キャッシュ済みのフィードが使い回されて**毎回同じ投稿**が出ていた
-            //    (画像モードだけ shuffled() されていて、投稿モードは抜けていた)。
-            //    同じものを見せ続けると慣れて摩擦が消え、この課題の意味が無くなる。
+            // 🔴 2026-09-09 user report: it used to take from the top with prefix(), so
+            //    the cached feed was reused and **the same posts** appeared every time
+            //    (only image mode was shuffled(); post mode was missed).
+            //    Showing the same things repeatedly makes users used to it, the friction disappears, and this
+            //    challenge loses its purpose.
             //
-            //    ⚠️ ここで再取得はしない。recommendedFeed はフィードタブと同じ配列で、
-            //    解除のたびに取り直すとタブのスクロール位置と中身が動く。
-            //    手持ちのプールをシャッフルするだけで十分な変化が出る (20件から15件を選ぶ)。
+            //    ⚠️ Do not refetch here. recommendedFeed is the same array as the feed tab, and
+            //    refetching on every unlock moves the tab's scroll position and content.
+            //    Shuffling the pool on hand gives enough variety (picks 15 out of 20).
             //
-            //    🔴 シャッフルは「開く瞬間に1回だけ」。HomeView は1秒ごとに body を
-            //    再評価するので、描画のたびに混ぜると見たページの記録が飛ぶ
-            //    (2026-08-29 に踏んだ「あと2件から進まない」バグの原因)
+            //    🔴 Shuffle "only once at the moment it opens". HomeView re-evaluates body every second,
+            //    so shuffling on every render loses the record of viewed pages
+            //    (the cause of the "stuck at 2 left" bug hit on 2026-08-29)
             pages = FeedService.shared.recommendedFeed
                 .shuffled()
                 .prefix(Self.scrollRequiredCount * 3)
                 .map { ScrollChallengeView.Page.post($0) }
         }
-        // 🔴 空でもそのまま提示する。ScrollChallengeView 側の「見せるものがありません」に任せる。
-        //    2026-09-09 に「空なら長押しへ倒す」を入れかけたが撤回した:
-        //    機内モードにすればフィード取得が失敗して長押しに落ちるため、
-        //    **誰でも意図的に難易度を下げられる抜け穴**になる。
-        //    摩擦を課す機能にオフラインという迂回路を付けるのは本末転倒。
-        //    画像0枚は選択シートが赤字で警告しており、そもそもユーザー側の設定ミス。
+        // 🔴 Present it as-is even if empty. Leave it to "見せるものがありません" ("Nothing to show") in
+        // ScrollChallengeView.
+        //    On 2026-09-09 "fall back to long press if empty" was nearly added but was reverted:
+        //    turning on airplane mode makes the feed fetch fail and drop to long press, so
+        //    it would be **a loophole that lets anyone lower the difficulty on purpose**.
+        //    Giving a friction feature an offline bypass defeats its purpose.
+        //    0 images is warned about in red text in the selection sheet, and is the user's own setup
+        //    mistake in the first place.
         //
-        // 中身が確定してから初めて提示する
+        // Present only after the content is fixed
         scrollRequest = ScrollChallengeRequest(pages: pages)
     }
 
-    /// 課題を開くピル。長押しのピルと見た目を合わせる
+    /// Pill that opens a challenge. Matches the look of the long press pill
     private func challengePill(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title) // ⚠️ 文言はユーザー添削待ち
+            Text(title) // ⚠️ Wording awaiting user review
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(.white.opacity(0.9))
                 .padding(.horizontal, 22)
@@ -1132,16 +1162,16 @@ struct StopConfirmationView: View {
         .buttonStyle(.plain)
     }
 
-    /// ハードモード: 解除手段を出さない。
-    /// 🔴 「何をしても解除できません」とは書かない。アプリを消せば解除されるので嘘になる。
-    ///    アプリの中では真実である「このモードでは解除できません」に留め、
-    ///    抑止力は「消したら記録が全部消える」で作る
+    /// Hard mode: show no unlock method.
+    /// 🔴 Do not write "nothing you do can unlock it". Deleting the app does unlock it, so that is a lie.
+    ///    Stay with "this mode cannot be unlocked", which is true inside the app, and
+    ///    build the deterrent with "deleting it erases all your records"
     private var hardModeNotice: some View {
         VStack(spacing: 8) {
             Image(systemName: "lock.fill")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundColor(.white.opacity(0.5))
-            // ⚠️ 文言はユーザー添削待ち
+            // ⚠️ Wording awaiting user review
             Text(lang == .japanese ? "ハードロックモード" : "Hard lock")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(.white.opacity(0.85))
@@ -1155,19 +1185,21 @@ struct StopConfirmationView: View {
         .padding(.vertical, 6)
     }
 
-    // MARK: - End Session Link (長押しでのみ終了、実機FB第11弾)
+    // MARK: - End Session Link (end only by long press, real device feedback round 11)
 
-    // 実機FB第13弾: 素のテキストリンクは「どこを押すのか分からない」ため小さなピルに。
-    // 長押し中はピル内部が左から満ちていき、満ちきったら終了
+    // Real device feedback round 13: a plain text link left users unsure "where to press", so it became
+    // a small pill. During the long press the inside of the pill fills from the left, and when it is
+    // full the session ends
     private var endSessionLink: some View {
-        Text(lang == .japanese ? "長押しで終了" : "Hold to end") // 文言はユーザー添削待ち
+        Text(lang == .japanese ? "長押しで終了" : "Hold to end") // Wording awaiting user review
             .font(.system(size: 14, weight: .medium))
             .foregroundColor(.white.opacity(isHolding ? 0.95 : 0.6))
             .padding(.horizontal, 22)
             .padding(.vertical, 10)
             .background {
-                // 実機FB第14弾: 溜まりは部分幅の Capsule だと外形と曲率が合わず左端がはみ出して
-                // 見えるため、Rectangle をピル外形で clip する方式に修正
+                // Real device feedback round 14: with a partial-width Capsule for the fill, its curvature did not
+                // match the outline and the left edge looked like it stuck out, so it was changed to clip a
+                // Rectangle to the pill shape
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.white.opacity(0.08))
                     GeometryReader { geo in
@@ -1180,12 +1212,13 @@ struct StopConfirmationView: View {
                 .overlay(Capsule().stroke(Color.white.opacity(0.3), lineWidth: 1))
             }
             .contentShape(Capsule())
-        // 実機FB第15弾: minimumDuration 到達時の完了コールバックは、長押し中に再描画が走り続ける
-        // 画面 (フェード進行で毎フレーム再描画) だと発火しないことがある → 「バーが満タンでも
-        // 終了しない」バグの正体。ジェスチャーには押下検知だけをさせ (minimumDuration: .infinity)、
-        // 2秒の計時は自前の Task で行う方式に置換。指の微動での取消も maximumDistance 拡大で緩和
+        // Real device feedback round 15: the completion callback on reaching minimumDuration sometimes does
+        // not fire on a screen that keeps redrawing during the long press (redrawn every frame as the fade
+        // progresses) → the real cause of the "bar is full but it does not end" bug. The gesture now only
+        // detects the press (minimumDuration: .infinity), and the 2-second timing is done by our own Task.
+        // Cancelling on small finger movements is also eased by a larger maximumDistance
         .onLongPressGesture(minimumDuration: .infinity, maximumDistance: 90) {
-            // .infinity のため perform は発火しない (完了判定は holdTask 側)
+            // Because of .infinity, perform never fires (completion is decided on the holdTask side)
         } onPressingChanged: { pressing in
             isHolding = pressing
             if pressing {
@@ -1195,13 +1228,14 @@ struct StopConfirmationView: View {
                 holdTask = Task { @MainActor in
                     try? await Task.sleep(nanoseconds: UInt64(holdSeconds * 1_000_000_000))
                     guard !Task.isCancelled, isHolding else { return }
-                    // 溜め切り成功 → 終了確定 (成功ハプティクス)
+                    // Fully held → end confirmed (success haptics)
                     UINotificationFeedbackGenerator().notificationOccurred(.success)
                     onConfirm()
                     withAnimation { isPresented = false }
                 }
             } else {
-                // 途中で離した → 計時を破棄してリセット (終了成立時も通るが直後に dismiss されるので無害)
+                // Released midway → discard the timing and reset (also runs when the end succeeds, but harmless
+                // since it is dismissed right after)
                 holdTask?.cancel()
                 holdTask = nil
                 withAnimation(.easeOut(duration: 0.2)) { holdProgress = 0 }
@@ -1215,7 +1249,7 @@ struct StopConfirmationView: View {
         }
     }
 
-    // いいね一覧から優先選定。空なら全体ランダムにフォールバック。
+    // Pick from the liked list first. If empty, fall back to a random pick from all.
     private func pickQuote() -> Quote? {
         if let liked = LikeService.shared.likedQuotes.randomElement() {
             return liked

@@ -2,15 +2,15 @@
 //  RankingView.swift
 //  AppBlocker
 //
-//  累計ロック時間のランキング (2026-09-05 新設)
+//  Ranking by total lock time (new on 2026-09-05)
 //
-//  🔴 掲載するのは上位10%だけ (ユーザー決定)。
-//     母数が増えるほど掲載人数も増える。
-//     圏外の人の順位はプロフィールの順位ピルから見られるので、ここには出さない。
+//  🔴 Only the top 10% are listed (user decision).
+//     The more users there are, the more people are listed.
+//     People outside it can see their rank from the rank pill on the profile, so they are not shown here.
 //
-//  🔴 累計のみ。週次ランキングは作らない (2つあると自分の順位が分からなくなる)。
+//  🔴 All-time only. No weekly ranking (with 2 of them you can no longer tell your own rank).
 //
-//  ⚠️ 文言はユーザー添削待ち
+//  ⚠️ Wording pending user review
 //
 
 import SwiftUI
@@ -20,7 +20,7 @@ struct RankingView: View {
     @ObservedObject private var service = RankingService.shared
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
 
-    /// タップした行のプロフィールへ飛ぶ
+    /// Jump to the profile of the tapped row
     @State private var jumpToUserId: UUID?
     @State private var showUserProfile = false
 
@@ -41,7 +41,7 @@ struct RankingView: View {
                 emptyView
             }
         }
-        .navigationTitle(isJa ? "累計ランキング" : "All-time Ranking")  // 文言はユーザー添削待ち
+        .navigationTitle(isJa ? "累計ランキング" : "All-time Ranking")  // Wording pending user review
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(AppColors.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
@@ -58,12 +58,12 @@ struct RankingView: View {
     private func content(_ ranking: BlockRanking) -> some View {
         ScrollView {
             LazyVStack(spacing: 8) {
-                // この画面が何の順位なのかを最初に言う。
-                // 🔴 週次レポートの「今週の順位」からも来るので、
-                //    ここが累計であることを明示しないと数字が違って見えて混乱する
+                // Say first what this screen ranks.
+                // 🔴 People also come here from "今週の順位" ("This week's rank") in the weekly report, so
+                //    unless we state clearly that this is all-time, the numbers look different and confuse people
                 Text(isJa
                      ? "累計ロック時間の上位 \(ranking.shown)人／\(ranking.totalUsers)人中"
-                     : "Top \(ranking.shown) of \(ranking.totalUsers) by all-time lock time")  // 文言はユーザー添削待ち
+                     : "Top \(ranking.shown) of \(ranking.totalUsers) by all-time lock time")  // Wording pending user review
                     .font(.system(size: 12))
                     .foregroundColor(AppColors.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -129,7 +129,7 @@ struct RankingView: View {
                 .fill(AppColors.cardBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: 14)
-                        // 自分の行だけ枠で分かるようにする
+                        // Only my own row is marked with a frame
                         .stroke(row.isMe ? AppColors.accent.opacity(0.6) : .clear, lineWidth: 1.5)
                 )
         )
@@ -140,7 +140,7 @@ struct RankingView: View {
             Image(systemName: "trophy")
                 .font(.system(size: 34))
                 .foregroundColor(AppColors.textTertiary)
-            Text(isJa ? "まだランキングがありません" : "No ranking yet")  // 文言はユーザー添削待ち
+            Text(isJa ? "まだランキングがありません" : "No ranking yet")  // Wording pending user review
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(AppColors.textPrimary)
         }

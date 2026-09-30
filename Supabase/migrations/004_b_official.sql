@@ -1,30 +1,30 @@
 -- ============================================================
--- Phase B-1: authors.is_official 列追加
+-- Phase B-1: add the authors.is_official column
 -- ============================================================
--- 目的:
---   公式（偉人）vs 一般ユーザー（将来 UGC の投稿者を authors として
---   扱う可能性も想定）を区別する is_official 列を追加
+-- Purpose:
+--   Add an is_official column that distinguishes official (great historical figures) vs regular users
+--   (also considering the possibility of treating UGC authors as authors in the future)
 --
--- 注意:
---   現在の方針では UGC 投稿者は public.users に紐付け、authors は
---   公式偉人のみとする (A 案確定)。
---   将来運用判断で変わる可能性があるので列だけ用意しておく。
+-- Note:
+--   Under the current policy, UGC authors are linked to public.users, and authors holds only the
+--   official great figures (plan A confirmed).
+--   This may change with future operating decisions, so only the column is prepared.
 --
--- 実行順序:
---   Phase A 完了後、B フェーズの任意タイミングで実行可
+-- Execution order:
+--   After Phase A is done, can run at any time during phase B
 -- ============================================================
 
 -- ============================================
--- 1. is_official 列追加
+-- 1. Add the is_official column
 -- ============================================
 ALTER TABLE public.authors
     ADD COLUMN IF NOT EXISTS is_official boolean NOT NULL DEFAULT false;
 
--- 既存 58 件は全部偉人 → is_official = true
+-- The existing 58 rows are all great figures → is_official = true
 UPDATE public.authors SET is_official = true;
 
 -- ============================================
--- 2. インデックス（フィードで公式マーク表示時に効く）
+-- 2. Index (helps when showing the official badge in the feed)
 -- ============================================
 CREATE INDEX IF NOT EXISTS idx_authors_official
     ON public.authors(is_official) WHERE is_official = true;

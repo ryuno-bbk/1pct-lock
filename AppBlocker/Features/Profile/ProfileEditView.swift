@@ -2,9 +2,10 @@
 //  ProfileEditView.swift
 //  AppBlocker
 //
-//  S15 プロフィール編集画面 (表示名 + アバター画像)。
-//  マイページのヘッダー (NavigationLink) と設定画面の両方から開かれる。
-//  画像変更・削除・表示名変更すべて「保存」タップ時に一括反映する。
+//  S15 profile edit screen (display name + avatar image).
+//  Opened both from the My Page header (NavigationLink) and from the settings screen.
+//  Image change, image removal and display name change are all applied together when "保存"
+//  ("Save") is tapped.
 //
 
 import SwiftUI
@@ -33,15 +34,17 @@ struct ProfileEditView: View {
     @State private var showError: Bool = false
     @State private var showRemoveConfirm: Bool = false
 
-    /// TikTok 式: 各項目は行タップで専用編集ページへ push する (2026-07-25 再構成)
+    /// TikTok style: tapping each item's row pushes a dedicated edit page (restructured 2026-07-25)
     @State private var editing: EditField?
     @FocusState private var focusedField: EditField?
-    /// ドラフト初期化は初回 onAppear のみ。編集ページから pop で戻ると onAppear が再発火するため、
-    /// 無ガードだと戻るたびにドラフトがサーバー値へリセットされ編集内容が消える (2026-07-25 レビュー修正)
+    /// Drafts are initialized only on the first onAppear. Popping back from an edit page fires onAppear
+    /// again, so without a guard the drafts would reset to the server values on every return and the
+    /// edits would be lost (2026-07-25 review fix)
     @State private var draftsLoaded = false
-    /// 編集ページを開いた時点の値。左上「キャンセル」でここへ巻き戻す (右上「保存」はドラフト維持のままpop)。
-    /// ページは親ドラフトを直接編集する設計 (ハンドルのライブ可用性チェックを生かすため) なので、
-    /// 「キャンセルで捨てる」ためにはスナップショットが必要 (2026-07-25 実機FB)
+    /// The value at the time the edit page was opened. Top-left "キャンセル" ("Cancel") rolls back to this
+    /// (top-right "保存" ("Save") pops while keeping the draft).
+    /// Pages edit the parent draft directly (to keep the live availability check for the handle), so a
+    /// snapshot is needed to "discard on cancel" (2026-07-25 real device feedback)
     @State private var editSnapshotText = ""
     @State private var editSnapshotDreamPublic = false
 
@@ -66,10 +69,12 @@ struct ProfileEditView: View {
     }
 
     private var bioValid: Bool {
-        // 🔴 上限は「プロフィール画面 (ProfileHero) の2行に収まる文字数」に合わせる。
-        // iOS 実機メトリクスで 13pt / 2行 = iPhone SE 56字 / iPhone 15 58字。
-        // DB の CHECK は 160 のままだが、160字書いても100字は全画面で永久に見えないので
-        // クライアント側で実際に見える長さまで下げる (既存の自己紹介はどれもこの上限より短いので影響なし)
+        // 🔴 The limit matches "the number of characters that fit in 2 lines on the profile screen
+        // (ProfileHero)". Measured with iOS real device metrics, 13pt / 2 lines = 56 chars on iPhone SE,
+        // 58 chars on iPhone 15.
+        // The DB CHECK stays at 160, but if 160 chars are written, 100 of them are never visible on any
+        // screen, so the client lowers it to the length that is actually visible (all existing bios are
+        // shorter than this limit, so there is no impact)
         trimmedBio.count <= 56
     }
 
@@ -89,7 +94,7 @@ struct ProfileEditView: View {
         pendingImageData != nil || pendingRemoval
     }
 
-    /// ハンドルの正規化済み値 (小文字化 + 記号整理は HandleValidator に集約)
+    /// Normalized handle value (lowercasing + symbol cleanup are centralized in HandleValidator)
     private var normalizedHandle: String {
         HandleValidator.normalized(handleDraft)
     }
@@ -102,8 +107,8 @@ struct ProfileEditView: View {
         normalizedHandle != (auth.handle ?? "")
     }
 
-    /// 変更なし (既存のまま) なら可用性チェック不要で OK 扱い。
-    /// 変更ありならフォーマット妥当 + サーバー可用性チェック済み (.available) が必須。
+    /// If unchanged (same as the existing value), no availability check is needed and it counts as OK.
+    /// If changed, a valid format + a completed server availability check (.available) are required.
     private var handleOK: Bool {
         if !handleChanged { return true }
         return handleFormatValid && handleCheckState == .available
@@ -121,10 +126,10 @@ struct ProfileEditView: View {
         hasChanges && nameValid && bioValid && dreamValid && handleOK && !isSaving && !isPreparingImage
     }
 
-    /// 表示する現在のアバター状態:
+    /// Current avatar state to display:
     /// - pendingRemoval → placeholder
-    /// - pendingImagePreview → 新しく選んだプレビュー
-    /// - それ以外 → サーバー側の auth.avatarUrl
+    /// - pendingImagePreview → the newly selected preview
+    /// - otherwise → the server-side auth.avatarUrl
     private var showsRemovedPlaceholder: Bool {
         pendingRemoval && pendingImagePreview == nil
     }
@@ -138,8 +143,8 @@ struct ProfileEditView: View {
                     avatarSection
                         .padding(.top, 16)
 
-                    // 名前 / ユーザーID を1枚のカードに (TikTok準拠: ラベル左・値右・chevron、
-                    // 行タップで専用の編集ページへ push する)
+                    // Name / user ID in one card (following TikTok: label on the left, value on the right, chevron,
+                    // tapping the row pushes the dedicated edit page)
                     settingsCard {
                         editRow(
                             field: .name,
@@ -156,9 +161,9 @@ struct ProfileEditView: View {
                         )
                     }
 
-                    // 基本情報 = 自己紹介 + 夢
+                    // Basic info = bio + dream
                     VStack(alignment: .leading, spacing: 10) {
-                        sectionHeader(lang == .japanese ? "基本情報" : "About you") // 文言はユーザー添削待ち
+                        sectionHeader(lang == .japanese ? "基本情報" : "About you") // Wording awaiting user review
                         settingsCard {
                             editRow(
                                 field: .bio,
@@ -183,19 +188,19 @@ struct ProfileEditView: View {
         }
         .navigationTitle(L.profileEditTitle(lang))
         .navigationBarTitleDisplayMode(.inline)
-        // 2026-08-04 実機バグ「ヘッダーが貫通する」の修正。
-        // 親 (MyProfileView) はヒーロー画像をバーに重ねるため
-        // .toolbarBackground(.hidden, for: .navigationBar) を指定しており、push 先が
-        // 可視性を明示しないとその透過状態を引きずる。結果このページの ScrollView の中身が
-        // ナビバーを素通りして見えていた。FeedCardListView が既に同じ対策を入れている
+        // Fix for the 2026-08-04 real device bug "the header lets content show through".
+        // The parent (MyProfileView) overlays the hero image on the bar, so it sets
+        // .toolbarBackground(.hidden, for: .navigationBar), and a pushed screen inherits that transparent
+        // state unless it sets visibility explicitly. As a result, the contents of this page's ScrollView
+        // were visible through the nav bar. FeedCardListView already has the same fix
         .toolbarBackground(AppColors.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar {
-            // 🔴 テキスト項目はサブページの「保存」で確定するようになったので、
-            //    親の「保存」は**アバターを変えた時だけ**出す。
-            //    アバターだけはこの画面で直接いじる (サブページが無い) ため、
-            //    ボタンを完全に消すと保存する手段が無くなる。
+            // 🔴 Text items are now confirmed by "保存" ("Save") on the subpage, so
+            //    the parent's "保存" ("Save") is shown **only when the avatar was changed**.
+            //    Only the avatar is edited directly on this screen (it has no subpage), so
+            //    removing the button completely would leave no way to save it.
             ToolbarItem(placement: .navigationBarTrailing) {
                 if avatarChanged {
                 Button {
@@ -326,9 +331,9 @@ struct ProfileEditView: View {
         return auth.avatarUrl != nil
     }
 
-    // MARK: - Settings Rows (TikTok 式カード)
+    // MARK: - Settings Rows (TikTok-style cards)
 
-    /// 角丸カードのコンテナ。中に editRow / rowDivider を並べる
+    /// Container for a rounded card. editRow / rowDivider are placed inside it
     private func settingsCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(spacing: 0) {
             content()
@@ -336,7 +341,7 @@ struct ProfileEditView: View {
         .background(RoundedRectangle(cornerRadius: 16).fill(AppColors.cardBackground))
     }
 
-    /// 編集ページを開く。キャンセル巻き戻し用に現在値をスナップショットしてから push
+    /// Open an edit page. Snapshot the current value for rolling back on cancel, then push
     private func openEditor(_ field: EditField) {
         switch field {
         case .name:   editSnapshotText = nameDraft
@@ -349,7 +354,7 @@ struct ProfileEditView: View {
         editing = field
     }
 
-    /// 左上「キャンセル」: 開いた時点の値へ巻き戻して pop
+    /// Top-left "キャンセル" ("Cancel"): roll back to the value at the time it was opened, then pop
     private func cancelEdit(_ field: EditField) {
         switch field {
         case .name:   nameDraft = editSnapshotText
@@ -362,16 +367,17 @@ struct ProfileEditView: View {
         editing = nil
     }
 
-    /// ラベル左・現在値右・chevron の行。タップで編集ページへ push。
-    /// 値が空なら「未設定」を薄色で表示、不正 (必須未入力/上限超過など) なら赤い注意アイコン
+    /// Row with the label on the left, the current value on the right and a chevron. Tap pushes the edit
+    /// page. If the value is empty, show "未設定" ("Not set") in a light color. If invalid (required but
+    /// empty, over the limit, etc.), show a red warning icon
     private func editRow(field: EditField, label: String, value: String, showsWarning: Bool) -> some View {
         Button {
             openEditor(field)
         } label: {
-            // 🔴 2026-09-05: 以前はラベルと値が1行を分け合っていた。
-            //    iOS 実機メトリクスで測ると値に残る幅は 220pt = 日本語 14字しか出ず、
-            //    43字の自己紹介が「14字 + …」になっていた。
-            //    → ラベルを上、値を全幅2行に変える。15pt なら日本語44字入る。
+            // 🔴 2026-09-05: the label and the value used to share one line.
+            //    Measured with iOS real device metrics, the width left for the value was 220pt = only 14
+            //    Japanese chars, so a 43-char bio showed as "14 chars + …".
+            //    → Put the label on top and the value in 2 full-width lines. At 15pt, 44 Japanese chars fit.
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     Text(label)
@@ -421,10 +427,11 @@ struct ProfileEditView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: - Per-field Editor Pages (TikTok 式 push 編集)
+    // MARK: - Per-field Editor Pages (TikTok-style push editing)
     //
-    // 各ページはドラフト (@State/@Binding) を直接編集するだけで、永続化はしない。
-    // 保存は従来どおり親ツールバーの「保存」で一括コミット (canSave/saveAll は変更なし)。
+    // Each page only edits the draft (@State/@Binding) directly and does not persist anything.
+    // Saving is committed all at once by "保存" ("Save") in the parent toolbar, as before
+    // (canSave/saveAll unchanged).
 
     @ViewBuilder
     private func editorPage(for field: EditField) -> some View {
@@ -436,9 +443,10 @@ struct ProfileEditView: View {
         }
     }
 
-    /// 編集ページ共通の枠 (TikTok 準拠 2026-07-25 実機FB):
-    /// 左上「キャンセル」= 巻き戻し pop / 右上「保存」= ドラフト維持 pop (サーバー反映は親画面の保存)。
-    /// 本文は 大タイトル → 説明文 (灰) → 灰色ボックスの入力欄 の順。push 後に自動フォーカス
+    /// Shared frame for edit pages (following TikTok, 2026-07-25 real device feedback):
+    /// Top-left "キャンセル" ("Cancel") = roll back and pop / top-right "保存" ("Save") = keep the draft
+    /// and pop (the server update is done by Save on the parent screen).
+    /// Body order: large title → description (gray) → input field in a gray box. Auto focus after push
     private func editorScaffold<Content: View>(
         title: String,
         description: String,
@@ -484,15 +492,15 @@ struct ProfileEditView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    // 🔴 2026-09-09 実機FB: 以前はここでドラフトを持ち帰るだけで、
-                    //    親画面の「保存」をもう一度押さないとサーバーに反映されなかった。
-                    //    「保存」と書いてあるのに保存されないのは明確に嘘なので、
-                    //    ここで実際にコミットしてから戻す。
-                    //    Y案 (ユーザー選択): 既存の一括保存 saveAll() をそのまま呼ぶ。
-                    //    項目ごとの個別保存に割るとハンドル重複チェックやアバター
-                    //    アップロードの失敗処理を作り直すことになり、出荷直前に見合わない。
+                    // 🔴 2026-09-09 real device feedback: previously this only brought the draft back, and
+                    //    it was not sent to the server unless "保存" ("Save") on the parent screen was pressed again.
+                    //    A button that says "保存" ("Save") but does not save is clearly a lie, so
+                    //    it now actually commits here before going back.
+                    //    Plan Y (user's choice): call the existing bulk save saveAll() as-is.
+                    //    Splitting it into per-item saves would mean rebuilding the duplicate handle check and the
+                    //    avatar upload failure handling, which is not worth it right before shipping.
                     editing = nil
-                    // 🔴 編集画面は閉じない。閉じると4項目直すのに4回開き直すことになる
+                    // 🔴 Do not close the edit screen. Closing it would mean reopening it 4 times to fix 4 items
                     Task { await saveAll(closeOnSuccess: false) }
                 } label: {
                     if isSaving {
@@ -509,14 +517,14 @@ struct ProfileEditView: View {
             }
         }
         .onAppear {
-            // push トランジションが落ち着いてからフォーカス (遷移中の起動を避ける)
+            // Focus after the push transition settles (avoid triggering it during the transition)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 focusedField = field
             }
         }
     }
 
-    /// TikTok 式の灰色ボックス入力欄 (枠線なし・塗りのみ)
+    /// TikTok-style gray box input field (no border, fill only)
     private func editorBox<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content()
             .padding(.horizontal, 16)
@@ -525,7 +533,7 @@ struct ProfileEditView: View {
             .background(RoundedRectangle(cornerRadius: 12).fill(AppColors.cardBackground))
     }
 
-    /// 単一行フィールド末尾のクリア (×) ボタン (TikTok 準拠)
+    /// Clear (×) button at the end of single-line fields (following TikTok)
     private func clearButton(_ binding: Binding<String>) -> some View {
         Button {
             binding.wrappedValue = ""
@@ -541,8 +549,8 @@ struct ProfileEditView: View {
         editorScaffold(
             title: L.profileEditDisplayNameLabel(lang),
             description: lang == .japanese
-                ? "プロフィールに表示される名前です。" // 文言はユーザー添削待ち
-                : "This is how your name appears on your profile.", // 文言はユーザー添削待ち
+                ? "プロフィールに表示される名前です。" // Wording awaiting user review
+                : "This is how your name appears on your profile.", // Wording awaiting user review
             field: .name,
             saveEnabled: nameValid
         ) {
@@ -600,7 +608,7 @@ struct ProfileEditView: View {
                             .submitLabel(.done)
                             .focused($focusedField, equals: .handle)
 
-                        // TikTok 準拠: 使用可ならボックス内に緑チェック
+                        // Following TikTok: a green check inside the box if the handle is available
                         if handleChanged && handleCheckState == .available {
                             Image(systemName: "checkmark")
                                 .font(.system(size: 14, weight: .bold))
@@ -622,37 +630,37 @@ struct ProfileEditView: View {
         editorScaffold(
             title: ProfileEditBioStrings.label(lang),
             description: lang == .japanese
-                ? "自己紹介はいつでも編集できます。" // 文言はユーザー添削待ち
-                : "You can edit your bio anytime.", // 文言はユーザー添削待ち
+                ? "自己紹介はいつでも編集できます。" // Wording awaiting user review
+                : "You can edit your bio anytime.", // Wording awaiting user review
             field: .bio,
             saveEnabled: bioValid
         ) {
             VStack(alignment: .leading, spacing: 8) {
                 editorBox {
                     TextField(ProfileEditBioStrings.placeholder(lang), text: $bioDraft, axis: .vertical)
-                        // プロフィールでの見え方 (2行) に近い高さにする。
-                        // 56字上限 + 改行なしなので、これ以上大きい箱は空白が余るだけ
+                        // Height close to how it looks on the profile (2 lines).
+                        // 56-char limit + no line breaks, so a bigger box would only leave empty space
                         .lineLimit(2...3)
                         .font(.system(size: 16))
                         .foregroundColor(AppColors.textPrimary)
                         .autocorrectionDisabled()
                         .focused($focusedField, equals: .bio)
                         .onChange(of: bioDraft) { _, newValue in
-                            // 🔴 2026-09-09 (2回直している。経緯を残す):
+                            // 🔴 2026-09-09 (fixed twice. Keeping the history):
                             //
-                            //  1. 最初の実装は `> 160` を見て 56 で切っていたので
-                            //     57〜160字が素通りしていた (自己バグ)。上限で判定する。
+                            //  1. The first implementation checked `> 160` and then cut at 56, so
+                            //     57 to 160 chars went through (my own bug). Check against the limit instead.
                             //
-                            //  2. 次に改行を空白へ潰したが、ユーザー判断で取り下げ。
-                            //     結論は「そもそも改行させない」。自己紹介はプロフィールで
-                            //     2行しか出ないので、改行は入れられても得がない。
-                            //     🔴 改行キーは「入力の終わり」として扱い、**キーボードを閉じる**。
-                            //     こうすると改行が1つも入らないまま、押した人の意図
-                            //     (入力を終える) が満たされる。
+                            //  2. Next, line breaks were collapsed into spaces, but the user decided to drop that.
+                            //     The conclusion is "do not allow line breaks at all". The bio only shows 2 lines on the
+                            //     profile, so allowing line breaks gains nothing.
+                            //     🔴 The return key is treated as "end of input" and **closes the keyboard**.
+                            //     This way not a single line break gets in, and the intent of the person who pressed it
+                            //     (finishing input) is met.
                             var cleaned = newValue
                             if cleaned.contains(where: \.isNewline) {
                                 cleaned = cleaned.filter { !$0.isNewline }
-                                focusedField = nil   // = キーボードを閉じる
+                                focusedField = nil   // = close the keyboard
                             }
                             if cleaned.count > 56 {
                                 cleaned = String(cleaned.prefix(56))
@@ -675,8 +683,8 @@ struct ProfileEditView: View {
         editorScaffold(
             title: ProfileEditDreamStrings.label(lang),
             description: lang == .japanese
-                ? "あなたが達成したい夢をここに宣言してください。他人に見せるかは自分で選べます。" // ユーザー指定文言 (2026-07-25「ここに」必須)
-                : "Declare the dream you want to achieve right here. You choose whether others can see it.", // 英語はユーザー添削待ち
+                ? "あなたが達成したい夢をここに宣言してください。他人に見せるかは自分で選べます。" // Wording specified by the user (2026-07-25, "ここに" ("here") is required)
+                : "Declare the dream you want to achieve right here. You choose whether others can see it.", // English awaiting user review
             field: .dream,
             saveEnabled: dreamValid
         ) {
@@ -702,7 +710,7 @@ struct ProfileEditView: View {
                         .foregroundColor(trimmedDream.count > 120 ? AppColors.error : AppColors.textTertiary)
                 }
 
-                // 公開トグル (夢が空のときは無意味なので無効化)
+                // Public toggle (disabled when the dream is empty, since it is meaningless then)
                 Toggle(isOn: $dreamIsPublicDraft) {
                     Text(ProfileEditDreamStrings.publicToggle(lang))
                         .font(.system(size: 15, weight: .medium))
@@ -720,8 +728,8 @@ struct ProfileEditView: View {
     private var handleStatusView: some View {
         switch handleCheckState {
         case .idle:
-            // フォーマット説明は編集ページの説明文 (editorScaffold description) が担うため
-            // idle では何も出さない (2026-07-25 TikTok化で重複解消)
+            // The format explanation is handled by the edit page description (editorScaffold description), so
+            // nothing is shown in idle (duplicate removed in the 2026-07-25 TikTok-style rework)
             EmptyView()
         case .checking:
             HStack(spacing: 6) {
@@ -740,7 +748,7 @@ struct ProfileEditView: View {
                 .font(.system(size: 12))
                 .foregroundColor(AppColors.error)
         case .error:
-            // 通信エラーは「使用中」と区別してリトライ導線を出す
+            // Network errors are distinguished from "taken" and show a retry path
             Button {
                 scheduleHandleCheck()
             } label: {
@@ -759,8 +767,8 @@ struct ProfileEditView: View {
         }
     }
 
-    /// ハンドル入力を 400ms デバウンスして可用性チェック。
-    /// フォーマット不正 or 未変更 (既存値と同一) の場合はサーバー問い合わせしない。
+    /// Debounce handle input by 400ms and check availability.
+    /// If the format is invalid or unchanged (same as the existing value), do not query the server.
     private func scheduleHandleCheck() {
         handleCheckTask?.cancel()
 
@@ -785,7 +793,7 @@ struct ProfileEditView: View {
             let result = await auth.checkHandleAvailable(candidate)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                // 待っている間に別の値へ変わっていたら結果を捨てる
+                // If the value changed to something else while waiting, discard the result
                 guard candidate == normalizedHandle else { return }
                 switch result {
                 case .available: handleCheckState = .available
@@ -827,16 +835,16 @@ struct ProfileEditView: View {
     }
 
     @MainActor
-    /// - Parameter closeOnSuccess: 成功したらプロフィール編集画面ごと閉じるか。
-    ///   🔴 サブページ (表示名/ID/自己紹介/夢) の「保存」から呼ぶときは false。
-    ///   true のままだと、1項目直すたびに編集画面ごと閉じてしまい、4項目直すのに
-    ///   編集画面を4回開き直すことになる (2026-09-09 実機FB。私が入れた退行)。
+    /// - Parameter closeOnSuccess: whether to close the whole profile edit screen on success.
+    ///   🔴 false when called from "保存" ("Save") on a subpage (display name/ID/bio/dream).
+    ///   If left true, every single-item fix closes the whole edit screen, and fixing 4 items means
+    ///   reopening the edit screen 4 times (2026-09-09 real device feedback. A regression I introduced).
     private func saveAll(closeOnSuccess: Bool = true) async {
         guard canSave else { return }
         isSaving = true
         defer { isSaving = false }
 
-        // 1. アバター: 削除 → アップロード → 何もしない の順で 1 つだけ実行
+        // 1. Avatar: run exactly one of these, checked in order: remove → upload → do nothing
         do {
             if pendingRemoval {
                 try await auth.removeAvatar()
@@ -854,7 +862,7 @@ struct ProfileEditView: View {
             return
         }
 
-        // 2. 表示名 (変更があれば)
+        // 2. Display name (if changed)
         if nameChanged {
             do {
                 _ = try await auth.setDisplayName(trimmedName)
@@ -870,7 +878,7 @@ struct ProfileEditView: View {
             }
         }
 
-        // 2.5. ユーザーID (@handle) (変更があれば)。canSave で既に .available 確認済みの前提。
+        // 2.5. User ID (@handle) (if changed). Assumes canSave has already confirmed .available.
         if handleChanged {
             let ok = await auth.updateHandle(normalizedHandle)
             if !ok {
@@ -880,7 +888,7 @@ struct ProfileEditView: View {
             }
         }
 
-        // 2.6. 自己紹介 (bio) (変更があれば)
+        // 2.6. Bio (if changed)
         if bioChanged {
             let ok = await auth.updateBio(trimmedBio)
             if !ok {
@@ -890,7 +898,7 @@ struct ProfileEditView: View {
             }
         }
 
-        // 2.7. 夢 (変更があれば)。本文 or 公開設定のどちらかが変わっていれば保存
+        // 2.7. Dream (if changed). Save if either the text or the public setting changed
         if dreamChanged {
             let ok = await auth.updateDream(trimmedDream, isPublic: dreamIsPublicDraft)
             if !ok {
@@ -898,26 +906,27 @@ struct ProfileEditView: View {
                 showError = true
                 return
             }
-            // Shield (案A) のサブタイトル用に App Group へミラー
+            // Mirror to the App Group for the Shield (plan A) subtitle
             AppGroupStorage.shared.saveUserDream(auth.dream)
         }
 
-        // 3. アバターか表示名が変わったら、自分の投稿が出る全フィードを再読み込み。
-        //    feedback_feed_consistency.md の方針 B (load 再呼び出し) でカバー。
+        // 3. If the avatar or display name changed, reload every feed where your own posts appear.
+        //    Covered by policy B (call load again) in feedback_feed_consistency.md.
         if avatarChanged || nameChanged {
             await refreshAffectedFeeds()
         }
 
-        // 4. すべて成功したら後始末。閉じるかどうかは呼び出し元が決める
+        // 4. Clean up once everything succeeded. Whether to close is decided by the caller
         pendingImageData = nil
         pendingImagePreview = nil
         pendingRemoval = false
         if closeOnSuccess { dismiss() }
     }
 
-    /// 自分のアバター/表示名が出る可能性のあるフィードを並列再読み込み。
-    /// 対象: おすすめ / フォロー中 / 自分の投稿。
-    /// (TagFeedView は都度取得、UserProfileView は他人プロフィール用なので除外)
+    /// Reload in parallel the feeds that may show your own avatar/display name.
+    /// Targets: recommended / following / your own posts.
+    /// (TagFeedView fetches every time, and UserProfileView is for other people's profiles, so both are
+    /// excluded)
     private func refreshAffectedFeeds() async {
         async let mixed: () = FeedService.shared.loadRecommended()
         async let following: () = FeedService.shared.loadFollowing()
@@ -927,8 +936,8 @@ struct ProfileEditView: View {
 
     // MARK: - Helpers
 
-    /// 画像を最大辺 maxSize にダウンスケールして JPEG 圧縮。
-    /// アバターは表示で 120pt 程度なので 800px もあれば十分。
+    /// Downscale the image so its longest side is maxSize, then JPEG-compress.
+    /// The avatar is displayed at about 120pt, so 800px is more than enough.
     private func downscaleToJPEG(data: Data, maxSize: CGFloat, quality: CGFloat) throws -> Data {
         guard let original = UIImage(data: data) else {
             throw AvatarLoadError.notImage
@@ -955,7 +964,7 @@ struct ProfileEditView: View {
 
 }
 
-// MARK: - Edit Field (TikTok 式の項目別編集ページの識別子)
+// MARK: - Edit Field (identifier for the TikTok-style per-item edit pages)
 
 private enum EditField: String, Identifiable, Hashable {
     case name, handle, bio, dream
@@ -969,12 +978,13 @@ private enum HandleCheckState: Equatable {
     case checking
     case available
     case unavailable
-    /// サーバー可用性チェックの通信エラー (使用中とは区別してリトライ導線を出す)
+    /// Network error from the server availability check (distinguished from "taken" and shows a retry
+    /// path)
     case error
     case invalid
 }
 
-// MARK: - Handle Strings (このファイル限定)
+// MARK: - Handle Strings (this file only)
 
 private enum ProfileEditHandleStrings {
     static func label(_ lang: AppLanguage) -> String {

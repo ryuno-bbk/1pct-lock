@@ -2,14 +2,15 @@
 //  KeyboardDismissTap.swift
 //  AppBlocker
 //
-//  アプリ全域の「テキスト入力以外をタップしたらキーボードを閉じる」(2026-07-25 実機FB:
-//  場所の名前入力などでキーボードが閉じられず、保存ボタンまでスクロールするしかなかった)。
-//  画面ごとに onTapGesture を仕込む方式は漏れが出るため、key window に
-//  UITapGestureRecognizer を1本挿す UIKit の定石で一括対応する。
+//  App-wide "tap anywhere other than a text input to close the keyboard" (2026-07-25 real-device
+//  feedback: in inputs such as the place name, the keyboard could not be closed and the only option
+//  was to scroll to the save button).
+//  Adding onTapGesture per screen misses some screens, so this uses the standard UIKit approach of
+//  adding one UITapGestureRecognizer to the key window to cover everything at once.
 //
-//  - cancelsTouchesInView = false: ボタン等のタップはそのまま素通しする (奪わない)
-//  - shouldRecognizeSimultaneouslyWith = true: SwiftUI 側のジェスチャと共存する
-//  - shouldReceive touch: テキスト入力ビュー自身へのタップ (カーソル移動など) では発火しない
+//  - cancelsTouchesInView = false: taps on buttons etc. pass through as is (not stolen)
+//  - shouldRecognizeSimultaneouslyWith = true: coexists with SwiftUI gestures
+//  - shouldReceive touch: does not fire for taps on the text input view itself (moving the cursor, etc.)
 //
 
 import UIKit
@@ -18,7 +19,8 @@ enum KeyboardDismissTap {
 
     private static var installed = false
 
-    /// key window にタップ検知を1本だけ挿す。ウィンドウ未生成なら少し待って再試行する
+    /// Add exactly one tap detector to the key window. If the window does not exist yet, wait a little and
+    /// retry
     static func installIfNeeded(retriesLeft: Int = 5) {
         guard !installed else { return }
         guard let window = UIApplication.shared.connectedScenes
@@ -60,9 +62,9 @@ enum KeyboardDismissTap {
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            // テキスト入力ビュー (とその内部) へのタップでは閉じない。
-            // SwiftUI の TextField/TextEditor はバッキングビューのクラス名に
-            // TextField/TextView/TextInput/TextLayout を含むため名前でも判定する
+            // Do not close on taps on a text input view (or its internals).
+            // The backing view class names of SwiftUI's TextField/TextEditor contain
+            // TextField/TextView/TextInput/TextLayout, so the name is checked too
             var view: UIView? = touch.view
             while let current = view {
                 if current is UITextField || current is UITextView { return false }

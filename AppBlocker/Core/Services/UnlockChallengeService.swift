@@ -2,20 +2,20 @@
 //  UnlockChallengeService.swift
 //  AppBlocker
 //
-//  解除課題 (難易度モード) の設定と、走っているセッションへの焼き付け。
+//  Setting for the unlock challenge (difficulty mode), and baking it into the running session.
 //
-//  🔴 なぜ「焼き付け」が要るか:
-//    設定は3モード共通のグローバル値で、いつでも変えられる。もし走っている
-//    セッションが現在の設定をその場で読むと、ロック中に設定を緩めるだけで
-//    逃げられてしまい、縛りとして成立しない。
-//    → セッション開始時の値を保存し、そのセッションが終わるまでそれを使う。
-//      設定変更が効くのは次のセッションから。
-//    おかげで「セッション中は設定を触れないようにする」処理が丸ごと不要になり、
-//    3モード共通の場所に置いた部品がときどき無効化される気持ち悪さも避けられる。
+//  🔴 Why "baking" is needed:
+//    The setting is a global value shared by the 3 modes and can be changed at any time. If a
+//    running session read the current setting on the spot, the user could escape just by
+//    loosening the setting during a lock, and it would not work as a restriction.
+//    → Save the value at session start and use it until that session ends.
+//      A setting change takes effect from the next session.
+//    Thanks to this, logic to "block setting changes during a session" is not needed at all, and
+//    we avoid the awkwardness of a component in the 3-mode shared area being disabled at times.
 //
-//  🔴 BlockSession (Codable・永続化済み) には手を加えない:
-//    実ユーザーの実行中セッションを復元しているモデルなので、フィールドを足して
-//    デコードの挙動を変えるリスクを取らない。焼き付けはここで別に持つ。
+//  🔴 Do not modify BlockSession (Codable, persisted):
+//    It is the model that restores real users' running sessions, so we do not take the risk of
+//    adding fields and changing its decoding behavior. The baked value is kept separately here.
 //
 
 import Foundation
@@ -29,15 +29,16 @@ final class UnlockChallengeService: ObservableObject {
     private enum Keys {
         static let selected = "unlockChallenge.selected"
         static let randomPool = "unlockChallenge.randomPool"
-        /// 走っているセッションに焼き付けた課題
+        /// The challenge baked into the running session
         static let activeChallenge = "unlockChallenge.active.challenge"
-        /// 焼き付けの持ち主 (セッションID)。別セッションの焼き付けを誤って使わないため
+        /// Owner of the baked value (session ID), so that a different session's baked value is not used by
+        /// mistake
         static let activeOwner = "unlockChallenge.active.owner"
     }
 
     private let defaults: UserDefaults
 
-    /// ユーザーが選んでいる課題。⚠️ 変更が効くのは次のセッションから
+    /// The challenge the user has selected. ⚠️ A change takes effect from the next session
     @Published var selected: UnlockChallenge {
         didSet {
             guard selected != oldValue else { return }
@@ -45,7 +46,8 @@ final class UnlockChallengeService: ObservableObject {
         }
     }
 
-    /// random のときの抽選候補。🔴 空にはしない (空だと抽選できず解除不能になる)
+    /// Candidates for the draw when random. 🔴 Never empty (if empty, nothing can be drawn and
+    /// unlocking becomes impossible)
     @Published var randomPool: Set<UnlockChallenge> {
         didSet {
             guard randomPool != oldValue else { return }
@@ -58,8 +60,8 @@ final class UnlockChallengeService: ObservableObject {
 
         let rawSelected = defaults.string(forKey: Keys.selected) ?? ""
         let restored = UnlockChallenge(rawValue: rawSelected)
-        // 🔴 未実装の課題が保存されていたら既定に戻す。
-        //    実装前のビルドで選ばれた値が残っていると解除不能になる
+        // 🔴 If an unimplemented challenge was saved, reset to the default.
+        //    If a value chosen in a build before it was implemented remains, unlocking becomes impossible
         self.selected = (restored?.isImplemented == true) ? restored! : .longPress
 
         let rawPool = defaults.stringArray(forKey: Keys.randomPool) ?? []
@@ -68,33 +70,36 @@ final class UnlockChallengeService: ObservableObject {
         self.randomPool = pool.isEmpty ? [.longPress] : pool
     }
 
-    // MARK: - セッションへの焼き付け
+    // MARK: - Baking into the session
 
-    /// セッション開始時に呼ぶ。この時点の設定をそのセッションの課題として固定する。
-    /// random ならここで抽選する (毎回引き直すと、閉じて開くだけで楽な課題を狙えてしまう)
+    /// Call at session start. Fixes the current setting as that session's challenge.
+    /// If random, draw here (if it were redrawn every time, the user could aim for an easy challenge just
+    /// by closing and reopening)
     func beginSession(id: UUID) {
         let resolved = resolve(selected)
         defaults.set(resolved.rawValue, forKey: Keys.activeChallenge)
         defaults.set(id.uuidString, forKey: Keys.activeOwner)
     }
 
-    /// まだ焼き付けが無ければ焼き付ける。
-    /// スケジュールは Extension や15秒リコンサイル経由で始まるためセッションIDを
-    /// 持ち回れない。「いま走っているロックの課題」として1つだけ持つ
+    /// Bake if nothing is baked yet.
+    /// A schedule starts through the Extension or the 15-second reconcile, so a session ID cannot be
+    /// carried around. Keep just one, as "the challenge of the lock running now"
     func beginSessionIfNeeded() {
         guard defaults.string(forKey: Keys.activeChallenge) == nil else { return }
         defaults.set(resolve(selected).rawValue, forKey: Keys.activeChallenge)
     }
 
-    /// セッション終了時に呼ぶ
+    /// Call at session end
     func endSession() {
         defaults.removeObject(forKey: Keys.activeChallenge)
         defaults.removeObject(forKey: Keys.activeOwner)
     }
 
-    /// 走っているセッションに課された課題。
-    /// 焼き付けが無い場合 (このコードが入る前から走っていたセッション等) は既定に倒す。
-    /// 🔴 ここで現在の設定に倒してはいけない。ロック中に設定を緩めて逃げられてしまう
+    /// The challenge assigned to the running session.
+    /// If nothing is baked (e.g. a session that was already running before this code shipped), fall
+    /// back to the default.
+    /// 🔴 Do not fall back to the current setting here. The user could escape by loosening the setting
+    /// during a lock
     func challenge(forSession id: UUID?) -> UnlockChallenge {
         guard let id,
               defaults.string(forKey: Keys.activeOwner) == id.uuidString,
@@ -107,9 +112,9 @@ final class UnlockChallengeService: ObservableObject {
         return challenge
     }
 
-    /// 走っているセッションに焼き付いている課題 (表示用)。無ければ nil。
-    /// 🔴 ロック中のカードはこれを出すこと。設定値を出すと
-    ///    「カードは腕立てと言っているのに実際は長押し」という嘘になる
+    /// The challenge baked into the running session (for display). nil if none.
+    /// 🔴 The card during a lock must show this. Showing the setting value would be a lie:
+    ///    "the card says push-ups but it is actually a long press"
     var activeChallenge: UnlockChallenge? {
         guard let raw = defaults.string(forKey: Keys.activeChallenge),
               let challenge = UnlockChallenge(rawValue: raw),
@@ -118,13 +123,14 @@ final class UnlockChallengeService: ObservableObject {
         return challenge
     }
 
-    // MARK: - 抽選
+    // MARK: - Draw
 
-    /// random を実際の課題に解決する。それ以外はそのまま返す
+    /// Resolve random into an actual challenge. Anything else is returned as-is
     private func resolve(_ challenge: UnlockChallenge) -> UnlockChallenge {
         guard challenge == .random else { return challenge }
         let candidates = randomPool.filter { $0.canBeRandomCandidate && $0.isImplemented }
-        // 🔴 候補が空なら既定に倒す。ここで nil を返すと解除手段が無くなる
+        // 🔴 If there are no candidates, fall back to the default. Returning nil here would leave no way to
+        // unlock
         return candidates.randomElement() ?? .longPress
     }
 }

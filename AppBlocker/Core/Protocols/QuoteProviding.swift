@@ -2,36 +2,36 @@
 //  QuoteProviding.swift
 //  AppBlocker
 //
-//  名言提供プロトコル（v1.1 AWS対応を見越した設計）
+//  Quote provider protocol (designed with v1.1 AWS support in mind)
 //
 
 import Foundation
 
-/// 名言を提供するプロトコル
-/// v1.0: LocalQuoteProvider（ローカルJSON）
-/// v2.0: SupabaseQuoteProvider（Supabase経由）
+/// Protocol that provides quotes
+/// v1.0: LocalQuoteProvider (local JSON)
+/// v2.0: SupabaseQuoteProvider (via Supabase)
 protocol QuoteProviding {
-    /// すべての名言を取得
+    /// Get all quotes
     func fetchQuotes() async throws -> [Quote]
 
-    /// ランダムな名言を1つ取得
+    /// Get one random quote
     func getRandomQuote() -> Quote?
 
-    /// Shield ローテーション用に、シャッフル済みの名言プールを最大 count 件返す (同期)。
-    /// 取得できなければ空配列 (呼び出し側で別ソースにフォールバックする)
+    /// For Shield rotation, return a shuffled pool of up to count quotes (synchronous).
+    /// Empty array if nothing can be fetched (the caller falls back to another source)
     func getRandomPool(count: Int) -> [Quote]
 
-    /// カテゴリでフィルタリングした名言を取得
+    /// Get quotes filtered by category
     func fetchQuotes(by category: String) async throws -> [Quote]
 
-    /// 特定のAuthorの名言を取得
+    /// Get quotes of a specific Author
     func fetchQuotes(byAuthor authorId: UUID) async throws -> [Quote]
 }
 
 // MARK: - Default Implementation
 extension QuoteProviding {
-    /// デフォルトは空 (同期的に全件を持つプロバイダーのみ override する)。
-    /// Supabase プロバイダーはこのデフォルトのまま = QuoteService 側で loaded quotes / Local にフォールバック
+    /// Empty by default (only providers that hold everything synchronously override it).
+    /// The Supabase provider keeps this default = QuoteService falls back to loaded quotes / Local
     func getRandomPool(count: Int) -> [Quote] { [] }
 
     func fetchQuotes(by category: String) async throws -> [Quote] {

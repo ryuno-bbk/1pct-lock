@@ -2,7 +2,7 @@
 //  AuthorProfileView.swift
 //  AppBlocker
 //
-//  偉人プロフィールページ（名言一覧 + フォロー）
+//  Great figure profile page (quote list + follow)
 //
 
 import SwiftUI
@@ -38,10 +38,10 @@ struct AuthorProfileView: View {
 
             ScrollView {
                 VStack(spacing: 0) {
-                    // プロフィールヘッダー
+                    // Profile header
                     profileHeader
 
-                    // 名言一覧
+                    // Quote list
                     quotesSection
                 }
             }
@@ -62,7 +62,7 @@ struct AuthorProfileView: View {
             await loadFollowerCount()
         }
         .onChange(of: followService.followedAuthorIds) { _, _ in
-            // 自分のフォロー/解除でフォロワー数を即時反映
+            // Reflect the follower count immediately when you follow/unfollow
             Task { await loadFollowerCount() }
         }
     }
@@ -71,13 +71,13 @@ struct AuthorProfileView: View {
 
     private var profileHeader: some View {
         VStack(spacing: 16) {
-            // アイコン
+            // Icon
             Image(systemName: "person.circle.fill")
                 .font(.system(size: 80))
                 .foregroundColor(AppColors.accent)
                 .padding(.top, 24)
 
-            // 名前 + 公式バッジ + 国旗
+            // Name + official badge + national flag
             HStack(spacing: 6) {
                 Text(author.name)
                     .font(.system(size: 24, weight: .bold))
@@ -96,7 +96,7 @@ struct AuthorProfileView: View {
                 }
             }
 
-            // バイオ（もっと見る / 閉じる）
+            // Bio (show more / close)
             VStack(spacing: 4) {
                 Text(author.displayBio(lang: lang))
                     .font(.system(size: 14))
@@ -119,7 +119,7 @@ struct AuthorProfileView: View {
             }
             .padding(.horizontal, 32)
 
-            // 統計
+            // Stats
             HStack(spacing: 40) {
                 statItem(value: "\(authorQuotes.count)", label: L.authorQuotes(lang))
                 statItem(value: followerCount.abbreviatedCount(lang), label: L.authorFollowers(lang))
@@ -130,7 +130,7 @@ struct AuthorProfileView: View {
             }
             .padding(.top, 8)
 
-            // フォローボタン
+            // Follow button
             Button {
                 Task { await followService.toggleFollow(authorId: author.id) }
             } label: {
@@ -252,7 +252,7 @@ struct AuthorProfileView: View {
         isLoadingQuotes = false
     }
 
-    /// user_follows から author_id を持つ行を count して実フォロワー数を取得
+    /// Count the rows in user_follows that have this author_id to get the real follower count
     private func loadFollowerCount() async {
         struct FollowerRow: Decodable { let follower_id: UUID }
         do {

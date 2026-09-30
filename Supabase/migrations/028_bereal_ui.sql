@@ -1,20 +1,21 @@
 -- ============================================
 -- 028_bereal_ui.sql
--- BeReal 風 UI 大改修のバックエンド (2026-07-10 確定仕様)
+-- Backend for the big BeReal-style UI overhaul (spec finalized 2026-07-10)
 --
---   1. user_posts.view_count (投稿詳細が開かれた合計タップ数、全員に見える)
---   2. post_views テーブル (誰がいつ何回見たかの生ログ)
---      → 後続の「おすすめアルゴリズム」の学習信号を兼ねる。ユニーク閲覧数も導出可能
---   3. record_post_view RPC (計上。自分の投稿の自己閲覧はカウントしない)
---   4. fetch_feed_extras RPC (フィードカード用のいいねした人≤3 + コメントプレビュー≤3 を
---      post/quote 混在でバッチ取得。1 画面 1 ラウンドトリップ)
+--   1. user_posts.view_count (total taps that opened the post detail, visible to everyone)
+--   2. post_views table (raw log of who viewed what, when and how many times)
+--      → also serves as the training signal for the later "recommendation algorithm". Unique view
+--        counts can be derived too
+--   3. record_post_view RPC (counts views. Self-views of your own posts are not counted)
+--   4. fetch_feed_extras RPC (batch fetch of likers ≤3 + comment previews ≤3 for feed cards
+--      with post/quote mixed. 1 round trip per screen)
 --
--- 設計メモ:
---   - view_count は表示用の非正規化カウンタ (users.total_block_seconds と同じ流儀)
---   - post_views は (post_id, viewer_id) PK の upsert 方式。直接の INSERT/UPDATE は
---     クライアントに許さず、record_post_view 経由のみ (block_sessions と同じ流儀)
---   - コメントプレビューは最新 3 件を古い順で返す (読み順が自然になる)
---   - いいねした人はブロック済みユーザーを除外、最新 3 人
+-- Design notes:
+--   - view_count is a denormalized counter for display (same style as users.total_block_seconds)
+--   - post_views is an upsert with a (post_id, viewer_id) PK. Direct INSERT/UPDATE is
+--     not allowed for the client, only through record_post_view (same style as block_sessions)
+--   - Comment previews return the latest 3, oldest first (the natural reading order)
+--   - Likers exclude blocked users, latest 3 people
 -- ============================================
 
 -- --------------------------------------------
@@ -27,7 +28,7 @@ ALTER TABLE public.user_posts
 COMMENT ON COLUMN public.user_posts.view_count IS '投稿詳細が開かれた合計タップ数 (record_post_view で加算、自己閲覧は除外)';
 
 -- --------------------------------------------
--- 2. post_views (閲覧ログ / おすすめアルゴリズムの信号源)
+-- 2. post_views (view log / signal source for the recommendation algorithm)
 -- --------------------------------------------
 
 CREATE TABLE IF NOT EXISTS public.post_views (
@@ -46,7 +47,7 @@ CREATE INDEX IF NOT EXISTS idx_post_views_viewer_last
 
 ALTER TABLE public.post_views ENABLE ROW LEVEL SECURITY;
 
--- 直接アクセスは一切許可しない (record_post_view / 将来の集計 RPC 経由のみ)
+-- No direct access at all (only through record_post_view / future aggregation RPCs)
 DROP POLICY IF EXISTS post_views_no_direct ON public.post_views;
 
 -- --------------------------------------------
@@ -72,11 +73,11 @@ BEGIN
     WHERE id = target_post_id;
 
     IF post_owner_id IS NULL THEN
-        -- 削除直後の投稿など。エラーにせず黙って無視 (閲覧計上はベストエフォート)
+        -- E.g. a post just deleted. Silently ignore it instead of erroring (view counting is best-effort)
         RETURN;
     END IF;
 
-    -- 自分の投稿の自己閲覧はカウントしない
+    -- Self-views of your own posts are not counted
     IF post_owner_id = current_user_id THEN
         RETURN;
     END IF;
@@ -99,8 +100,8 @@ GRANT  EXECUTE ON FUNCTION public.record_post_view(uuid) TO authenticated;
 
 -- --------------------------------------------
 -- 4. fetch_feed_extras RPC
---    フィードに表示中のカード群の「いいねした人 (≤3)」+「コメントプレビュー (≤3)」を
---    post / quote 混在で 1 回のクエリで返す
+--    Return "likers (≤3)" + "comment previews (≤3)" for the cards shown in the feed,
+--    with post / quote mixed, in 1 query
 -- --------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.fetch_feed_extras(
@@ -110,8 +111,8 @@ CREATE OR REPLACE FUNCTION public.fetch_feed_extras(
 RETURNS TABLE (
     kind     text,
     item_id  uuid,
-    likers   jsonb,   -- [{user_id, display_name, avatar_url}] 最新順 ≤3
-    comments jsonb    -- [{id, author_name, text}] 最新3件を古い順
+    likers   jsonb,   -- [{user_id, display_name, avatar_url}] newest first ≤3
+    comments jsonb    -- [{id, author_name, text}] latest 3, oldest first
 )
 LANGUAGE sql
 SECURITY DEFINER
@@ -177,7 +178,7 @@ AS $$
             WHERE lr.kind = t.kind AND lr.item_id = t.item_id AND lr.rn <= 3
         ), '[]'::jsonb) AS likers,
         COALESCE((
-            -- 最新 3 件を拾ってから古い順に並べ直す
+            -- Pick the latest 3, then reorder them oldest first
             SELECT jsonb_agg(jsonb_build_object(
                 'id',          cr.comment_id,
                 'author_name', cr.author_name,

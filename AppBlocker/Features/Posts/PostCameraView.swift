@@ -2,13 +2,15 @@
 //  PostCameraView.swift
 //  AppBlocker
 //
-//  UGC 投稿の新 Step1: TikTok/BeReal 式の自前カメラ (2026-07-11 ユーザー確定)。
-//  ＋タブを押すと即このカメラが開く (背面スタート)。
-//    - 中央: 4:5 プレビュー (投稿キャンバスと同比率 = ほぼ WYSIWYG)
-//    - 下部: ライブラリ / シャッター / 前後切替、その下に「テンプレートから選ぶ」
-//    - 上部: 閉じる / フラッシュ
-//  撮影 or ライブラリ選択で背景を確定し、そのままエディタ (Step2) へ進む。
-//  テンプレートは従来の PostBackgroundGridView へ遷移する。
+//  New Step1 of UGC posting: a custom TikTok/BeReal-style camera (user decision 2026-07-11).
+//  Tapping the + tab opens this camera right away (starts with the back camera).
+//    - Center: 4:5 preview (same ratio as the post canvas = almost WYSIWYG)
+//    - Bottom: library / shutter / front-back switch, and below them "テンプレートから選ぶ"
+//      ("Choose from templates")
+//    - Top: close / flash
+//  Taking a photo or picking from the library sets the background, then goes straight to the
+//  editor (Step2).
+//  Templates navigate to the existing PostBackgroundGridView.
 //
 
 import SwiftUI
@@ -17,14 +19,14 @@ import PhotosUI
 import UIKit
 import Combine
 
-// MARK: - カメラ制御 (AVCaptureSession)
+// MARK: - Camera control (AVCaptureSession)
 
 final class PostCameraController: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
     let session = AVCaptureSession()
     private let output = AVCapturePhotoOutput()
     private let queue = DispatchQueue(label: "onepercent.postcamera.session")
 
-    /// nil = 判定中 / true = 許可 / false = 拒否
+    /// nil = checking / true = allowed / false = denied
     @Published var isAuthorized: Bool? = nil
     @Published var flashOn = false
     @Published var isFrontCamera = false
@@ -32,20 +34,22 @@ final class PostCameraController: NSObject, ObservableObject, AVCapturePhotoCapt
     private var currentInput: AVCaptureDeviceInput?
     private var onPhoto: ((UIImage?) -> Void)?
 
-    /// 端末の傾きを見て「水平が水平に写る」角度を教えてくれる Apple 純正の調停役 (iOS 17+)。
+    /// Apple's own coordinator that reads the device tilt and gives the angle at which "level is captured
+    /// as level" (iOS 17+).
     ///
-    /// 🔴 これが無いと接続は既定の縦 (90°) に固定されたままになる。AVFoundation は
-    ///    加速度センサーを勝手に読まないので、横に構えて撮っても「縦で撮った」EXIF が付き、
-    ///    世界が90°倒れた写真が保存される (2026-08-28 ユーザー報告)。
-    ///    プレビューと撮影の両方に同じ調停役の角度を当てて WYSIWYG を保つ (Apple の AVCam と同じ形)
+    /// 🔴 Without this, the connection stays fixed at the default portrait (90°). AVFoundation does not
+    ///    read the accelerometer on its own, so even when shooting in landscape the EXIF says "shot in
+    ///    portrait", and a photo with the world tilted 90° is saved (2026-08-28 user report).
+    ///    Apply the same coordinator's angle to both preview and capture to keep WYSIWYG (same shape as
+    ///    Apple's AVCam)
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var rotationObservation: NSKeyValueObservation?
     private weak var previewLayer: AVCaptureVideoPreviewLayer?
-    /// 調停役を作り直すための現在デバイス。currentInput は session queue 側で触るので
-    /// main から読める複製をこちらに持つ
+    /// Current device, used to rebuild the coordinator. currentInput is touched on the session queue, so
+    /// a copy readable from main is kept here
     private var mainDevice: AVCaptureDevice?
 
-    /// カメラデバイスを持つ端末か (シミュレータ判定)
+    /// Whether the device has a camera (simulator check)
     static var hasCameraDevice: Bool {
         AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) != nil
             || AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) != nil
@@ -77,7 +81,7 @@ final class PostCameraController: NSObject, ObservableObject, AVCapturePhotoCapt
             if self.session.inputs.isEmpty {
                 self.session.beginConfiguration()
                 self.session.sessionPreset = .photo
-                // 背面スタート (ユーザー指定)
+                // Start with the back camera (user instruction)
                 if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
                    let input = try? AVCaptureDeviceInput(device: device),
                    self.session.canAddInput(input) {
@@ -98,7 +102,7 @@ final class PostCameraController: NSObject, ObservableObject, AVCapturePhotoCapt
         }
     }
 
-    /// 前後カメラ切替
+    /// Switch front/back camera
     func flip() {
         queue.async {
             guard let current = self.currentInput else { return }
@@ -112,7 +116,7 @@ final class PostCameraController: NSObject, ObservableObject, AVCapturePhotoCapt
                 self.session.addInput(input)
                 self.currentInput = input
             } else {
-                self.session.addInput(current)  // 失敗時は戻す
+                self.session.addInput(current)  // Restore it on failure
             }
             self.session.commitConfiguration()
 
@@ -120,16 +124,16 @@ final class PostCameraController: NSObject, ObservableObject, AVCapturePhotoCapt
             let isFront = activeDevice?.position == .front
             DispatchQueue.main.async {
                 self.isFrontCamera = isFront
-                // 入力を差し替えると接続が張り直されるので、調停役も作り直す
+                // Replacing the input rebuilds the connection, so rebuild the coordinator too
                 self.mainDevice = activeDevice
                 self.rebuildRotationCoordinator()
             }
         }
     }
 
-    // MARK: - 向き (回転調停役)
+    // MARK: - Orientation (rotation coordinator)
 
-    /// プレビュー層を受け取る。SwiftUI 側 (CameraPreviewView) の生成時に呼ばれる
+    /// Receives the preview layer. Called when the SwiftUI side (CameraPreviewView) is created
     func attachPreviewLayer(_ layer: AVCaptureVideoPreviewLayer) {
         previewLayer = layer
         rebuildRotationCoordinator()
@@ -144,7 +148,8 @@ final class PostCameraController: NSObject, ObservableObject, AVCapturePhotoCapt
         let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
         rotationCoordinator = coordinator
         applyPreviewRotation(coordinator.videoRotationAngleForHorizonLevelPreview)
-        // 端末を傾けるたびに角度が変わるので追従させる (プレビューと撮影結果を一致させるため)
+        // The angle changes every time the device is tilted, so follow it (to keep the preview and the
+        // captured result the same)
         rotationObservation = coordinator.observe(
             \.videoRotationAngleForHorizonLevelPreview,
             options: [.new]
@@ -162,7 +167,8 @@ final class PostCameraController: NSObject, ObservableObject, AVCapturePhotoCapt
 
     func capture(_ completion: @escaping (UIImage?) -> Void) {
         onPhoto = completion
-        // 「撮影した瞬間」の傾きを使う。調停役は main 側にあるのでここで読んでから queue に渡す
+        // Use the tilt "at the moment of capture". The coordinator lives on main, so read it here and then
+        // pass it to the queue
         let captureAngle = rotationCoordinator?.videoRotationAngleForHorizonLevelCapture
         let mirrored = isFrontCamera
         queue.async {
@@ -170,9 +176,9 @@ final class PostCameraController: NSObject, ObservableObject, AVCapturePhotoCapt
                 if let captureAngle, connection.isVideoRotationAngleSupported(captureAngle) {
                     connection.videoRotationAngle = captureAngle
                 }
-                // 前面カメラはプレビューが鏡像なので出力も鏡像に揃える。
-                // 以前は撮影後に UIImage の orientation を .leftMirrored でベタ書きしていたが、
-                // それは「常に縦で撮る」前提でしか成立せず、横に構えると向きが壊れる
+                // The front camera preview is mirrored, so mirror the output too.
+                // Before, the UIImage orientation was hard-coded to .leftMirrored after capture, but
+                // that only works if "always shot in portrait", and the orientation breaks in landscape
                 if connection.isVideoMirroringSupported {
                     connection.automaticallyAdjustsVideoMirroring = false
                     connection.isVideoMirrored = mirrored
@@ -187,8 +193,8 @@ final class PostCameraController: NSObject, ObservableObject, AVCapturePhotoCapt
     }
 
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        // 向き (EXIF) も鏡像も capture() で接続に設定済みなので、ここでは一切いじらない。
-        // UIImage(data:) が EXIF を読んで正しい向きの UIImage を返す
+        // Orientation (EXIF) and mirroring are already set on the connection in capture(), so nothing is
+        // changed here. UIImage(data:) reads the EXIF and returns a UIImage with the correct orientation
         let image = photo.fileDataRepresentation().flatMap { UIImage(data: $0) }
         DispatchQueue.main.async {
             self.onPhoto?(image)
@@ -197,11 +203,11 @@ final class PostCameraController: NSObject, ObservableObject, AVCapturePhotoCapt
     }
 }
 
-// MARK: - プレビューレイヤー
+// MARK: - Preview layer
 
 private struct CameraPreviewView: UIViewRepresentable {
     let session: AVCaptureSession
-    /// 生成したプレビュー層を回転調停役に登録するためのコールバック
+    /// Callback to register the created preview layer with the rotation coordinator
     let onLayerReady: (AVCaptureVideoPreviewLayer) -> Void
 
     func makeUIView(context: Context) -> PreviewUIView {
@@ -224,9 +230,9 @@ private struct CameraPreviewView: UIViewRepresentable {
 
 struct PostCameraView: View {
     @ObservedObject var draft: PostDraft
-    /// 背景確定後に Step2 (エディタ) へ進む
+    /// After the background is set, go to Step2 (editor)
     let onChosen: () -> Void
-    /// 「テンプレートから選ぶ」→ 従来の背景グリッドへ
+    /// "テンプレートから選ぶ" ("Choose from templates") → the existing background grid
     let onOpenTemplates: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -236,23 +242,24 @@ struct PostCameraView: View {
     @State private var photoPickerItem: PhotosPickerItem?
     @State private var isLoadingPhoto = false
     @State private var isCapturing = false
-    /// 今日あと何件投稿できるか (nil = 未取得/取得失敗で非表示)。
-    /// 2026-07-31 実機FB: 従来は最後の確認画面にしか出ておらず、撮影・編集を終えてからでないと
-    /// 残り枠が分からなかった。フローの入口 (この画面) でも見えるようにする
+    /// How many more posts can be made today (nil = not fetched / fetch failed, hidden).
+    /// 2026-07-31 real device feedback: before, this only appeared on the last confirmation screen, so
+    /// the remaining slots were unknown until after shooting and editing. Show it at the entry of the
+    /// flow (this screen) too
     @State private var remainingSlots: Int?
 
     private var lang: AppLanguage {
         AppLanguage(rawValue: mainLanguageRaw) ?? .english
     }
 
-    /// 残り枠の表記。0 件のときは「使い切った」ことがはっきり分かる文言にする
+    /// Text for the remaining slots. When 0, use wording that makes it clear they are "used up"
     private func remainingSlotsText(_ remaining: Int) -> String {
         if remaining == 0 {
-            return lang == .japanese ? "今日の投稿枠は使い切りました" : "No posts left today" // 文言はユーザー添削待ち
+            return lang == .japanese ? "今日の投稿枠は使い切りました" : "No posts left today" // Wording is waiting for the user's review
         }
         return lang == .japanese
             ? "今日はあと\(remaining)件"
-            : "\(remaining) posts left today" // 文言はユーザー添削待ち
+            : "\(remaining) posts left today" // Wording is waiting for the user's review
     }
 
     var body: some View {
@@ -262,7 +269,7 @@ struct PostCameraView: View {
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
 
-                // 4:5 プレビュー (投稿キャンバスと同比率)
+                // 4:5 preview (same ratio as the post canvas)
                 Color.clear
                     .aspectRatio(4.0 / 5.0, contentMode: .fit)
                     .overlay { previewContent }
@@ -273,7 +280,7 @@ struct PostCameraView: View {
                 controls
             }
 
-            // 上部: 閉じる / フラッシュ
+            // Top: close / flash
             VStack {
                 HStack {
                     Button {
@@ -345,7 +352,7 @@ struct PostCameraView: View {
             )
         } else {
             CameraPreviewView(session: camera.session) { layer in
-                // View 更新サイクル中に controller を触らないよう次のループへ逃がす
+                // Defer to the next loop so the controller is not touched during the View update cycle
                 DispatchQueue.main.async { camera.attachPreviewLayer(layer) }
             }
         }
@@ -381,12 +388,12 @@ struct PostCameraView: View {
         }
     }
 
-    // MARK: - Controls (ライブラリ / シャッター / 前後切替 + テンプレート)
+    // MARK: - Controls (library / shutter / front-back switch + templates)
 
     private var controls: some View {
         VStack(spacing: 18) {
             HStack {
-                // 左: ライブラリ
+                // Left: library
                 PhotosPicker(selection: $photoPickerItem, matching: .images, photoLibrary: .shared()) {
                     Group {
                         if isLoadingPhoto {
@@ -404,7 +411,7 @@ struct PostCameraView: View {
 
                 Spacer()
 
-                // 中央: シャッター (白リング + 白丸)
+                // Center: shutter (white ring + white circle)
                 Button {
                     takePhoto()
                 } label: {
@@ -423,7 +430,7 @@ struct PostCameraView: View {
 
                 Spacer()
 
-                // 右: 前後切替
+                // Right: front/back switch
                 Button {
                     camera.flip()
                 } label: {
@@ -437,7 +444,7 @@ struct PostCameraView: View {
             }
             .padding(.horizontal, 36)
 
-            // テンプレート導線
+            // Entry to templates
             Button(action: onOpenTemplates) {
                 HStack(spacing: 6) {
                     Image(systemName: "square.grid.2x2")
@@ -490,7 +497,7 @@ struct PostCameraView: View {
         }
     }
 
-    /// 長辺を maxDimension に収める (アスペクト比維持)。すでに小さければそのまま返す。
+    /// Fit the long side within maxDimension (keeps the aspect ratio). If already smaller, return it as is.
     private func downsample(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
         let longSide = max(image.size.width, image.size.height)
         guard longSide > maxDimension else { return image }

@@ -2,26 +2,26 @@
 //  OnboardingFirstLock.swift
 //  AppBlocker
 //
-//  オンボーディング最終ステップ: その場で最初のロックを開始させる (2026-09-05 新設)
+//  Last onboarding step: have the user start their first lock right there (added 2026-09-05)
 //
-//  🔴 なぜ作るか (実測):
-//    オンボは .appSelect (ロックするアプリを選ぶ) で終わっており、
-//    「最初のロックを始めさせる」画面が存在しなかった。
-//    新規ユーザーのうち最初のロックを始める人の割合が低く、
-//    一度ロックした人は課金まで進みやすい。
-//    = 伸ばすべきは課金画面ではなく、最初のロックを始めさせること。
+//  🔴 Why this exists (measured):
+//    Onboarding ended at .appSelect (choose apps to lock), and
+//    there was no screen that "has the user start their first lock".
+//    Few new users start a first lock, and
+//    people who have locked once are more likely to go on to pay.
+//    = What needs to grow is not the paywall but getting people to start the first lock.
 //
-//  🔴 設計方針:
-//    - 決めさせるのは「時間」だけ。モードも解除方法も聞かない
-//      (解除方法をここに出す案はユーザー判断で不採用 = ノイズになる)
-//    - アプリ選択カードも置く。前ページで「あとで選ぶ」を押した人は
-//      選択が空のままで、そのままではロックを開始できないため (ユーザー指摘)
-//    - プリセットは既存ホームと同じ 30/60/120 + カスタム。新しい概念を作らない
-//    - 既定の解除方法は 2秒長押しなので、初日に詰むことはない
-//    - 「あとで」は残す。インストール直後の人のアプリを強制的に止めると
-//      その場でアンインストールされる危険がある。ただし目立たせない
+//  🔴 Design policy:
+//    - The user decides only the "time". Mode and unlock method are not asked
+//      (the idea of showing unlock methods here was rejected by the user = it would be noise)
+//    - The app selection card is also here. People who pressed "あとで選ぶ" ("Choose later") on
+//      the previous page have an empty selection and could not start a lock as is (user feedback)
+//    - Presets are 30/60/120 + custom, same as the existing home. No new concepts
+//    - The default unlock method is a 2-second long press, so nobody gets stuck on day one
+//    - Keep "あとで" ("Later"). Forcibly blocking the apps of someone who just installed risks an
+//      immediate uninstall. But keep it low-key
 //
-//  ⚠️ 文言はユーザー添削待ち
+//  ⚠️ Wording is waiting for the user's review
 //
 
 import SwiftUI
@@ -38,7 +38,8 @@ struct FirstLockStepView: View {
     @State private var showPicker = false
     @State private var isStarting = false
 
-    /// ホーム (HomeView.presetMinutes) と同じ値。次からホームで同じものを見つけられるように揃える
+    /// Same values as home (HomeView.presetMinutes). Matched so the user finds the same options on home
+    /// next time
     private let presetMinutes: [Int] = [30, 60, 120]
 
     private var isJa: Bool { lang == .japanese }
@@ -52,7 +53,7 @@ struct FirstLockStepView: View {
         VStack(spacing: 0) {
             Spacer(minLength: 12)
 
-            // ⚠️ 文言はユーザー添削待ち (「今すぐ作業を始める」案もあり)
+            // ⚠️ Wording is waiting for the user's review (another candidate: "Start working right now")
             Text(isJa ? "今すぐロックを開始する" : "Start your first lock")
                 .font(.system(size: 26, weight: .bold))
                 .foregroundColor(AppColors.textPrimary)
@@ -82,7 +83,7 @@ struct FirstLockStepView: View {
                 }
                 .disabled(isStarting)
 
-                Button(isJa ? "あとで" : "Later") { // 文言はユーザー添削待ち
+                Button(isJa ? "あとで" : "Later") { // Wording is waiting for the user's review
                     onFinish()
                 }
                 .font(AppTypography.footnote)
@@ -94,8 +95,8 @@ struct FirstLockStepView: View {
         }
         .familyActivityPicker(isPresented: $showPicker, selection: $blockingService.selectedApps)
         .onChange(of: showPicker) { _, isShown in
-            // ピッカーを閉じた時点で3モード共通の初期値として保存する
-            // (.appSelect と同じ扱い。ここで保存しないとロックを開始しても対象が空になる)
+            // Save as the shared initial value for the 3 modes when the picker closes
+            // (same as .appSelect. Without saving here, starting a lock would have no targets)
             guard !isShown else { return }
             BlockingService.shared.saveInitialSharedSelection(blockingService.selectedApps)
         }
@@ -103,12 +104,12 @@ struct FirstLockStepView: View {
 
     private var primaryLabel: String {
         if totalCount == 0 {
-            return isJa ? "アプリを選択" : "Select apps" // 文言はユーザー添削待ち
+            return isJa ? "アプリを選択" : "Select apps" // Wording is waiting for the user's review
         }
-        return isJa ? "ロックを開始" : "Start the lock" // 文言はユーザー添削待ち
+        return isJa ? "ロックを開始" : "Start the lock" // Wording is waiting for the user's review
     }
 
-    // MARK: - 時間カード (ホームの timerSetupCard と同じ見た目に揃える)
+    // MARK: - Time card (matches the look of timerSetupCard on home)
 
     private var timerCard: some View {
         VStack(spacing: 20) {
@@ -135,14 +136,14 @@ struct FirstLockStepView: View {
                         }
                     }
                 }
-                pill(label: isJa ? "カスタム" : "Custom", isSelected: showCustom) { // 文言はユーザー添削待ち
+                pill(label: isJa ? "カスタム" : "Custom", isSelected: showCustom) { // Wording is waiting for the user's review
                     withAnimation(.easeInOut(duration: 0.2)) { showCustom = true }
                 }
             }
 
             if showCustom {
                 Picker("", selection: $selectedMinutes) {
-                    // 5分刻み。5時間を超える初回ロックは事故のもとなので上限を切る
+                    // 5-minute steps. A first lock over 5 hours invites accidents, so cap it
                     ForEach(Array(stride(from: 5, through: 300, by: 5)), id: \.self) { m in
                         Text(presetLabel(m)).tag(m)
                     }
@@ -157,7 +158,7 @@ struct FirstLockStepView: View {
         .background(RoundedRectangle(cornerRadius: 16).fill(AppColors.cardBackground))
     }
 
-    /// ホームの presetLabel と同じ表記 (30分 / 1時間 / 2時間)
+    /// Same notation as presetLabel on home ("30分 / 1時間 / 2時間" ("30 min / 1 hr / 2 hr"))
     private func presetLabel(_ minutes: Int) -> String {
         if minutes % 60 == 0 {
             let hours = minutes / 60
@@ -180,14 +181,14 @@ struct FirstLockStepView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 開始
+    // MARK: - Start
 
     private func start() {
         guard !isStarting else { return }
         isStarting = true
         Task {
-            // settle 版: shield 適用直後の遷移レース由来のフリーズを緩和する
-            // (ホームの startTimer と同じ経路を通す)
+            // settle version: reduces freezes caused by a navigation race right after the shield is applied
+            // (goes through the same path as startTimer on home)
             await blockingService.startTimerBlockingWithSettle(durationMinutes: selectedMinutes)
             isStarting = false
             onFinish()

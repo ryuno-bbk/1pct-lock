@@ -2,9 +2,9 @@
 //  AppealSheetView.swift
 //  AppBlocker
 //
-//  モデレーション結果 (rejected/flagged) への異議申し立てモーダル。
-//  ReportSheetView と同じ NavigationStack + Form + toolbar キャンセル/送信の構造。
-//  対象に既存の申し立てがあれば「状態表示モード」、無ければ「入力モード」を出す。
+//  Appeal modal for a moderation result (rejected/flagged).
+//  Same structure as ReportSheetView: NavigationStack + Form + toolbar cancel/submit.
+//  If the target already has an appeal, show "status mode", otherwise "input mode".
 //
 
 import SwiftUI
@@ -19,13 +19,14 @@ struct AppealSheetView: View {
 
     @State private var existingAppeal: AppealRecord?
     @State private var isLoadingExisting: Bool = true
-    /// AI 判定理由の全文 (2026-07-22 実機FB: 通知プレビューの2行では全文が読めないため、
-    /// このシートを「判定理由の全文+申し立て」のハブにする)
+    /// Full text of the AI decision reason (2026-07-22 real-device feedback: the 2 lines of the notification
+    /// preview cannot show the full text, so this sheet is the hub for "full decision reason + appeal")
     @State private var moderationReason: String?
     @State private var reasonText: String = ""
     @State private var isSubmitting: Bool = false
     @State private var submitError: String?
-    /// この画面を開いている間に自分で送信が成功した直後 (状態表示モードとは別の一時的な完了表示)
+    /// Right after the user successfully submitted while this screen is open (a temporary done state,
+    /// separate from status mode)
     @State private var justFiled: Bool = false
 
     private var lang: AppLanguage {
@@ -69,7 +70,7 @@ struct AppealSheetView: View {
                     filedView
                 }
             }
-            .navigationTitle(lang == .japanese ? "異議申し立て" : "Appeal")  // 文言はユーザー添削待ち
+            .navigationTitle(lang == .japanese ? "異議申し立て" : "Appeal")  // Copy waiting for user review
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if isInputMode {
@@ -86,13 +87,13 @@ struct AppealSheetView: View {
                 }
                 if !isInputMode {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button(lang == .japanese ? "閉じる" : "Close") { dismiss() }  // 文言はユーザー添削待ち
+                        Button(lang == .japanese ? "閉じる" : "Close") { dismiss() }  // Copy waiting for user review
                     }
                 }
             }
         }
         .task {
-            // 申し立て状態と判定理由は独立なので並列に取得する
+            // The appeal state and the decision reason are independent, so they are fetched in parallel
             async let appealTask = AppealService.shared.fetchAppeal(for: target)
             async let infoTask = AppealService.shared.fetchModerationInfo(for: target)
             existingAppeal = await appealTask
@@ -110,11 +111,11 @@ struct AppealSheetView: View {
             .background(AppColors.background)
     }
 
-    /// AI 判定理由の全文セクション (入力/状態表示の両モード共通)
+    /// Section with the full text of the AI decision reason (shared by input and status modes)
     @ViewBuilder
     private var moderationReasonSection: some View {
         if let moderationReason, !moderationReason.isEmpty {
-            Section(lang == .japanese ? "判定理由" : "Reason for the decision") {  // 文言はユーザー添削待ち
+            Section(lang == .japanese ? "判定理由" : "Reason for the decision") {  // Copy waiting for user review
                 Text(moderationReason)
                     .font(.system(size: 14))
                     .foregroundColor(AppColors.textSecondary)
@@ -126,15 +127,17 @@ struct AppealSheetView: View {
         Form {
             moderationReasonSection
 
-            // 2026-07-25 実機FB: 「判定理由」ボックスと同じ見た目の箱が2つ並ぶ違和感 →
-            // 入力欄の説明は入力セクションのヘッダー (非ボックスの小さめキャプション) に格下げする
+            // 2026-07-25 real-device feedback: two boxes that look the same as the "判定理由" ("Reason for the
+            // decision") box side by side felt wrong →
+            // the explanation of the input field is demoted to the input section header (a smaller caption, not a
+            // box)
             Section {
                 TextField("", text: $reasonText, axis: .vertical)
                     .lineLimit(3...6)
             } header: {
                 Text(lang == .japanese
                     ? "この判定に心当たりがない場合は、理由を添えて再審査を申請できます"
-                    : "If you believe this was a mistake, you can request a review")  // 文言はユーザー添削待ち
+                    : "If you believe this was a mistake, you can request a review")  // Copy waiting for user review
                     .font(.system(size: 13))
                     .foregroundColor(AppColors.textSecondary)
                     .textCase(nil)
@@ -165,14 +168,14 @@ struct AppealSheetView: View {
 
             moderationReasonSection
 
-            Section(lang == .japanese ? "送信した理由" : "Reason submitted") {  // 文言はユーザー添削待ち
+            Section(lang == .japanese ? "送信した理由" : "Reason submitted") {  // Copy waiting for user review
                 Text(record.reason)
                     .font(.system(size: 14))
                     .foregroundColor(AppColors.textSecondary)
             }
 
             if let note = record.resolutionNote, !note.isEmpty {
-                Section(lang == .japanese ? "運営からのコメント" : "Note from the team") {  // 文言はユーザー添削待ち
+                Section(lang == .japanese ? "運営からのコメント" : "Note from the team") {  // Copy waiting for user review
                     Text(note)
                         .font(.system(size: 14))
                         .foregroundColor(AppColors.textSecondary)
@@ -180,7 +183,7 @@ struct AppealSheetView: View {
             }
 
             Section {
-                Text(lang == .japanese ? "異議申し立てはコンテンツごとに1回できます" : "You can appeal each piece of content once")  // 文言はユーザー添削待ち
+                Text(lang == .japanese ? "異議申し立てはコンテンツごとに1回できます" : "You can appeal each piece of content once")  // Copy waiting for user review
                     .font(.system(size: 12))
                     .foregroundColor(AppColors.textTertiary)
             }
@@ -192,7 +195,7 @@ struct AppealSheetView: View {
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 40, weight: .semibold))
                 .foregroundColor(AppColors.textPrimary)
-            Text(lang == .japanese ? "申し立てを受け付けました" : "Your appeal has been submitted")  // 文言はユーザー添削待ち
+            Text(lang == .japanese ? "申し立てを受け付けました" : "Your appeal has been submitted")  // Copy waiting for user review
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(AppColors.textPrimary)
                 .multilineTextAlignment(.center)
@@ -206,9 +209,9 @@ struct AppealSheetView: View {
 
     private func statusLabel(_ status: String) -> String {
         switch status {
-        case "pending":  return lang == .japanese ? "審査中です" : "Under review"  // 文言はユーザー添削待ち
-        case "approved": return lang == .japanese ? "承認されました" : "Approved"  // 文言はユーザー添削待ち
-        case "rejected": return lang == .japanese ? "承認されませんでした" : "Not approved"  // 文言はユーザー添削待ち
+        case "pending":  return lang == .japanese ? "審査中です" : "Under review"  // Copy waiting for user review
+        case "approved": return lang == .japanese ? "承認されました" : "Approved"  // Copy waiting for user review
+        case "rejected": return lang == .japanese ? "承認されませんでした" : "Not approved"  // Copy waiting for user review
         default:         return status
         }
     }
@@ -235,15 +238,16 @@ struct AppealSheetView: View {
             justFiled = true
             onFiled()
         case .alreadyFiled:
-            // 別セッション等で既に送信済みだった。実際の状態 (pending/approved/rejected) を
-            // 再取得して状態表示モードへ切り替える (justFiled のような一時完了表示にはしない)
+            // It had already been submitted, e.g. in another session. Fetch the actual state
+            // (pending/approved/rejected) again and switch to status mode (not a temporary done state like
+            // justFiled)
             existingAppeal = await AppealService.shared.fetchAppeal(for: target)
             isSubmitting = false
         case .failed:
             isSubmitting = false
             submitError = lang == .japanese
                 ? "送信できませんでした。時間をおいて再試行してください"
-                : "Couldn't submit. Please try again later"  // 文言はユーザー添削待ち
+                : "Couldn't submit. Please try again later"  // Copy waiting for user review
         }
     }
 }

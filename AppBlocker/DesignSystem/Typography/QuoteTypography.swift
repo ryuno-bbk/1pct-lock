@@ -2,39 +2,43 @@
 //  QuoteTypography.swift
 //  AppBlocker
 //
-//  名言表示専用のタイポグラフィ設定
+//  Typography settings only for displaying quotes
 //
 
 import SwiftUI
 import NaturalLanguage
 
-/// 名言表示用のタイポグラフィスタイル
+/// Typography styles for displaying quotes
 enum QuoteTypography {
 
-    // MARK: - 詩的改行 (2026-07-30 実機FB「文字でかく、いい感じに改行、変な改行の全調整」)
-    // 成り行き折返しは文の途中 (助詞の直後など) で折れて間抜けに見えるのが「変な改行」の正体。
-    // 日本語の名言は文末 (。！？) で必ず改行し、行の切れ目=意味の切れ目に揃える。
-    // 1文が長すぎる場合だけ中央に最も近い読点で1回折る。英語名言は自然折返しのまま
+    // MARK: - Poetic line breaks
+    // (2026-07-30 real-device feedback: "bigger text, nice line breaks, fix all the weird line breaks")
+    // The "weird line breaks" come from natural wrapping, which breaks mid-sentence (e.g. right after a
+    // particle) and looks silly.
+    // Japanese quotes always break at the end of a sentence ("。！？"), so line breaks match meaning breaks.
+    // Only if one sentence is too long, break once at the comma closest to the center. English quotes keep
+    // natural wrapping
 
     static func containsJapanese(_ text: String) -> Bool {
         text.range(of: "[\\p{Hiragana}\\p{Katakana}\\p{Han}]", options: .regularExpression) != nil
     }
 
-    /// 日本語名言を文末で改行した表示用テキストに変換する (既定強度)。
-    /// 英語のみ/手動改行済みのテキストは変更しない
+    /// Converts a Japanese quote into display text with line breaks at sentence ends (default strength).
+    /// Text that is English only / already has manual line breaks is not changed
     static func poeticText(_ text: String) -> String {
         displayText(text, maxLineLength: 18, splitEnglishSentences: false)
     }
 
-    /// テンプレート対応版 (2026-07-30 名言カード刷新):
-    /// - 日本語: 文末 (。！？) で必ず改行 + 長い文は形態素境界 (NLTokenizer) でバランス折り
-    /// - 英語: splitEnglishSentences=true のときだけ文単位で行を切る (リスト型テンプレ用)
+    /// Template-aware version (2026-07-30 quote card redesign):
+    /// - Japanese: always break at sentence ends ("。！？") + long sentences are balanced at morpheme
+    ///   boundaries (NLTokenizer)
+    /// - English: split lines by sentence only when splitEnglishSentences=true (for list-style templates)
     static func displayText(_ text: String, maxLineLength: Int, splitEnglishSentences: Bool) -> String {
         displayLines(text, maxLineLength: maxLineLength, splitEnglishSentences: splitEnglishSentences)
             .joined(separator: "\n")
     }
 
-    /// 行の配列版 (カード側がフォントサイズを最長行に合わせるのに使う)
+    /// Array-of-lines version (the card uses it to fit the font size to the longest line)
     static func displayLines(_ text: String, maxLineLength: Int, splitEnglishSentences: Bool) -> [String] {
         guard !text.contains("\n") else { return text.components(separatedBy: "\n") }
         if containsJapanese(text) {
@@ -53,7 +57,7 @@ enum QuoteTypography {
         for (i, ch) in chars.enumerated() {
             current.append(ch)
             guard enders.contains(ch) else { continue }
-            // 「!?」の連続や閉じ括弧は同じ行に抱き込む
+            // Keep runs of "!?" and closing brackets on the same line
             if let next = i + 1 < chars.count ? chars[i + 1] : nil,
                enders.contains(next) || closers.contains(next) { continue }
             let trimmed = current.trimmingCharacters(in: .whitespaces)
@@ -63,8 +67,9 @@ enum QuoteTypography {
         let rest = current.trimmingCharacters(in: .whitespaces)
         if !rest.isEmpty { sentences.append(rest) }
 
-        // 長い文は形態素境界でバランス折り (2026-07-30 FB2巡目「改行が終わってる」対策:
-        // 旧実装は読点が無い文を成り行き折返しに落としていた → 語の途中で折れる)
+        // Long sentences are balanced at morpheme boundaries (fix for feedback round 2 on 2026-07-30, "the line
+        // breaks are terrible": the old implementation dropped sentences without commas into natural wrapping
+        // → breaks in the middle of a word)
         return sentences.flatMap { sentence -> [String] in
             let arr = Array(sentence)
             guard arr.count > maxLineLength else { return [sentence] }
@@ -74,9 +79,11 @@ enum QuoteTypography {
 
     private static let lineOpeners: Set<Character> = ["「", "『", "（", "(", "\"", "\u{201C}"]
 
-    /// 文を「折ってよい単位」に刻む: NLTokenizer の語境界 + 助詞/短いひらがな/句読点は
-    /// 直前の語に接着 (行頭に「は」「を」等が来る事故を構造的に防ぐ)。
-    /// 句読点・閉じ括弧は前の語の尻へ、開き括弧は次の語の頭へ (行末に「が浮く事故を防ぐ)
+    /// Cuts a sentence into "units that may be broken": NLTokenizer word boundaries + particles / short
+    /// hiragana / punctuation are glued to the preceding word (structurally prevents lines that start with
+    /// "は" or "を" etc.).
+    /// Punctuation and closing brackets go to the end of the previous word, opening brackets to the start of
+    /// the next word (prevents an opening "「" dangling at the end of a line)
     private static func semanticChunks(_ sentence: String) -> [String] {
         let tokenizer = NLTokenizer(unit: .word)
         tokenizer.string = sentence
@@ -84,15 +91,15 @@ enum QuoteTypography {
         var pendingPrefix = ""
         var cursor = sentence.startIndex
         tokenizer.enumerateTokens(in: sentence.startIndex..<sentence.endIndex) { range, _ in
-            // NLTokenizer は句読点を語として返さない → 語間のギャップを振り分ける
+            // NLTokenizer does not return punctuation as words → distribute the gaps between words
             if cursor < range.lowerBound {
                 for ch in sentence[cursor..<range.lowerBound] {
                     if lineOpeners.contains(ch) {
-                        pendingPrefix.append(ch) // 開き括弧は次の語の頭
+                        pendingPrefix.append(ch) // Opening brackets go to the start of the next word
                     } else if raw.isEmpty {
                         pendingPrefix.append(ch)
                     } else {
-                        raw[raw.count - 1].append(ch) // 句読点・閉じ括弧は前の語の尻
+                        raw[raw.count - 1].append(ch) // Punctuation and closing brackets go to the end of the previous word
                     }
                 }
             }
@@ -120,10 +127,13 @@ enum QuoteTypography {
         return glued
     }
 
-    /// 前の語に接着すべきトークンか。句読点・記号を除いた本体で判定する
-    /// (「ば、」「が、」のように読点が付くと判定が壊れ、行頭に助詞が来る事故があった):
-    /// 本体が全てひらがなで3文字以下 (助詞・助動詞・「しない」等の補助) or 記号のみ → 接着。
-    /// 開き括弧で始まる語は引用の頭なので接着しない
+    /// Whether the token should be glued to the previous word. Checked on the body without punctuation and
+    /// symbols
+    /// (with a comma attached, like "ば、" or "が、", the check broke and particles ended up at the start of
+    /// lines):
+    /// if the body is all hiragana and 3 characters or fewer (particles, auxiliary verbs, helpers such as
+    /// "しない") or symbols only → glue.
+    /// Words starting with an opening bracket are the start of a quotation, so they are not glued
     private static func shouldGlueToPrevious(_ token: String) -> Bool {
         guard let first = token.first else { return true }
         if lineOpeners.contains(first) { return false }
@@ -135,11 +145,11 @@ enum QuoteTypography {
         return isAllHiragana && core.count <= 3
     }
 
-    /// チャンク列を「行数最小 × 行長バランス」で詰める。
-    /// - 3文字以下では折らない (「今」だけの孤児行を防ぐ。多少のはみ出しは
-    ///   フォントの行フィット側が吸収する)
-    /// - 読点で終わった行は折り目として優先
-    /// - 末尾の孤児行 (3文字以下) は前の行へ吸収
+    /// Packs the chunk list with "fewest lines × balanced line lengths".
+    /// - Do not break at 3 characters or fewer (prevents orphan lines with just "今" ("now"). A little
+    ///   overflow is absorbed by the font's line fitting)
+    /// - Lines that end with a comma are preferred as break points
+    /// - A trailing orphan line (3 characters or fewer) is absorbed into the previous line
     private static func balancedFill(_ chunks: [String], maxLen: Int) -> [String] {
         let total = chunks.reduce(0) { $0 + $1.count }
         let lineCount = max(1, Int((Double(total) / Double(maxLen)).rounded(.up)))
@@ -165,8 +175,9 @@ enum QuoteTypography {
         return lines
     }
 
-    /// 英語を文単位の行に分ける ("Stay private. Work hard." → 2行)。
-    /// 文が2つ以上あり、どの文も長すぎない場合のみ分割 (1文だけ/長文は自然折返しが読みやすい)
+    /// Splits English into lines by sentence ("Stay private. Work hard." → 2 lines).
+    /// Only splits if there are 2 or more sentences and none is too long (a single sentence / long text is
+    /// easier to read with natural wrapping)
     private static func englishSentenceLines(_ text: String) -> [String] {
         var sentences: [String] = []
         var current = ""
@@ -189,7 +200,7 @@ enum QuoteTypography {
             : [text]
     }
 
-    /// 名言カードの主文フォントサイズ。短いほど大きく (全長の段階制)
+    /// Font size of the main text on the quote card. Shorter text is larger (steps by total length)
     static func displayFontSize(for text: String) -> CGFloat {
         switch text.count {
         case ...16: return 29
@@ -201,7 +212,7 @@ enum QuoteTypography {
 
     // MARK: - Quote Text Styles
 
-    /// メイン名言テキスト（Shield UI用）
+    /// Main quote text (for the Shield UI)
     static func quoteText(size: QuoteTextSize = .large) -> Font {
         let fontSize: CGFloat
         switch size {
@@ -215,15 +226,15 @@ enum QuoteTypography {
         return .system(size: fontSize, weight: .bold)
     }
 
-    /// 著者名テキスト
+    /// Author name text
     static let authorText: Font = .system(size: 16, weight: .medium, design: .default)
 
-    /// カテゴリラベル
+    /// Category label
     static let categoryLabel: Font = .system(size: 12, weight: .semibold, design: .rounded)
 
     // MARK: - Shield View Modifiers
 
-    /// 名言テキスト用のスタイル
+    /// Style for quote text
     struct QuoteTextStyle: ViewModifier {
         let size: QuoteTextSize
 
@@ -237,7 +248,7 @@ enum QuoteTypography {
         }
     }
 
-    /// 著者名テキスト用のスタイル
+    /// Style for author name text
     struct AuthorTextStyle: ViewModifier {
         func body(content: Content) -> some View {
             content
@@ -250,7 +261,7 @@ enum QuoteTypography {
 
 // MARK: - App Typography
 
-/// アプリ全体のタイポグラフィ
+/// Typography for the whole app
 enum AppTypography {
 
     // MARK: - Headings
@@ -283,12 +294,12 @@ enum AppTypography {
 // MARK: - View Extensions
 
 extension View {
-    /// 名言テキストスタイルを適用
+    /// Apply the quote text style
     func quoteTextStyle(size: QuoteTextSize = .large) -> some View {
         modifier(QuoteTypography.QuoteTextStyle(size: size))
     }
 
-    /// 著者名スタイルを適用
+    /// Apply the author name style
     func authorTextStyle() -> some View {
         modifier(QuoteTypography.AuthorTextStyle())
     }

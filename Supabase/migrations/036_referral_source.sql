@@ -1,11 +1,13 @@
 -- ============================================================
 -- 036_referral_source.sql
--- オンボ診断に流入元質問を追加 (2026-07-17 ユーザー確定、フィードプレビューの直後のステップ)
+-- Add a referral source question to the onboarding diagnosis (2026-07-17 user decision, the step
+-- right after the feed preview)
 -- ============================================================
--- 目的: TikTok 広告等マーケ施策ごとの流入比率を把握するため。
--- 選択肢: tiktok / instagram / youtube / friend (友達・知人) / app_store (App Storeで見つけた) / other
+-- Purpose: to understand the share of inflow per marketing channel, such as TikTok ads.
+-- Options: tiktok / instagram / youtube / friend (friends/acquaintances) / app_store (found on the
+-- App Store) / other
 --
--- 実行順序: 026 の後ならいつでも (033/034/035 とは独立)。何度実行しても安全
+-- Execution order: any time after 026 (independent of 033/034/035). Safe to run any number of times
 -- ============================================================
 
 ALTER TABLE public.user_onboarding_profiles

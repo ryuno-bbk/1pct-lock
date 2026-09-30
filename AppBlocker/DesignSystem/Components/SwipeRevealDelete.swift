@@ -2,23 +2,25 @@
 //  SwipeRevealDelete.swift
 //  AppBlocker
 //
-//  左スワイプで右側に赤い削除ボタンを出す行ラッパー (2026-07-15 実機FB)。
-//  List 外 (ScrollView 内の VStack) で使うため swipeActions は使えず、自前実装。
-//  削除の確認 (alert) は呼び出し側の onDelete で行うこと — ここでは出さない。
+//  Row wrapper that shows a red delete button on the right with a left swipe (2026-07-15 real device
+//  feedback). Used outside List (a VStack inside a ScrollView), so swipeActions cannot be used; this
+//  is a custom implementation.
+//  The delete confirmation (alert) must be done in the caller's onDelete. It is not shown here.
 //
 
 import SwiftUI
 
 struct SwipeRevealDelete<Content: View>: View {
     let onDelete: () -> Void
-    /// 行本体のタップ (閉じている時のみ発火)。
-    /// ⚠️ content の内側に Button を置かないこと: Button は simultaneousGesture の
-    /// ドラッグと同時にタップ成立してしまい、スワイプした瞬間に画面遷移する誤爆になる
-    /// (2026-07-15 実機FB)。TapGesture はスワイプ距離で自然に失敗するのでこちらで受ける
+    /// Tap on the row body (fires only when closed).
+    /// ⚠️ Do not put a Button inside content: a Button registers a tap at the same time as the
+    /// simultaneousGesture drag, and misfires into a screen transition the moment you swipe
+    /// (2026-07-15 real device feedback). TapGesture naturally fails with swipe distance, so taps are
+    /// received with it here
     var onTap: (() -> Void)? = nil
-    /// スワイプでの削除を封じる。遮断が走っている予定を消させないために使う
-    /// (削除も「今の遮断から逃げる」経路になるため。2026-08-28)。
-    /// ⚠️ onTap は生かしたままにする — 触れなくするのではなく、行き先を変えるため
+    /// Blocks deleting by swipe. Used so a schedule whose blocking is running cannot be deleted
+    /// (deleting is also a path to "escape the current blocking". 2026-08-28).
+    /// ⚠️ Keep onTap alive: the goal is not to make it untouchable but to change where it leads
     var isSwipeDisabled: Bool = false
     @ViewBuilder let content: Content
 
@@ -29,7 +31,7 @@ struct SwipeRevealDelete<Content: View>: View {
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            // 背面: 削除ボタン (開いている時だけ触れる)
+            // Behind: the delete button (touchable only when open)
             Button {
                 close()
                 onDelete()
@@ -47,14 +49,16 @@ struct SwipeRevealDelete<Content: View>: View {
             content
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    guard !isOpen else { return } // 開いている時は overlay が閉じる役を持つ
+                    guard !isOpen else { return } // When open, the overlay has the role of closing
                     onTap?()
                 }
-                // 開いた状態では本体の上に透明レイヤーを被せ、タップ=閉じるだけにする
-                // (誤操作防止。allowsHitTesting(false) だと閉じるタップ自体も死ぬためこの方式)。
-                // ⚠️ overlay は必ず .offset より前に付けること: offset はレイアウト枠を動かさないため、
-                // 後に付けると開いた時もレイヤーが元の位置 (=ゴミ箱の上) に残り、
-                // 削除ボタンのタップを食って「閉じるだけで消せない」バグになる (2026-07-15 実機FB)
+                // When open, put a transparent layer over the body so a tap only closes it
+                // (prevents mistakes. With allowsHitTesting(false) the closing tap itself would also die, hence this
+                // approach).
+                // ⚠️ Always attach overlay before .offset: offset does not move the layout frame, so
+                // if attached after, the layer stays at the original position (= over the trash) even when open,
+                // eats the delete button's taps, and causes the bug "it only closes and cannot delete" (2026-07-15
+                // real device feedback)
                 .overlay {
                     if isOpen {
                         Color.clear
@@ -63,13 +67,13 @@ struct SwipeRevealDelete<Content: View>: View {
                     }
                 }
                 .offset(x: offsetX)
-                // 縦スクロールと共存させるため、ある程度動いてから反応させる。
-                // simultaneousGesture ではなく highPriority にすると縦スクロールを食うので不可
+                // To coexist with vertical scrolling, react only after it has moved a certain amount.
+                // Using highPriority instead of simultaneousGesture would eat vertical scrolling, so it is not allowed
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 24, coordinateSpace: .local)
                         .onChanged { value in
                             guard !isSwipeDisabled else { return }
-                            // 横優位のドラッグだけ拾う (縦スクロールを妨げない)
+                            // Only pick up horizontally dominant drags (does not interfere with vertical scrolling)
                             guard abs(value.translation.width) > abs(value.translation.height) else { return }
                             let base: CGFloat = isOpen ? -revealWidth : 0
                             let proposed = base + value.translation.width

@@ -2,14 +2,14 @@
 //  LikePopEffect.swift
 //  AppBlocker
 //
-//  いいねのポップアニメーション (2026-07-25 実機FB「いいねをかっこよく」)。
-//  TikTok/Twitter 系の定番モーションを依存ライブラリなしで実装:
-//    1. 押した瞬間にハートが沈み込み (0.55x、アニメなしで即時)
-//    2. スプリングで 1.0x に跳ね上がる
-//    3. 同時に赤の小パーティクル7粒が放射して 0.5s で消える
-//  いいね解除 (true→false) では何も出さない (色が戻るだけ)。
-//  対象はハートアイコン単体 (数十pt) なので scaleEffect のコストは無視できる
-//  (S16 の「巨大Viewへの scaleEffect 禁止」ルールには抵触しない)。
+//  Like pop animation (2026-07-25 real device feedback "make likes look cool").
+//  Implements the standard TikTok/Twitter-style motion with no dependency libraries:
+//    1. The heart sinks the moment it is pressed (0.55x, immediately with no animation)
+//    2. It springs back up to 1.0x
+//    3. At the same time, 7 small red particles radiate out and disappear in 0.5s
+//  Unliking (true→false) shows nothing (only the color changes back).
+//  The target is just the heart icon (tens of pt), so the cost of scaleEffect is negligible
+//  (does not violate the S16 rule "no scaleEffect on huge Views").
 //
 
 import SwiftUI
@@ -17,7 +17,7 @@ import SwiftUI
 struct LikePopEffect: ViewModifier {
 
     let isLiked: Bool
-    /// パーティクルの飛距離 (ハートのサイズに合わせて呼び出し側が調整)
+    /// Particle travel distance (the caller adjusts it to the heart size)
     var particleRadius: CGFloat = 22
 
     @State private var popScale: CGFloat = 1
@@ -37,7 +37,7 @@ struct LikePopEffect: ViewModifier {
             }
             .onChange(of: isLiked) { _, nowLiked in
                 guard nowLiked else { return }
-                // 沈み込みはアニメなしで即時に (経過が見えると鈍く感じる)
+                // The sink happens immediately with no animation (if you can see it progress, it feels sluggish)
                 var t = Transaction()
                 t.disablesAnimations = true
                 withTransaction(t) { popScale = 0.55 }
@@ -56,7 +56,8 @@ struct LikePopEffect: ViewModifier {
     }
 }
 
-/// 1回ぶんの放射パーティクル。出現時に外へ飛んで消え、親がトークンごと破棄する
+/// Radiating particles for one burst. They fly out and vanish on appear, and the parent discards them
+/// with the token
 private struct LikeBurstParticles: View {
 
     let radius: CGFloat
@@ -83,7 +84,7 @@ private struct LikeBurstParticles: View {
 }
 
 extension View {
-    /// いいねボタンのハートに付ける (isLiked が false→true になった瞬間に発火)
+    /// Attach to the heart of the like button (fires the moment isLiked goes false→true)
     func likePopEffect(isLiked: Bool, particleRadius: CGFloat = 22) -> some View {
         modifier(LikePopEffect(isLiked: isLiked, particleRadius: particleRadius))
     }

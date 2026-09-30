@@ -2,41 +2,42 @@
 //  OnboardingPlan.swift
 //  AppBlocker
 //
-//  ⚠️ 現在フロー未使用 (2026-07-19 ユーザー決定で .plan ステップをオンボから除外)。
-//  「プラン」概念がこのアプリに合わないため直行に変更。将来「スケジュールを先に提案 →
-//  ユーザーが手直し → 有効化は Pro」ページに作り直す構想があり、その際の下敷きとして残置。
+//  ⚠️ Not used in the flow right now (the .plan step was removed from onboarding by user decision
+//  2026-07-19). The "plan" concept does not fit this app, so the flow goes straight on. There is an
+//  idea to rebuild it later as a page "suggest a schedule first → the user adjusts it → enabling it
+//  is Pro", so it is kept as the base for that.
 //
-//  (旧役割) 診断オンボーディング PHASE 3: プラン生成 → パーソナルプラン提示 → レビュー依頼。
+//  (Old role) Diagnostic onboarding PHASE 3: generate plan → show personal plan → ask for a review.
 //
 
 import SwiftUI
 import StoreKit
 
 struct PlanBuildingStepView: View {
-    /// 夢 (空可)。空なら夢の行は出さない
+    /// Dream (can be empty). If empty, the dream row is not shown
     let dreamText: String
-    /// Q5 の選択 (表示名の配列)。空なら汎用文言
+    /// Choices from Q5 (array of display names). If empty, generic text
     let wastedAppNames: [String]
-    /// Q3 の回答 (推奨ロック時間の計算用)。nil なら 2h 固定
+    /// Answer to Q3 (to calculate the recommended lock time). If nil, fixed at 2h
     let dailyHours: QuizDailyHours?
     let onContinue: () -> Void
 
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
-    // @Environment(\.requestReview) は 2026-08-06 に撤去 (Guideline 5.6.3)。
-    // オンボーディング中に評価を求めない
+    // @Environment(\.requestReview) was removed on 2026-08-06 (Guideline 5.6.3).
+    // Do not ask for a rating during onboarding
 
     @State private var revealedChecks = 0
     @State private var showPlan = false
 
     private var lang: AppLanguage { AppLanguage(rawValue: mainLanguageRaw) ?? .english }
 
-    /// 推奨ロック時間 = 自己申告の約35% を 1〜4h に丸め
+    /// Recommended lock time = about 35% of the self-reported time, rounded to 1-4h
     private var recommendedLockHours: Int {
         let h = dailyHours?.medianHours ?? 5
         return min(max(Int((h * 0.35).rounded()), 1), 4)
     }
 
-    /// 年間で取り戻す時間
+    /// Hours won back per year
     private var reclaimedHoursPerYear: Int {
         recommendedLockHours * 365
     }
@@ -117,10 +118,10 @@ struct PlanBuildingStepView: View {
 
             if showPlan {
                 PrimaryButton(lang == .japanese ? "プランを開始する" : "Start my plan", icon: "arrow.right") {
-                    // 🔴 2026-08-06 審査リジェクト対応 (Guideline 5.6.3): オンボーディング中の
-                    // 評価依頼は禁止。ここは 2026-07-19 に .plan ステップごとフローから外れて
-                    // 死んでいるコードだが、将来復活させた時に同じ違反を再導入しないよう
-                    // requestReview() の呼び出しを撤去する
+                    // 🔴 Fix for the 2026-08-06 App Review rejection (Guideline 5.6.3): asking for a rating during
+                    // onboarding is forbidden. This is dead code, removed from the flow together with the .plan step on
+                    // 2026-07-19, but the requestReview() call is removed so the same violation is not reintroduced if
+                    // it is brought back in the future
                     onContinue()
                 }
                 .padding(.horizontal, 24)
@@ -131,7 +132,7 @@ struct PlanBuildingStepView: View {
         .onAppear { revealSequentially() }
     }
 
-    /// チェックが 600ms 間隔で1つずつ✓になり (計~2.5s)、完了後にプランを表示
+    /// Checks turn into ✓ one at a time at 600ms intervals (about 2.5s total), then the plan is shown
     private func revealSequentially() {
         guard revealedChecks == 0 else { return }
         if UIAccessibility.isReduceMotionEnabled {

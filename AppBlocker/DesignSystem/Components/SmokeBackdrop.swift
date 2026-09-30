@@ -2,13 +2,15 @@
 //  SmokeBackdrop.swift
 //  AppBlocker
 //
-//  動く煙の背景 (HeroSmoke.metal の手続き生成FBM、動画アセット不要・無限ループ)。
-//  元はオンボーディングのヒーロー画面専用 (OnboardingHook.swift 内 private) だったが、
-//  2026-07-30 実機FB「公式アカウントの背景がつまんなすぎる」で公式プロフィールヒーローにも
-//  使うため共有コンポーネント化 (実装は移動のみ、見た目パラメータ不変)。
+//  Moving smoke background (procedural FBM in HeroSmoke.metal, no video asset needed, infinite loop).
+//  It was originally only for the onboarding hero screen (private inside OnboardingHook.swift), but
+//  after 2026-07-30 real-device feedback "the official account background is way too boring" it is
+//  also used for the official profile hero, so it was made a shared component (the implementation was
+//  only moved, the visual parameters are unchanged).
 //
-//  煙は形の輪郭を持たないため 30fps 更新でもカクつきは知覚されない (等速の硬いエッジ移動とは
-//  違う) — バッテリー優先で 1/30 に間引く。Reduce Motion 時は time=0 の静止煙。
+//  Smoke has no shape outlines, so stutter is not noticeable even at 30fps updates (unlike hard edges
+//  moving at constant speed), so it is throttled to 1/30 to save battery. With Reduce Motion it is
+//  still smoke at time=0.
 //
 
 import SwiftUI
@@ -32,7 +34,7 @@ struct SmokeBackdrop: View {
                     }
                 }
 
-                // 中央のかすかなグロウ (煙の下地に奥行きを足す)
+                // Faint glow in the center (adds depth under the smoke)
                 RadialGradient(
                     colors: [Color(white: 0.10), .clear],
                     center: .center, startRadius: 10, endRadius: 340

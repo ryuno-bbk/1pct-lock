@@ -2,10 +2,11 @@
 //  UnlockImageLibraryView.swift
 //  AppBlocker
 //
-//  解除課題「自分の画像を見る」で見せる画像の登録場所。
-//  解除方法シートの「自分の画像を見る」行の右にある ＋ から開く (2026-08-29 ユーザー指定)。
+//  Where to register the images shown by the unlock challenge "自分の画像を見る" ("View my images").
+//  Opened from the + to the right of the "自分の画像を見る" row in the unlock method sheet (user specified
+//  2026-08-29).
 //
-//  🔴 画像は端末内だけに保存する (UnlockImageStore 参照)。サーバーには上げない。
+//  🔴 Images are stored only on the device (see UnlockImageStore). Not uploaded to the server.
 //
 
 import SwiftUI
@@ -29,7 +30,7 @@ struct UnlockImageLibraryView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    // ⚠️ 文言はユーザー添削待ち
+                    // ⚠️ Wording pending user review
                     Text(ja
                          ? "ロックを解除しようとした時に、ここに登録した画像が順に出ます"
                          : "These images are shown when you try to unlock")
@@ -51,7 +52,7 @@ struct UnlockImageLibraryView: View {
                 .padding(16)
             }
             .background(AppColors.background.ignoresSafeArea())
-            .navigationTitle(ja ? "自分の画像" : "Your images") // 文言はユーザー添削待ち
+            .navigationTitle(ja ? "自分の画像" : "Your images") // Wording pending user review
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -80,7 +81,7 @@ struct UnlockImageLibraryView: View {
             HStack(spacing: 8) {
                 Image(systemName: "plus")
                     .font(.system(size: 14, weight: .bold))
-                Text(ja ? "写真を追加" : "Add photos") // 文言はユーザー添削待ち
+                Text(ja ? "写真を追加" : "Add photos") // Wording pending user review
                     .font(.system(size: 15, weight: .semibold))
             }
             .foregroundColor(store.canAddMore ? AppColors.textPrimary : AppColors.textTertiary)

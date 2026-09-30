@@ -2,9 +2,9 @@
 //  PostComposerView.swift
 //  AppBlocker
 //
-//  UGC 投稿作成画面 (Step 1: テキスト入力 + タグ選択)
-//  - 両言語ともドロップダウンカード化 (メイン言語デフォルト展開)
-//  - 既存のシステムフォントを維持、金はフォーカス枠/細線のみアクセント (控えめ)
+//  UGC post creation screen (Step 1: text input + tag selection)
+//  - Both languages are dropdown cards (the main language is expanded by default)
+//  - Keeps the existing system font, gold is only an accent on the focus border/thin lines (restrained)
 //
 
 import SwiftUI
@@ -55,7 +55,7 @@ struct PostComposerView: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
-                        // メイン言語側 (デフォルト展開) → サブ言語側 (デフォルト折りたたみ)
+                        // Main language side (expanded by default) → sub language side (collapsed by default)
                         if lang == .japanese {
                             disclosureCard(
                                 title: "日本語",
@@ -146,7 +146,7 @@ struct PostComposerView: View {
         }
     }
 
-    // MARK: - Disclosure Card (両言語共通)
+    // MARK: - Disclosure Card (shared by both languages)
 
     private func disclosureCard(
         title: String,
@@ -334,7 +334,7 @@ struct PostComposerView: View {
 }
 
 
-// MARK: - FlowLayout (タグチップ折返し配置)
+// MARK: - FlowLayout (wrapping layout for tag chips)
 
 private struct FlowLayout: Layout {
     let spacing: CGFloat

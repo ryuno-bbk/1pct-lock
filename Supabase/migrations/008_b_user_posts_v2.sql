@@ -1,41 +1,41 @@
 -- ============================================================
 -- 008_b_user_posts_v2.sql
--- user_posts: body 単一 → text_jp / text_en 2 カラムに変更
+-- user_posts: single body → changed to 2 columns text_jp / text_en
 -- ============================================================
--- 目的:
---   ユーザー投稿を Quote と同じ二言語構造に揃える
---   - text_jp / text_en どちらか片方必須 (両方 NULL 不可)
---   - 文字数制限: jp <= 200, en <= 400
---   - 3 つの RPC (mixed / following / tag) も p.text_jp / p.text_en を返すように修正
+-- Purpose:
+--   Give user posts the same bilingual structure as Quote
+--   - one of text_jp / text_en is required (both NULL not allowed)
+--   - character limits: jp <= 200, en <= 400
+--   - the 3 RPCs (mixed / following / tag) are also fixed to return p.text_jp / p.text_en
 --
--- 前提:
---   005 (実行済み = body 単一仕様) → このファイルで上書き
+-- Assumption:
+--   005 (already run = single body spec) → overwritten by this file
 --
--- 注意:
---   既存 user_posts データがある場合、body の内容は text_jp に移行する
---   (新規アプリ・実データなしの想定なので実害なし)
+-- Note:
+--   If there is existing user_posts data, the body content is migrated to text_jp
+--   (assumes a new app with no real data, so no real harm)
 -- ============================================================
 
 -- ============================================
--- 1. text_jp / text_en カラム追加 + 既存 body から移行
+-- 1. Add text_jp / text_en columns + migrate from the existing body
 -- ============================================
 ALTER TABLE public.user_posts
     ADD COLUMN IF NOT EXISTS text_jp text,
     ADD COLUMN IF NOT EXISTS text_en text;
 
--- 既存 body の内容を text_jp に移行 (空ならスキップ)
+-- Migrate the existing body content to text_jp (skip if empty)
 UPDATE public.user_posts
     SET text_jp = body
     WHERE body IS NOT NULL AND text_jp IS NULL;
 
 -- ============================================
--- 2. 旧 body カラムの制約を解除して削除
+-- 2. Remove the constraints on the old body column and drop it
 -- ============================================
 ALTER TABLE public.user_posts
     DROP COLUMN IF EXISTS body;
 
 -- ============================================
--- 3. 新 CHECK 制約
+-- 3. New CHECK constraint
 -- ============================================
 ALTER TABLE public.user_posts
     DROP CONSTRAINT IF EXISTS user_posts_text_required;
@@ -46,13 +46,13 @@ ALTER TABLE public.user_posts
 ALTER TABLE public.user_posts
     DROP CONSTRAINT IF EXISTS user_posts_text_en_length;
 
--- 少なくとも片方必須
+-- At least one is required
 ALTER TABLE public.user_posts
     ADD CONSTRAINT user_posts_text_required CHECK (
         text_jp IS NOT NULL OR text_en IS NOT NULL
     );
 
--- 文字数: 日本語 200 / 英語 400 (S9 ユーザー指定)
+-- Character count: Japanese 200 / English 400 (user specified in S9)
 ALTER TABLE public.user_posts
     ADD CONSTRAINT user_posts_text_jp_length CHECK (
         text_jp IS NULL OR char_length(text_jp) <= 200
@@ -67,7 +67,7 @@ COMMENT ON COLUMN public.user_posts.text_jp IS '日本語本文 (任意、最大
 COMMENT ON COLUMN public.user_posts.text_en IS '英語本文 (任意、最大 400 文字)';
 
 -- ============================================
--- 4. RPC 書き直し: fetch_mixed_feed_random
+-- 4. RPC rewrite: fetch_mixed_feed_random
 -- ============================================
 CREATE OR REPLACE FUNCTION public.fetch_mixed_feed_random(limit_count integer DEFAULT 50)
 RETURNS TABLE (
@@ -127,7 +127,7 @@ REVOKE EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer) TO authenticated;
 
 -- ============================================
--- 5. RPC 書き直し: fetch_following_feed
+-- 5. RPC rewrite: fetch_following_feed
 -- ============================================
 CREATE OR REPLACE FUNCTION public.fetch_following_feed(limit_count integer DEFAULT 50)
 RETURNS TABLE (
@@ -195,7 +195,7 @@ REVOKE EXECUTE ON FUNCTION public.fetch_following_feed(integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_following_feed(integer) TO authenticated;
 
 -- ============================================
--- 6. RPC 書き直し: fetch_tag_feed
+-- 6. RPC rewrite: fetch_tag_feed
 -- ============================================
 CREATE OR REPLACE FUNCTION public.fetch_tag_feed(
     target_tag  text,

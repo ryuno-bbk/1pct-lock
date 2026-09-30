@@ -1,36 +1,39 @@
 -- ============================================================================
--- 065: 未認証(anon)からの直接アクセスを塞ぐ
+-- 065: close direct access from unauthenticated users (anon)
 --
--- 背景: 2026-08-01 の実測で、publishable キーだけで以下が可能な状態だった。
---   - users / user_posts / user_dreams / authors / quotes の中身が読める
---   - fetch_comments_for_post が未認証で実行できる (050 の権限書き漏れ)
+-- Background: measurements on 2026-08-01 showed that the following were possible with only the
+-- publishable key:
+--   - the contents of users / user_posts / user_dreams / authors / quotes could be read
+--   - fetch_comments_for_post could be executed without authentication (050 missed the permissions)
 --
--- 原因1: マイグレーション全体に「テーブルレベルの GRANT/REVOKE」が1行も無く、
---        Supabase 既定 (anon/authenticated/service_role に SELECT〜DELETE 付与) のままだった。
--- 原因2: 050 が DROP FUNCTION → CREATE FUNCTION した際、
---        `REVOKE ... FROM anon` は書いたが `FROM PUBLIC` を書かなかった。
---        PostgreSQL は CREATE FUNCTION で暗黙に PUBLIC へ EXECUTE を付与し、
---        anon は PUBLIC のメンバーなので、anon 名指しの REVOKE では剥がれない。
+-- Cause 1: the migrations had not a single line of "table-level GRANT/REVOKE", so they
+--        stayed at the Supabase default (SELECT to DELETE granted to anon/authenticated/service_role).
+-- Cause 2: when 050 did DROP FUNCTION → CREATE FUNCTION,
+--        it wrote `REVOKE ... FROM anon` but not `FROM PUBLIC`.
+--        PostgreSQL implicitly grants EXECUTE to PUBLIC on CREATE FUNCTION, and
+--        anon is a member of PUBLIC, so a REVOKE naming anon does not remove it.
 --
--- ⚠️ quotes / authors は意図的に対象外。
---    AppBlockerApp.swift:182 の起動処理がサインイン前に読むため、
---    ここで止めると新規ユーザーの名言が空になる。別途コード側で対応する。
+-- ⚠️ quotes / authors are intentionally excluded.
+--    The launch process in AppBlockerApp.swift:182 reads them before sign-in, so
+--    stopping them here would leave new users with no quotes. This is handled separately in the
+--    code.
 -- ============================================================================
 
 BEGIN;
 
 -- ----------------------------------------------------------------------------
--- 1. 関数の実行権限: fetch_comments_for_post (063 と同型の穴)
+-- 1. Function execute permission: fetch_comments_for_post (the same kind of hole as 063)
 -- ----------------------------------------------------------------------------
--- ⚠️ FROM PUBLIC が本体。FROM anon だけでは暗黙の PUBLIC 付与が残る (050 の教訓)
+-- ⚠️ FROM PUBLIC is the real fix. With FROM anon alone, the implicit PUBLIC grant remains (lesson
+-- from 050)
 REVOKE EXECUTE ON FUNCTION public.fetch_comments_for_post(uuid, integer) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.fetch_comments_for_post(uuid, integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_comments_for_post(uuid, integer) TO authenticated;
 
 -- ----------------------------------------------------------------------------
--- 2. ユーザーデータ系テーブルから anon の権限を剥奪
---    (サインイン前に読まれないことを実機コードで確認済み:
---     Onboarding は .rpc/.from が0件、LikeService/BlockService は userId nil で早期 return)
+-- 2. Revoke anon's permissions on user data tables
+--    (confirmed in the real app code that they are not read before sign-in:
+--     Onboarding has 0 .rpc/.from calls, LikeService/BlockService return early when userId is nil)
 -- ----------------------------------------------------------------------------
 REVOKE ALL ON TABLE public.users                    FROM anon;
 REVOKE ALL ON TABLE public.user_posts               FROM anon;
@@ -48,17 +51,17 @@ REVOKE ALL ON TABLE public.post_views               FROM anon;
 REVOKE ALL ON TABLE public.moderation_config        FROM anon;
 
 -- ----------------------------------------------------------------------------
--- 3. 今後追加されるテーブルにも anon 権限が付かないようにする
+-- 3. Make sure tables added in the future do not get anon permissions either
 -- ----------------------------------------------------------------------------
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon;
 
 COMMIT;
 
 -- ============================================================================
--- 検証クエリ (適用後にこれを流して結果を確認する)
+-- Verification queries (run these after applying and check the results)
 -- ============================================================================
 
--- (A) anon がまだ触れるテーブル。quotes と authors だけが残っていれば正常
+-- (A) Tables anon can still touch. Normal if only quotes and authors remain
 SELECT table_name,
        string_agg(DISTINCT privilege_type, ', ' ORDER BY privilege_type) AS anon_privs
 FROM information_schema.role_table_grants
@@ -66,9 +69,10 @@ WHERE table_schema = 'public' AND grantee = 'anon'
 GROUP BY table_name
 ORDER BY table_name;
 
--- (B) 未認証で実行できる関数が残っていないか全数チェック
---     is_handle_available(text) が 🟠 なのは正常 (サインアップ前に呼ぶ設計)
---     それ以外に 🔴 / 🟠 が出たら、その関数にも上の3行と同じ REVOKE/GRANT が必要
+-- (B) Full check that no functions remain executable without authentication
+--     is_handle_available(text) showing 🟠 is normal (designed to be called before sign-up)
+--     If any other 🔴 / 🟠 appears, that function also needs the same REVOKE/GRANT as the 3 lines
+--     above
 SELECT p.proname AS fn,
        pg_get_function_identity_arguments(p.oid) AS args,
        CASE

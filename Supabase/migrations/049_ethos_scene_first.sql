@@ -1,16 +1,17 @@
 -- ============================================================
 -- 049_ethos_scene_first.sql
--- 層2改定: シーン認定ファースト (2026-07-25 実弾FB)
+-- Layer 2 revision: scene identification first (2026-07-25 real-world feedback)
 -- ============================================================
--- 背景: ドライブの車内写真 (テキストなし) が「単なる移動」「目的が読み取れない」の
--- 理屈で pass した。人間 (や素のGPT/Claude) に「これは何の画像?」と聞けば
--- 「ドライブしてる画像」と即答できるレベルの場面は、テキストのヒントが無くても
--- 画像単体で判定を確定させる。条件の列挙を増やすのではなく判定手順を原則化する
--- (同一コール内の文言変更のみ、コスト増なし)。
+-- Background: a photo inside a car on a drive (no text) passed with the reasoning "just travel" /
+-- "no purpose can be read". For scenes at a level where a human (or plain GPT/Claude) asked "what
+-- is this image?" would instantly answer "a picture of someone driving", the verdict is decided
+-- from the image alone, even without text hints. Rather than adding more listed conditions, the
+-- judgment procedure is turned into a principle (only a wording change within the same call, no
+-- extra cost).
 --
--- 方式: ethos_rubric の全文書き換え (044+045 の内容を内包、冪等)。
--- 前提: 044 適用済み。safety_rubric には触れない (048 が最新)。
--- 適用: SQL Editor で実行するだけ、デプロイ不要。
+-- Method: full rewrite of ethos_rubric (includes the content of 044+045, idempotent).
+-- Prerequisite: 044 applied. safety_rubric is not touched (048 is the latest).
+-- To apply: just run it in the SQL Editor, no deploy needed.
 -- ============================================================
 
 UPDATE public.moderation_config

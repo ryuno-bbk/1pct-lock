@@ -2,17 +2,18 @@
 //  TotalActivityReport.swift
 //  UsageReportExtension
 //
-//  オンボーディング診断用の DeviceActivityReport シーン2つ。
-//  - onboardingComparison: 予想 (自己申告) vs 実測の比較チャート
-//  - onboardingTopApps:    使用量トップ3 (実アプリのアイコン+名前は Label(token) で
-//                          この拡張の中でだけ描画できる)
+//  2 DeviceActivityReport scenes for the onboarding diagnosis.
+//  - onboardingComparison: comparison chart of estimate (self-reported) vs measured
+//  - onboardingTopApps:    top 3 by usage (real app icons + names can be drawn with Label(token)
+//                          only inside this extension)
 //
-//  データの流れ:
-//  - 実測値 (DeviceActivityResults) はこの拡張の外に持ち出せない (Apple のプライバシー制約)。
-//    そのため見出し・チャートまで全部この拡張内の View で描く。
-//  - 自己申告 (予想) は本体アプリが App Group に書き、ここで読む
-//    (Report 拡張は App Group への書き込みは不可だが読み取りは可能)。
-//  - Context の rawValue は本体の DeviceActivityReport(...) 側と完全一致が必要 (固定文字列)。
+//  Data flow:
+//  - Measured values (DeviceActivityResults) cannot be taken outside this extension (Apple privacy
+//    restriction). So everything down to the headings and charts is drawn by Views inside this extension.
+//  - The self-report (estimate) is written to the App Group by the main app and read here
+//    (a Report extension cannot write to the App Group but can read it).
+//  - The Context rawValue must match exactly on the main app's DeviceActivityReport(...) side (fixed
+//    string).
 //
 
 import DeviceActivity
@@ -20,60 +21,62 @@ import ExtensionKit
 import ManagedSettings
 import SwiftUI
 
-// App Group (メインアプリの AppGroupConstants と一致させること。拡張からは import 不可のためハードコード)
+// App Group (must match AppGroupConstants in the main app. Hardcoded because it cannot be imported
+// from the extension)
 private let appGroupID = "group.com.ryunosuke.appblocker.shared"
 private let keyEstimateMinutes = "onboardingEstimateMinutes"
 private let keyOnboardingLang = "onboardingLanguage"
 private let keyRevealPhase = "onboardingRevealPhase"
 
 extension DeviceActivityReport.Context {
-    /// 予想 vs 実測の比較 (オンボ診断)
+    /// Estimate vs measured comparison (onboarding diagnosis)
     static let onboardingComparison = Self("onboardingComparison")
-    /// 使用量トップ3 (オンボ診断)
+    /// Top 3 by usage (onboarding diagnosis)
     static let onboardingTopApps = Self("onboardingTopApps")
-    // 実機検証の経緯 (2026-07-13):
-    // - 本体に DeviceActivityReport を2インスタンス置く → 2個目が白紙 (iOS の既知の癖)
-    // - 単一インスタンス + context 切替 → ✅ 両方描画できた (20:24 実機確認)
-    // - 1シーン統合 + フィルタ微変更で再クエリ → ❌ 切替のたび数秒の再クエリ空白が
-    //   入りプレースホルダが透ける (20:41 実機で退行確認)
-    // → 結論: 「シーン2つ + 本体は単一インスタンスで context だけ切替」が正解
+    // History of real device testing (2026-07-13):
+    // - 2 DeviceActivityReport instances in the main app → the 2nd is blank (a known iOS quirk)
+    // - Single instance + switching context → ✅ both rendered (confirmed on a real device at 20:24)
+    // - Merged into 1 scene + re-query with a small filter change → ❌ every switch has a blank of a few
+    //   seconds while re-querying and the placeholder shows through (regression confirmed on a real device
+    //   at 20:41)
+    // → Conclusion: "2 scenes + the main app has a single instance and only switches context" is correct
 }
 
-// MARK: - 共有ヘルパー
+// MARK: - Shared helpers
 
-/// App Group から自己申告の1日予想 (分) を読む。未設定は 0
+/// Read the self-reported daily estimate (minutes) from the App Group. 0 if unset
 func loadEstimateMinutes() -> Int {
     UserDefaults(suiteName: appGroupID)?.integer(forKey: keyEstimateMinutes) ?? 0
 }
 
-/// App Group から言語 ("japanese"/"english") を読む。未設定は日本語扱い
+/// Read the language ("japanese"/"english") from the App Group. Treated as Japanese if unset
 func loadIsJapanese() -> Bool {
     let raw = UserDefaults(suiteName: appGroupID)?.string(forKey: keyOnboardingLang)
     return raw != "english"
 }
 
-// MARK: - 統合シーン (比較 + トップ3)
+// MARK: - Merged scene (comparison + top 3)
 
 struct TopAppEntry: Identifiable {
     let id = UUID()
     let token: ApplicationToken?
     let fallbackName: String
-    /// 期間合計 (分)
+    /// Total for the period (minutes)
     let totalMinutes: Int
 }
 
 struct UsageConfiguration {
-    /// "comparison" or "topApps" (本体が App Group に書くフェーズフラグ)
+    /// "comparison" or "topApps" (phase flag the main app writes to the App Group)
     let phase: String
-    /// 実測の1日平均 (分)
+    /// Measured daily average (minutes)
     let actualDailyMinutes: Int
-    /// 自己申告の1日予想 (分)。0 = 未設定
+    /// Self-reported daily estimate (minutes). 0 = unset
     let estimateDailyMinutes: Int
     let apps: [TopAppEntry]
     let isJapanese: Bool
 }
 
-/// 共通集計 (1パスで合計とアプリ別の両方)
+/// Shared aggregation (both total and per-app in 1 pass)
 private func buildUsageConfiguration(_ data: DeviceActivityResults<DeviceActivityData>, phase: String) async -> UsageConfiguration {
     var total: TimeInterval = 0
     var dayCount = 0
@@ -98,8 +101,8 @@ private func buildUsageConfiguration(_ data: DeviceActivityResults<DeviceActivit
 
     let days = Double(max(dayCount, 1))
     let dailyAvgMinutes = Int((total / days) / 60)
-    // アプリ別も「1日平均」に揃える (週合計だと 58時間 のような桁になり
-    // 比較画面の1日平均と混乱する。2026-07-13 実機FB)
+    // Per-app values are also daily averages (a weekly total gives numbers like 58 hours
+    // and gets confused with the daily average on the comparison screen. 2026-07-13 real device feedback)
     let top = seconds
         .sorted { $0.value > $1.value }
         .prefix(3)

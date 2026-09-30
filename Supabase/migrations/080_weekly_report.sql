@@ -1,45 +1,50 @@
 -- ============================================================
 -- 080_weekly_report.sql
--- 週次レポート (Opal の Focus Report 相当) の集計 RPC
+-- Aggregation RPC for the weekly report (equivalent to Opal's Focus Report)
 -- ============================================================
--- 設計判断 (2026-08-30):
+-- Design decisions (2026-08-30):
 --
---   1. 🔴 レポートを保存するテーブルは作らない。block_sessions から毎回再計算する。
---      理由:
---        - 「過去のレポートを見返す」は週の開始日を変えて同じ関数を呼ぶだけで済む
---        - 保存すると集計の定義を直したとき過去分だけ古い数字のまま残る
---        - 今の block_sessions の行数なら全走査しても無視できる
---      スケールして重くなったら idx_block_sessions_week (下記) が効く。
---      それでも足りなくなったら初めてマテビュー化を検討する。
+--   1. 🔴 No table stores the reports. They are recalculated from block_sessions every time.
+--      Reasons:
+--        - "Looking back at past reports" is just calling the same function with a different week
+--          start date
+--        - If stored, fixing the aggregation definition would leave only the past reports with old
+--          numbers
+--        - At the current row count of block_sessions, even a full scan is negligible
+--      If it gets heavy at scale, idx_block_sessions_week (below) helps.
+--      Only if that is still not enough, consider a materialized view.
 --
---   2. 🔴 上位% は「累計」ではなく「その週だけ」の順位で出す。
---      016 の get_block_percentile は累計順位なので、週次レポートに載せると
---      毎週ほぼ同じ数字が出て動かない (レポートとして機能しない)。
---      母数はその週に1秒でもロックした人。
---      ⚠️ 母数が小さいと「上位50%」が出て格好悪い (016 の設計メモが既に警告済み)。
---         → MIN_RANK_POOL 未満の週は top_percent / rank を null で返し、UI 側で隠す。
---         閾値 20 は、規模が小さいうちは一部の週だけ出る線引きになる。
---         母数が増えれば自然に常時出る。
+--   2. 🔴 The top percentile is the rank for "that week only", not "all time".
+--      get_block_percentile in 016 is an all-time rank, so putting it in the weekly report would
+--      show almost the same number every week without moving (it would not work as a report).
+--      The population is everyone who locked for even 1 second that week.
+--      ⚠️ With a small population, "top 50%" appears and looks bad (016's design memo already
+--         warns about this).
+--         → For weeks below MIN_RANK_POOL, top_percent / rank are returned as null and hidden in the UI.
+--         The threshold of 20 means that while the user base is small, only some weeks show it.
+--         As the population grows, it will naturally always show.
 --
---   3. 🔴 週をまたぐセッションは「開始した週」に丸ごと計上する。
---      016 の get_streak_days と同じ慣習に揃える (分割集計はしない)。
---      スケジュールロックは 100 時間超のセッションが実在する (実測 max 7999分) ので、
---      またぎは日常的に起きる。表示側で「今週 133時間」が出ても壊れてはいない。
+--   3. 🔴 A session that crosses weeks is counted entirely in "the week it started".
+--      Same convention as get_streak_days in 016 (no split aggregation).
+--      Schedule locks really do have sessions over 100 hours (measured max 7999 minutes), so
+--      crossing weeks happens routinely. Even if the display shows "133 hours this week", it is not
+--      broken.
 --
---   4. ❌ アプリ別の内訳は作れない。Screen Time API は実測値をアプリ本体に渡さない
---      (UsageReportExtension の中で完結する仕様)。
---      代わりに「モード別 (タイマー/スケジュール/位置)」と「曜日別」を返す。
---      どちらも block_sessions だけで作れて、レポートの中身として成立する。
+--   4. ❌ A per-app breakdown cannot be built. The Screen Time API does not pass measured values to
+--      the app itself (by design, it stays inside UsageReportExtension).
+--      Instead, it returns "per mode (timer/schedule/location)" and "per weekday".
+--      Both can be built from block_sessions alone, and they work as report content.
 --
---   5. 自分のレポートしか読めない。
---      016/033 の RPC は target_user_id を取って他人の統計も返す (公開統計という仕様)
---      が、週次レポートは「どの週に活動していたか」まで分かる粒度なので広げない。
---      → 公開 RPC は auth.uid() 固定。集計本体は internal 関数に分けて、
---        cron のディスパッチャ (081) からも二重実装なしで呼べるようにする。
+--   5. Users can only read their own report.
+--      The RPCs in 016/033 take target_user_id and return other people's stats too (by design, the
+--      stats are public), but the weekly report is granular enough to reveal "which weeks someone
+--      was active", so it is not opened up.
+--      → The public RPC is fixed to auth.uid(). The aggregation itself is split into an internal
+--        function so that the cron dispatcher (081) can also call it without a second implementation.
 --
--- 実行順序: 079 の後。何度実行しても安全 (CREATE OR REPLACE / IF NOT EXISTS)
--- 適用: supabase db push (または ./apply_sql.sh)
--- 戻すとき:
+-- Run order: after 079. Safe to run any number of times (CREATE OR REPLACE / IF NOT EXISTS)
+-- Apply: supabase db push (or ./apply_sql.sh)
+-- To revert:
 --   drop function if exists public.get_weekly_report_list(integer, text);
 --   drop function if exists public.get_weekly_report(integer, text);
 --   drop function if exists public.weekly_report_json(uuid, date, text);
@@ -48,19 +53,20 @@
 -- ============================================================
 
 -- ============================================
--- 1. 週次集計用インデックス
+-- 1. Index for weekly aggregation
 -- ============================================
--- 週の全ユーザー分を引く (順位計算) ので user_id 先頭では効かない。
--- started_at 先頭 + duration_seconds が入っている行だけの部分インデックス。
+-- It reads all users for the week (rank calculation), so a user_id-first index does not help.
+-- Partial index with started_at first, only for rows that have duration_seconds.
 CREATE INDEX IF NOT EXISTS idx_block_sessions_week
     ON public.block_sessions (started_at)
     WHERE duration_seconds IS NOT NULL;
 
 -- ============================================
--- 2. 週の開始日 (月曜) を求めるヘルパー
+-- 2. Helper that finds the start date of the week (Monday)
 -- ============================================
--- p_week_offset: 何週前か。0 = 進行中の今週、1 = 先週 (= 直近の完了週)。
--- 🔴 レポートとして見せるのは常に 1 以上。0 は途中経過なので通常使わない。
+-- p_week_offset: how many weeks ago. 0 = the current week in progress, 1 = last week (= the most
+-- recent completed week).
+-- 🔴 What is shown as a report is always 1 or more. 0 is partial progress, so it is not normally used.
 CREATE OR REPLACE FUNCTION public.weekly_report_week_start(
     p_week_offset integer DEFAULT 1,
     p_tz          text    DEFAULT 'Asia/Tokyo'
@@ -73,7 +79,7 @@ DECLARE
     v_tz    text := p_tz;
     v_today date;
 BEGIN
-    -- 016 と同じく、不正なタイムゾーン名は UTC にフォールバックする
+    -- Same as 016, an invalid time zone name falls back to UTC
     BEGIN
         PERFORM now() AT TIME ZONE v_tz;
     EXCEPTION WHEN OTHERS THEN
@@ -82,7 +88,7 @@ BEGIN
 
     v_today := (now() AT TIME ZONE v_tz)::date;
 
-    -- date_trunc('week', ...) は ISO 週 = 月曜始まり
+    -- date_trunc('week', ...) is the ISO week = starts on Monday
     RETURN date_trunc('week', v_today::timestamp)::date
            - (GREATEST(p_week_offset, 0) * 7);
 END;
@@ -92,10 +98,10 @@ REVOKE EXECUTE ON FUNCTION public.weekly_report_week_start(integer, text) FROM P
 GRANT  EXECUTE ON FUNCTION public.weekly_report_week_start(integer, text) TO authenticated;
 
 -- ============================================
--- 3. 集計本体 (internal)
+-- 3. The aggregation itself (internal)
 -- ============================================
--- 🔴 これは公開しない。081 の cron ディスパッチャ (postgres 権限で走る) と
---    公開 RPC の両方がここを呼ぶ。二重実装を避けるための分離。
+-- 🔴 This is not public. Both the cron dispatcher in 081 (runs with postgres privileges) and
+--    the public RPC call this. Split out to avoid a second implementation.
 CREATE OR REPLACE FUNCTION public.weekly_report_json(
     p_user_id    uuid,
     p_week_start date,
@@ -106,7 +112,8 @@ LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-    -- 上位% を出す最低母数。これ未満の週は rank / top_percent を返さない
+    -- Minimum population to show the top percentile. For weeks below this, rank / top_percent are not
+    -- returned
     MIN_RANK_POOL constant integer := 20;
 
     v_tz           text := p_tz;
@@ -138,12 +145,12 @@ BEGIN
         v_tz := 'UTC';
     END;
 
-    -- 現地時間の 月曜00:00 〜 翌月曜00:00 を timestamptz に変換する
+    -- Convert local Monday 00:00 to the next Monday 00:00 into timestamptz
     v_from      := (p_week_start::timestamp)           AT TIME ZONE v_tz;
     v_to        := ((p_week_start + 7)::timestamp)     AT TIME ZONE v_tz;
     v_prev_from := ((p_week_start - 7)::timestamp)     AT TIME ZONE v_tz;
 
-    -- ---- 今週 ----
+    -- ---- This week ----
     SELECT COALESCE(SUM(duration_seconds), 0), count(*)
       INTO v_seconds, v_sessions
       FROM public.block_sessions
@@ -152,7 +159,7 @@ BEGIN
        AND started_at >= v_from
        AND started_at <  v_to;
 
-    -- ---- 先週 ----
+    -- ---- Last week ----
     SELECT COALESCE(SUM(duration_seconds), 0)
       INTO v_prev_seconds
       FROM public.block_sessions
@@ -161,9 +168,10 @@ BEGIN
        AND started_at >= v_prev_from
        AND started_at <  v_from;
 
-    -- ---- 過去に一度でもロックしたか + 初回の週 ----
-    -- 🔴 これが false のユーザーはレポートの全項目がゼロで画面が成立しない。
-    --    081 の送信対象からも外す (「今週は0分」を送るのは実績がある人だけ)。
+    -- ---- Whether the user has ever locked + the week of the first session ----
+    -- 🔴 For users where this is false, every item in the report is zero and the screen does not work.
+    --    They are also excluded from the send targets in 081 ("0 minutes this week" is only sent to
+    --    people who have a track record).
     SELECT (count(*) > 0),
            date_trunc('week', (MIN(started_at) AT TIME ZONE v_tz))::date
       INTO v_ever, v_first_week
@@ -172,8 +180,8 @@ BEGIN
        AND duration_seconds IS NOT NULL
        AND started_at < v_to;
 
-    -- ---- その週末時点の累計 ----
-    -- users.total_block_seconds は「現在」の累計なので過去週のレポートには使えない
+    -- ---- Running total as of the end of that week ----
+    -- users.total_block_seconds is the "current" total, so it cannot be used for past week reports
     SELECT COALESCE(SUM(duration_seconds), 0)
       INTO v_total
       FROM public.block_sessions
@@ -181,8 +189,8 @@ BEGIN
        AND duration_seconds IS NOT NULL
        AND started_at < v_to;
 
-    -- ---- その週の順位 (母数 = その週に1秒でもロックした人) ----
-    -- 0秒の人は母数にもランキングにも入らない
+    -- ---- Rank for that week (population = people who locked for even 1 second that week) ----
+    -- People with 0 seconds are in neither the population nor the ranking
     IF v_seconds > 0 THEN
         WITH wk AS (
             SELECT user_id, SUM(duration_seconds)::bigint AS secs
@@ -211,10 +219,11 @@ BEGIN
            AND started_at <  v_to;
     END IF;
 
-    -- ---- 直近4週 (この週を含む) の平均 → 年間予測の材料 ----
-    -- 🔴 初回セッションより前の週は分母に入れない。
-    --    入れると「先週から使い始めた人」の平均が存在しない3週分のゼロで薄まり、
-    --    年間予測が実ペースの 1/4 になる (2026-08-30 の実データで確認)。
+    -- ---- Average of the last 4 weeks (including this week) → input for the yearly projection ----
+    -- 🔴 Weeks before the first session are not included in the denominator.
+    --    If they were, the average of "someone who started last week" would be diluted by 3 weeks of zeros
+    --    that did not exist, and the yearly projection would be 1/4 of the real pace (confirmed with
+    --    real data on 2026-08-30).
     SELECT COALESCE(ROUND(AVG(wsum))::bigint, 0)
       INTO v_avg4
       FROM (
@@ -231,7 +240,7 @@ BEGIN
              AND (p_week_start - g.n * 7) >= v_first_week
       ) q;
 
-    -- ---- モード別内訳 (アプリ別が作れない代わり) ----
+    -- ---- Breakdown per mode (in place of a per-app breakdown, which cannot be built) ----
     SELECT COALESCE(jsonb_object_agg(mode, secs), '{}'::jsonb)
       INTO v_by_mode
       FROM (
@@ -244,7 +253,7 @@ BEGIN
            GROUP BY mode
       ) m;
 
-    -- ---- 曜日別 (月=0 〜 日=6)。UI の棒グラフ用に必ず7要素返す ----
+    -- ---- Per weekday (Mon=0 to Sun=6). Always returns 7 elements for the UI bar chart ----
     SELECT COALESCE(jsonb_agg(secs ORDER BY idx), '[]'::jsonb)
       INTO v_days
       FROM (
@@ -260,8 +269,9 @@ BEGIN
             FROM generate_series(0, 6) AS d(idx)
       ) dd;
 
-    -- ---- 先週比 ----
-    -- 先週が0の週は「何%増」が定義できない (0除算)。null を返して UI 側で出さない
+    -- ---- Change vs last week ----
+    -- For a week where last week was 0, "X% increase" cannot be defined (division by 0). Return null and
+    -- do not show it in the UI
     IF v_prev_seconds > 0 THEN
         v_delta := ROUND((v_seconds - v_prev_seconds)::numeric / v_prev_seconds * 100, 1);
     END IF;
@@ -281,7 +291,8 @@ BEGIN
         'active_users',     v_active_users,
         'total_seconds',    v_total,
         'avg4_seconds',     v_avg4,
-        -- 年間予測。直近4週の平均ペースが1年続いたら、という単純な掛け算
+        -- Yearly projection. A simple multiplication: what if the average pace of the last 4 weeks continued
+        -- for a year
         'projection_year_seconds', v_avg4 * 52,
         'by_mode',          v_by_mode,
         'days',             v_days
@@ -289,7 +300,7 @@ BEGIN
 END;
 $$;
 
--- 🔴 internal。誰にも EXECUTE を渡さない (公開 RPC と cron からだけ呼ぶ)
+-- 🔴 internal. EXECUTE is granted to no one (called only from the public RPC and cron)
 REVOKE EXECUTE ON FUNCTION public.weekly_report_json(uuid, date, text)
     FROM PUBLIC, anon, authenticated;
 
@@ -297,7 +308,7 @@ COMMENT ON FUNCTION public.weekly_report_json(uuid, date, text) IS
     '週次レポートの集計本体 (internal)。公開 RPC get_weekly_report と 081 の cron ディスパッチャが呼ぶ。直接 GRANT しないこと';
 
 -- ============================================
--- 4. 公開 RPC: 自分の週次レポート
+-- 4. Public RPC: your own weekly report
 -- ============================================
 CREATE OR REPLACE FUNCTION public.get_weekly_report(
     p_week_offset integer DEFAULT 1,
@@ -314,7 +325,7 @@ BEGIN
         RAISE EXCEPTION 'not authenticated';
     END IF;
 
-    -- 未来の週は返さない (offset < 0 は 0 に丸められる)
+    -- Future weeks are not returned (offset < 0 is rounded to 0)
     RETURN public.weekly_report_json(
         v_uid,
         public.weekly_report_week_start(p_week_offset, p_tz),
@@ -330,11 +341,12 @@ COMMENT ON FUNCTION public.get_weekly_report(integer, text) IS
     '自分の週次レポート。p_week_offset: 0=進行中の今週 / 1=先週(既定)。他人のは読めない';
 
 -- ============================================
--- 5. 公開 RPC: 過去レポートの一覧 (設定 → 週次レポート)
+-- 5. Public RPC: list of past reports (Settings → Weekly report)
 -- ============================================
--- 一覧は行数が出るので集計本体は呼ばない (1週あたり十数クエリ走るため)。
--- 必要なのは「その週にどれだけロックしたか」だけなので単一の集計で済ませる。
--- 🔴 初回セッションより前の週は返さない (空のレポートを並べても意味がない)。
+-- The list has many rows, so it does not call the aggregation itself (it runs a dozen or so queries per
+-- week).
+-- All that is needed is "how much the user locked that week", so a single aggregation is enough.
+-- 🔴 Weeks before the first session are not returned (listing empty reports is pointless).
 CREATE OR REPLACE FUNCTION public.get_weekly_report_list(
     p_limit integer DEFAULT 12,
     p_tz    text    DEFAULT 'Asia/Tokyo'
@@ -410,15 +422,15 @@ COMMENT ON FUNCTION public.get_weekly_report_list(integer, text) IS
     '自分の過去レポート一覧 (完了週のみ・新しい順)。初回セッションの週より前は返さない';
 
 -- ============================================
--- 6. 動作確認用クエリ (実行不要、コメント)
+-- 6. Queries for checking behavior (no need to run, comments only)
 -- ============================================
--- -- 先週のレポート (実ユーザーの読み取りは可。書き込みは禁止)
+-- -- Last week's report (reading real users is allowed. Writing is forbidden)
 -- select public.weekly_report_json(
 --          (select id from public.users order by total_block_seconds desc limit 1),
 --          public.weekly_report_week_start(1, 'Asia/Tokyo'),
 --          'Asia/Tokyo');
 --
--- -- 週別のアクティブ人数 (上位% の母数が閾値に届くか確認する)
+-- -- Active users per week (check whether the top percentile population reaches the threshold)
 -- select date_trunc('week', started_at at time zone 'Asia/Tokyo')::date as wk,
 --        count(distinct user_id)
 --   from public.block_sessions

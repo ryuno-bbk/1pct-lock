@@ -1,22 +1,24 @@
 -- ============================================================
--- 076: フィード4関数に「公式マーク」と「公式アカウントの言語出し分け」を入れる
---      (先に 075_official_badge_and_lang_exclusive.sql を適用しておくこと)
+-- 076: Add the "official badge" and "language split for official accounts" to the 4 feed functions
+--      (apply 075_official_badge_and_lang_exclusive.sql first)
 --
--- 変更点は各関数あたり2箇所だけ:
---   ① UGC投稿の `false AS is_official_author` → `COALESCE(u.is_official, false)`
---      (名言側の `COALESCE(a.is_official, true)` は従来どおり authors テーブルを見る。触らない)
---   ② WHERE に lang_exclusive の出し分け条件を追加
+-- Only 2 changes per function:
+--   (1) For UGC posts, `false AS is_official_author` → `COALESCE(u.is_official, false)`
+--      (the quote side's `COALESCE(a.is_official, true)` still looks at the authors table as before.
+--      Do not touch it)
+--   (2) Add the lang_exclusive split condition to WHERE
 --
--- 🔴 シグネチャは変えていないので CREATE OR REPLACE で ACL は保持されるが、
---    064 (GRANT 落ちでフィード全滅) の再発防止として各関数の末尾に REVOKE/GRANT を明示する。
---    適用前の ACL は _backups/2026-08-24_pre_075/GRANTS_before.csv に保存済み。
---    元の関数定義そのものも同フォルダに .sql で保存してある (戻したいときはそれを流す)。
+-- 🔴 The signature is unchanged, so CREATE OR REPLACE keeps the ACL, but
+--    to prevent a repeat of 064 (GRANT dropped and the whole feed broke), REVOKE/GRANT is written
+--    explicitly at the end of each function. The ACL before applying is saved in
+--    _backups/2026-08-24_pre_075/GRANTS_before.csv. The original function definitions themselves are
+--    also saved as .sql in the same folder (run those to roll back).
 --
--- 適用前の実測 (種アカウントを一時的に公式化して rollback したテスト):
---   ja閲覧者   → 公式のja投稿だけが出る / 英語版は出ない / バッジ true
---   en閲覧者   → 公式のen投稿だけが出る / 日本語版は出ない / バッジ true
---   lang未同期 → 'ja' 扱いで日本語版だけが出る (日英が重複して並ばない)
---   一般ユーザーの投稿の件数は3者すべてで同一 = 見え方は変わらない
+-- Measured before applying (test that temporarily made a seed account official, then rolled back):
+--   ja viewer   → only the official ja posts show / the English version does not / badge true
+--   en viewer   → only the official en posts show / the Japanese version does not / badge true
+--   lang not synced → treated as 'ja', only the Japanese version shows (no Japanese/English duplicates
+--   side by side) The number of regular users' posts is the same for all 3 = what they see does not change
 -- ============================================================
 
 -- ============================================================
@@ -29,24 +31,24 @@ CREATE OR REPLACE FUNCTION public.fetch_mixed_feed_random(limit_count integer DE
  SET search_path TO 'public'
 AS $function$
     WITH params AS MATERIALIZED (
-        -- ============ チューニング用重み (ここだけ書き換えて CREATE OR REPLACE すれば調整可) ============
+        -- ============ Tuning weights (to adjust, change only this part and run CREATE OR REPLACE) ============
         SELECT
-            3.0  ::double precision AS w_recency,          -- 投稿の新しさの最大点 (投稿直後)
-            24.0 ::double precision AS recency_half_hours, -- この時間経過で新しさ点が半減
-            0.5  ::double precision AS w_like,             -- ln(1+like_count) の係数
-            0.7  ::double precision AS w_comment,          -- ln(1+comment_count) の係数 (コメントはいいねより強い関心)
-            1.2  ::double precision AS w_follow,           -- フォロー中の投稿者へのボーナス
-            1.0  ::double precision AS w_seen,             -- ln(1+自分の閲覧回数) の既読ペナルティ係数 (減点)
-            1.5  ::double precision AS w_jitter,           -- ジッターの最大値 (探索性)
-            0.45 ::double precision AS quote_base,         -- 062: 名言はユーザー投稿より控えめに
-            2    ::integer          AS author_cap,         -- 1フィードあたり同一投稿者の最大件数 (postsのみ)
-            15   ::integer          AS quote_cap,          -- 062: 投稿が十分ある時の名言枠の下限 (適応型)
-            -- 063: 並びの種。アプリが毎回新しい値を渡す。省略時はサーバーで1つ作る
+            3.0  ::double precision AS w_recency,          -- max recency score of a post (right after posting)
+            24.0 ::double precision AS recency_half_hours, -- the recency score halves after this much time
+            0.5  ::double precision AS w_like,             -- coefficient of ln(1+like_count)
+            0.7  ::double precision AS w_comment,          -- coefficient of ln(1+comment_count) (a comment shows stronger interest than a like)
+            1.2  ::double precision AS w_follow,           -- bonus for authors you follow
+            1.0  ::double precision AS w_seen,             -- read penalty coefficient on ln(1+own view count) (subtracted)
+            1.5  ::double precision AS w_jitter,           -- max jitter (for exploration)
+            0.45 ::double precision AS quote_base,         -- 062: quotes are kept lower than user posts
+            2    ::integer          AS author_cap,         -- max items from the same author per feed (posts only)
+            15   ::integer          AS quote_cap,          -- 062: lower bound of quote slots when there are enough posts (adaptive)
+            -- 063: seed for the order. The app passes a new value each time. If omitted, the server makes one
             COALESCE(seed, gen_random_uuid()::text) AS shuffle_seed,
-            -- 073: 同一言語ボーナス。初期値0 = 無効 (有効化のしかたはファイル末尾を参照)
+            -- 073: same-language bonus. Initial value 0 = disabled (see the end of the file for how to enable it)
             0.0  ::double precision AS w_same_lang,
-            -- 073: 閲覧者(自分)の端末言語。引数を増やさずサブクエリで取得する。
-            -- users.lang が未同期 (NULL) なら同一言語ボーナスは常に0扱いになる
+            -- 073: the viewer's (own) device language. Fetched with a subquery so no argument has to be added.
+            -- If users.lang is not synced (NULL), the same-language bonus is always treated as 0
             (SELECT u.lang FROM public.users u WHERE u.id = auth.uid()) AS viewer_lang
     ),
     scored AS (
@@ -72,7 +74,8 @@ AS $function$
                 p.quote_base
                 + p.w_like * ln(1 + q.like_count)
                 + p.w_comment * ln(1 + q.comment_count)
-                -- 063: seed 由来の一様ジッター (同じ seed なら同じ並び / 変えれば必ず変わる)
+                -- 063: uniform jitter derived from seed (same seed gives the same order / a different seed always
+                -- changes it)
                 + p.w_jitter * (
                     ('x' || substr(md5(q.id::text || p.shuffle_seed), 1, 8))::bit(32)::bigint::double precision
                     / 4294967296.0
@@ -96,7 +99,7 @@ AS $function$
             u.id           AS author_id,
             u.display_name AS author_name,
             u.avatar_url   AS author_avatar_url,
-            COALESCE(u.is_official, false) AS is_official_author,  -- 075: 旧 false 固定
+            COALESCE(u.is_official, false) AS is_official_author,  -- 075: was fixed to false
             COALESCE(u.is_pro, false) AS is_pro_author,
             up.background_id,
             up.title,
@@ -117,8 +120,9 @@ AS $function$
                     ELSE 0
                   END
                 - p.w_seen * ln(1 + COALESCE(pv.view_count, 0))
-                -- 073: 投稿者の言語 (up.lang) が閲覧者の言語 (p.viewer_lang) と一致すれば加点。
-                -- どちらかが NULL (旧投稿 / lang 未同期ユーザー) なら加点しない (0のまま、減点もしない)
+                -- 073: add points if the author's language (up.lang) matches the viewer's language (p.viewer_lang).
+                -- If either is NULL (old posts / users with lang not synced), no points are added (stays 0, no penalty
+                -- either)
                 + CASE
                     WHEN up.lang IS NOT NULL AND up.lang = p.viewer_lang THEN p.w_same_lang
                     ELSE 0
@@ -144,11 +148,13 @@ AS $function$
             OR NOT COALESCE((SELECT ethos_enforce FROM public.moderation_config LIMIT 1), false)
           )
           AND up.created_at > now() - interval '30 days'
-          -- 075: 公式アカウント (users.lang_exclusive = true) の投稿だけ、閲覧者の言語に合う1本に絞る。
-          --      lang_exclusive = false の一般ユーザーはこの条件を必ず素通りする = 見え方は従来と完全に同じ。
-          --      up.lang IS NULL の投稿 = 「言語を問わない投稿」として全員に出す (公式の逃げ道)。
-          --      閲覧者の users.lang が未同期 (NULL) のときは 'ja' 扱い。
-          --      ここを「両方出す」にすると新規ユーザーの初回フィードに日英の重複が並ぶため、必ず片方に寄せる。
+          -- 075: Only for posts by official accounts (users.lang_exclusive = true), narrow down to the one that
+          -- matches the viewer's language.
+          --      Regular users with lang_exclusive = false always pass this condition = they look exactly the
+          --      same as before. Posts with up.lang IS NULL = shown to everyone as "language-independent posts"
+          --      (an escape hatch for official accounts). When the viewer's users.lang is not synced (NULL),
+          --      treat it as 'ja'. If this were "show both", a new user's first feed would list Japanese and
+          --      English duplicates, so always pick one side.
           AND (
               NOT COALESCE(u.lang_exclusive, false)
               OR up.lang IS NULL
@@ -156,8 +162,8 @@ AS $function$
           )
     ),
     ranked AS (
-        -- posts: 同一投稿者の連投キャップ (052)。
-        -- quotes: kind 単位の1パーティション = フィード全体の名言キャップ (062)
+        -- posts: cap on consecutive posts from the same author (052).
+        -- quotes: 1 partition per kind = quote cap for the whole feed (062)
         SELECT s.*,
                row_number() OVER (
                    PARTITION BY s.kind,
@@ -167,7 +173,7 @@ AS $function$
         FROM scored s
     ),
     quota AS (
-        -- 適応型の名言枠 (062): 投稿候補が limit_count に足りない分は名言で満たす
+        -- Adaptive quote slots (062): fill with quotes whatever the post candidates lack to reach limit_count
         SELECT GREATEST(
             p.quote_cap,
             limit_count - (
@@ -190,8 +196,9 @@ AS $function$
     LIMIT limit_count;
 $function$;
 
--- 🔴 権限の復元 (落とすと全ユーザーでフィードが壊れる)。
---    CREATE OR REPLACE はシグネチャ不変なら ACL を保持するが、064 の再発防止として明示的に書く。
+-- 🔴 Restore privileges (if dropped, the feed breaks for all users).
+--    CREATE OR REPLACE keeps the ACL if the signature is unchanged, but we write it explicitly to
+--    prevent a repeat of 064.
 REVOKE ALL ON FUNCTION public.fetch_mixed_feed_random(integer, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.fetch_mixed_feed_random(integer, text) FROM anon;
 GRANT EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer, text) TO authenticated;
@@ -248,7 +255,7 @@ AS $function$
             u.id           AS author_id,
             u.display_name AS author_name,
             u.avatar_url   AS author_avatar_url,
-            COALESCE(u.is_official, false) AS is_official_author,  -- 075: 旧 false 固定
+            COALESCE(u.is_official, false) AS is_official_author,  -- 075: was fixed to false
             COALESCE(u.is_pro, false) AS is_pro_author,
             p.background_id,
             p.title,
@@ -273,11 +280,13 @@ AS $function$
                 AND NOT COALESCE((SELECT ethos_enforce FROM public.moderation_config LIMIT 1), false)
             )
           )
-          -- 075: 公式アカウント (users.lang_exclusive = true) の投稿だけ、閲覧者の言語に合う1本に絞る。
-          --      lang_exclusive = false の一般ユーザーはこの条件を必ず素通りする = 見え方は従来と完全に同じ。
-          --      p.lang IS NULL の投稿 = 「言語を問わない投稿」として全員に出す (公式の逃げ道)。
-          --      閲覧者の users.lang が未同期 (NULL) のときは 'ja' 扱い。
-          --      ここを「両方出す」にすると新規ユーザーの初回フィードに日英の重複が並ぶため、必ず片方に寄せる。
+          -- 075: Only for posts by official accounts (users.lang_exclusive = true), narrow down to the one that
+          -- matches the viewer's language.
+          --      Regular users with lang_exclusive = false always pass this condition = they look exactly the
+          --      same as before. Posts with p.lang IS NULL = shown to everyone as "language-independent posts"
+          --      (an escape hatch for official accounts). When the viewer's users.lang is not synced (NULL),
+          --      treat it as 'ja'. If this were "show both", a new user's first feed would list Japanese and
+          --      English duplicates, so always pick one side.
           AND (
               NOT COALESCE(u.lang_exclusive, false)
               OR p.lang IS NULL
@@ -288,8 +297,9 @@ AS $function$
     LIMIT limit_count;
 $function$;
 
--- 🔴 権限の復元 (落とすと全ユーザーでフィードが壊れる)。
---    CREATE OR REPLACE はシグネチャ不変なら ACL を保持するが、064 の再発防止として明示的に書く。
+-- 🔴 Restore privileges (if dropped, the feed breaks for all users).
+--    CREATE OR REPLACE keeps the ACL if the signature is unchanged, but we write it explicitly to
+--    prevent a repeat of 064.
 REVOKE ALL ON FUNCTION public.fetch_following_feed(integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.fetch_following_feed(integer) FROM anon;
 GRANT EXECUTE ON FUNCTION public.fetch_following_feed(integer) TO authenticated;
@@ -342,7 +352,7 @@ AS $function$
             u.id           AS author_id,
             u.display_name AS author_name,
             u.avatar_url   AS author_avatar_url,
-            COALESCE(u.is_official, false) AS is_official_author,  -- 075: 旧 false 固定
+            COALESCE(u.is_official, false) AS is_official_author,  -- 075: was fixed to false
             COALESCE(u.is_pro, false) AS is_pro_author,
             p.background_id,
             p.title,
@@ -364,11 +374,13 @@ AS $function$
                 AND NOT COALESCE((SELECT ethos_enforce FROM public.moderation_config LIMIT 1), false)
             )
           )
-          -- 075: 公式アカウント (users.lang_exclusive = true) の投稿だけ、閲覧者の言語に合う1本に絞る。
-          --      lang_exclusive = false の一般ユーザーはこの条件を必ず素通りする = 見え方は従来と完全に同じ。
-          --      p.lang IS NULL の投稿 = 「言語を問わない投稿」として全員に出す (公式の逃げ道)。
-          --      閲覧者の users.lang が未同期 (NULL) のときは 'ja' 扱い。
-          --      ここを「両方出す」にすると新規ユーザーの初回フィードに日英の重複が並ぶため、必ず片方に寄せる。
+          -- 075: Only for posts by official accounts (users.lang_exclusive = true), narrow down to the one that
+          -- matches the viewer's language.
+          --      Regular users with lang_exclusive = false always pass this condition = they look exactly the
+          --      same as before. Posts with p.lang IS NULL = shown to everyone as "language-independent posts"
+          --      (an escape hatch for official accounts). When the viewer's users.lang is not synced (NULL),
+          --      treat it as 'ja'. If this were "show both", a new user's first feed would list Japanese and
+          --      English duplicates, so always pick one side.
           AND (
               NOT COALESCE(u.lang_exclusive, false)
               OR p.lang IS NULL
@@ -379,8 +391,9 @@ AS $function$
     LIMIT limit_count;
 $function$;
 
--- 🔴 権限の復元 (落とすと全ユーザーでフィードが壊れる)。
---    CREATE OR REPLACE はシグネチャ不変なら ACL を保持するが、064 の再発防止として明示的に書く。
+-- 🔴 Restore privileges (if dropped, the feed breaks for all users).
+--    CREATE OR REPLACE keeps the ACL if the signature is unchanged, but we write it explicitly to
+--    prevent a repeat of 064.
 REVOKE ALL ON FUNCTION public.fetch_tag_feed(text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.fetch_tag_feed(text, integer) FROM anon;
 GRANT EXECUTE ON FUNCTION public.fetch_tag_feed(text, integer) TO authenticated;
@@ -419,7 +432,7 @@ AS $function$
         u.id           AS author_id,
         u.display_name AS author_name,
         u.avatar_url   AS author_avatar_url,
-        COALESCE(u.is_official, false) AS is_official_author,  -- 075: 旧 false 固定
+        COALESCE(u.is_official, false) AS is_official_author,  -- 075: was fixed to false
         COALESCE(u.is_pro, false) AS is_pro_author,
         up.background_id,
         up.title,
@@ -449,11 +462,13 @@ AS $function$
             AND NOT COALESCE((SELECT ethos_enforce FROM public.moderation_config LIMIT 1), false)
         )
       )
-      -- 075: 公式アカウント (users.lang_exclusive = true) の投稿だけ、閲覧者の言語に合う1本に絞る。
-      --      lang_exclusive = false の一般ユーザーはこの条件を必ず素通りする = 見え方は従来と完全に同じ。
-      --      up.lang IS NULL の投稿 = 「言語を問わない投稿」として全員に出す (公式の逃げ道)。
-      --      閲覧者の users.lang が未同期 (NULL) のときは 'ja' 扱い。
-      --      ここを「両方出す」にすると新規ユーザーの初回フィードに日英の重複が並ぶため、必ず片方に寄せる。
+      -- 075: Only for posts by official accounts (users.lang_exclusive = true), narrow down to the one that
+      -- matches the viewer's language.
+      --      Regular users with lang_exclusive = false always pass this condition = they look exactly the
+      --      same as before. Posts with up.lang IS NULL = shown to everyone as "language-independent posts"
+      --      (an escape hatch for official accounts). When the viewer's users.lang is not synced (NULL),
+      --      treat it as 'ja'. If this were "show both", a new user's first feed would list Japanese and
+      --      English duplicates, so always pick one side.
       AND (
           NOT COALESCE(u.lang_exclusive, false)
           OR up.lang IS NULL
@@ -468,8 +483,9 @@ AS $function$
     LIMIT limit_count;
 $function$;
 
--- 🔴 権限の復元 (落とすと全ユーザーでフィードが壊れる)。
---    CREATE OR REPLACE はシグネチャ不変なら ACL を保持するが、064 の再発防止として明示的に書く。
+-- 🔴 Restore privileges (if dropped, the feed breaks for all users).
+--    CREATE OR REPLACE keeps the ACL if the signature is unchanged, but we write it explicitly to
+--    prevent a repeat of 064.
 REVOKE ALL ON FUNCTION public.search_posts(text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.search_posts(text, integer) FROM anon;
 GRANT EXECUTE ON FUNCTION public.search_posts(text, integer) TO authenticated;
@@ -477,11 +493,11 @@ GRANT EXECUTE ON FUNCTION public.search_posts(text, integer) TO service_role;
 
 
 -- ============================================================
--- 運用: 公式アカウントを立てる
+-- Operations: set up an official account
 -- ============================================================
--- is_official    = 認証バッジを出す
--- lang_exclusive = 日本語版/英語版を閲覧者ごとに出し分ける
--- 🔴 種アカウント (@seed.invalid) 以外に当たらないよう exists で二重に絞っている。
+-- is_official    = show the verified badge
+-- lang_exclusive = show the Japanese/English version depending on the viewer
+-- 🔴 Narrowed twice with exists so it cannot hit anything other than seed accounts (@seed.invalid).
 update public.users u
    set is_official    = true,
        lang_exclusive = true
@@ -489,7 +505,7 @@ update public.users u
    and exists (select 1 from auth.users au
                 where au.id = u.id and au.email like '%@seed.invalid');
 
--- 事故検知: 実ユーザーにフラグが付いていたら中断する
+-- Accident detection: abort if a real user has the flag
 do $$
 declare n int;
 begin
@@ -502,26 +518,27 @@ begin
 end $$;
 
 -- ============================================================
--- 運用: 日本語版/英語版を投稿する手順
+-- Operations: steps to post Japanese/English versions
 -- ============================================================
--- ⚠️ スタジオ (Supabase/seed/studio/server.py:197) は投稿の lang を
---    「アカウントの users.lang」から決めている (`lang = urow[0].get("lang") or "ja"`)。
---    ai_motivation は users.lang = 'ja' なので、スタジオから出すと**全部 ja になる**。
---    → 英語版を出したら、下の SQL で その投稿だけ lang を 'en' に直す。
---      user_posts の UPDATE はモデレーション trigger (INSERT のみ) を叩かないので安全。
+-- ⚠️ The studio (Supabase/seed/studio/server.py:197) decides a post's lang
+--    from "the account's users.lang" (`lang = urow[0].get("lang") or "ja"`).
+--    ai_motivation has users.lang = 'ja', so posts made from the studio **all become ja**.
+--    → After posting an English version, fix lang to 'en' for just that post with the SQL below.
+--      An UPDATE on user_posts does not fire the moderation trigger (INSERT only), so it is safe.
 --
---   -- 直近の ai_motivation の投稿を確認
+--   -- Check the latest ai_motivation posts
 --   select p.id, p.lang, p.title, p.created_at
 --     from public.user_posts p join public.users u on u.id = p.user_id
 --    where u.handle = 'ai_motivation' order by p.created_at desc limit 10;
 --
---   -- 英語版にする
---   update public.user_posts set lang = 'en' where id = '<英語版のpost id>';
+--   -- Make it the English version
+--   update public.user_posts set lang = 'en' where id = '<post id of the English version>';
 --
---   -- 言語を問わない投稿 (文字が入っていない画像など) は NULL にすると全員に出る
+--   -- Posts that do not depend on language (e.g. images with no text) are shown to everyone if set to
+--   NULL
 --   update public.user_posts set lang = null where id = '<post id>';
 --
--- 🔴 lang_exclusive = true のアカウントは「片方だけ投稿すると片方の言語のユーザーにしか届かない」。
---    日英どちらか一方しか作らない日は lang = null にして全員に出すこと。
---    出し分けをやめたいときは:
+-- 🔴 For accounts with lang_exclusive = true, "if you post only one version, it reaches only users of
+--    that language". On days when you make only one of Japanese/English, set lang = null so it is
+--    shown to everyone. To stop the language split:
 --      update public.users set lang_exclusive = false where handle = 'ai_motivation';

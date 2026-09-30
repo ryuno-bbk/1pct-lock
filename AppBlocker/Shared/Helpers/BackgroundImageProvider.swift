@@ -2,15 +2,15 @@
 //  BackgroundImageProvider.swift
 //  AppBlocker
 //
-//  名言ごとにランダム（だが固定）の背景画像を割り当てる
-//  UGC 投稿は user_posts.background_id で明示指定可能 (S14〜)
+//  Assigns a random (but fixed) background image to each quote
+//  UGC posts can specify it explicitly with user_posts.background_id (S14 onward)
 //
 
 import SwiftUI
 
 enum BackgroundImageProvider {
 
-    // Backgrounds フォルダ内のファイル（名前, 拡張子）
+    // Files in the Backgrounds folder (name, extension)
     private static let imageFiles: [(name: String, ext: String)] = [
         ("abstract-background-with-graphic-shapes-color-and-2026-01-09-14-22-32-utc", "jpg"),
         ("background-black-platform-and-dark-grey-rock-displ-2026-01-09-00-52-42-utc", "jpg"),
@@ -28,26 +28,26 @@ enum BackgroundImageProvider {
         ("the-dark-night-sky-above-the-austrian-alps-showing-2026-03-26-11-34-08-utc", "jpg")
     ]
 
-    /// 利用可能な背景画像の総数 (PostComposer のピッカーで使う)
+    /// Total number of available background images (used by the picker in PostComposer)
     static var count: Int { imageFiles.count }
 
-    /// 名言IDに基づいて固定の背景画像を返す（同じ名言には常に同じ背景）
+    /// Returns a fixed background image based on the quote ID (the same quote always gets the same background)
     ///
-    /// (回収) 旧実装は `abs(quoteId.hashValue) % imageFiles.count` で、
-    /// (a) hashValue が Int.min の場合 abs がクラッシュする、
-    /// (b) Swift の hashValue はハッシュフラッディング対策でプロセスごとにシードが変わるため
-    ///     同じ quoteId でも起動のたびに背景の割当が変わってしまう、の2バグがあった。
-    /// quoteId の文字列表現に対する決定的ハッシュ (FNV-1a) + 符号なし演算の剰余に置き換えることで、
-    /// 起動を跨いで同じ ID に同じ背景を割り当てる (これが新しい仕様)。
+    /// (Cleanup) The old implementation used `abs(quoteId.hashValue) % imageFiles.count` and had 2 bugs:
+    /// (a) abs crashes when hashValue is Int.min,
+    /// (b) Swift's hashValue changes its seed per process to prevent hash flooding, so
+    ///     the same quoteId got a different background on every launch.
+    /// Replacing it with a deterministic hash (FNV-1a) of the quoteId string + modulo with unsigned
+    /// arithmetic assigns the same background to the same ID across launches (this is the new spec).
     static func image(for quoteId: UUID) -> UIImage? {
         let hash = fnv1aHash(quoteId.uuidString)
         let index = Int(hash % UInt64(imageFiles.count))
         return image(atIndex: index)
     }
 
-    /// FNV-1a (64bit) ハッシュ。標準ライブラリの hashValue と違ってプロセスをまたいで
-    /// 同じ入力に常に同じ値を返す決定的ハッシュで、UInt64 の符号なし演算のみを使うため
-    /// abs() のオーバーフロークラッシュも起こり得ない
+    /// FNV-1a (64bit) hash. Unlike the standard library's hashValue, it is a deterministic hash that always
+    /// returns the same value for the same input across processes, and it only uses unsigned UInt64
+    /// arithmetic, so the abs() overflow crash cannot happen
     private static func fnv1aHash(_ string: String) -> UInt64 {
         var hash: UInt64 = 0xcbf29ce484222325 // FNV offset basis
         let prime: UInt64 = 0x100000001b3     // FNV prime
@@ -58,8 +58,8 @@ enum BackgroundImageProvider {
         return hash
     }
 
-    /// index で背景画像を直接取得 (UGC 投稿の background_id 用)
-    /// 範囲外 / ロード失敗時は nil
+    /// Get a background image directly by index (for background_id of UGC posts)
+    /// nil if out of range / load fails
     static func image(atIndex index: Int) -> UIImage? {
         guard index >= 0, index < imageFiles.count else { return nil }
         let file = imageFiles[index]
@@ -69,8 +69,8 @@ enum BackgroundImageProvider {
         return nil
     }
 
-    /// quoteId と任意の override index から実際に使う画像を返す
-    /// (UGC で background_id が指定されていればそれ、なければ hash フォールバック)
+    /// Returns the image actually used, from the quoteId and an optional override index
+    /// (if background_id is set for UGC, use it, otherwise fall back to the hash)
     static func image(for quoteId: UUID, overrideIndex: Int?) -> UIImage? {
         if let i = overrideIndex, i >= 0, i < imageFiles.count {
             return image(atIndex: i)
@@ -83,8 +83,8 @@ enum BackgroundImageProvider {
 
 struct QuoteBackgroundView: View {
     let quoteId: UUID
-    /// 明示的に背景 index を指定 (UGC 投稿の user_posts.background_id)
-    /// nil の場合は quoteId の hash で自動割当
+    /// Explicitly specify the background index (user_posts.background_id of a UGC post)
+    /// If nil, it is assigned automatically by the hash of quoteId
     var backgroundIndex: Int? = nil
 
     var body: some View {
@@ -101,7 +101,7 @@ struct QuoteBackgroundView: View {
                         .opacity(0.5)
                 }
 
-                // 上下グラデーションで文字領域を保護
+                // Top and bottom gradient to protect the text area
                 LinearGradient(
                     colors: [.black.opacity(0.6), .clear, .clear, .black.opacity(0.7)],
                     startPoint: .top,

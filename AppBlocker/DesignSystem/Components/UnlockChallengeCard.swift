@@ -2,30 +2,31 @@
 //  UnlockChallengeCard.swift
 //  AppBlocker
 //
-//  「解除方法」を選ぶカードと、その下から出る選択シート。
+//  The card for choosing the "解除方法" ("unlock method"), and the selection sheet that comes up from it.
 //
-//  🔴 置き場所は HomeView の modeSegment 直後 (3モード共通の位置)。
-//     挿入は1箇所で済み、タイマー/スケジュール/位置の全部に出る。
-//     予定の編集シートの中に入れる案は却下した — 既にスケジュールを設定し終えた人は
-//     編集シートを二度と開かないため、目玉機能が見えなくなる (2026-08-28 ユーザー指摘)。
-//     ⚠️ 最終的な位置は実機を見てから決める。1行動かすだけで移せる。
+//  🔴 It is placed right after modeSegment in HomeView (a position shared by the 3 modes).
+//     It needs to be inserted in only 1 place and shows for all of timer/schedule/location.
+//     The idea of putting it inside the schedule edit sheet was rejected: people who have already set
+//     up their schedules never open the edit sheet again, so the headline feature would be invisible
+//     (pointed out by the user 2026-08-28).
+//     ⚠️ Decide the final position after looking at a real device. It can be moved by moving just 1 line.
 //
-//  🔴 中断画面には何も足さない。逃げようとしている人に選択肢とペイウォールを
-//     並べるのは筋が悪いので、選ぶのは「始めるとき」だけにする。
+//  🔴 Add nothing to the interruption screen. Showing options and a paywall to someone who is trying to
+//     escape is a bad idea, so choosing happens only "when starting".
 //
 
 import SwiftUI
 
-// MARK: - カード (AppSelectCard と同じ見た目に揃える)
+// MARK: - Card (same look as AppSelectCard)
 
 struct UnlockChallengeCard: View {
     let challenge: UnlockChallenge
     let lang: AppLanguage
-    /// 🔴 ロックが走っている間は変更させない。
-    ///    セッションには開始時の課題が焼き付いているので、走行中に設定だけ変えると
-    ///    「カードは腕立てと言っているのに実際は長押し」というズレが起き、
-    ///    カードが嘘をつくことになる (2026-08-28 実機報告)。
-    ///    このとき表示するのは設定値ではなく「実際に課されている課題」にする
+    /// 🔴 Do not allow changes while a lock is running.
+    ///    The session has the challenge from the start baked in, so changing only the setting while it runs
+    ///    causes the mismatch "the card says push-ups but it is actually long press",
+    ///    and the card would be lying (real device report 2026-08-28).
+    ///    In that case, show "the challenge actually imposed", not the setting value
     var isLocked: Bool = false
     let action: () -> Void
 
@@ -42,11 +43,11 @@ struct UnlockChallengeCard: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(lang == .japanese ? "解除方法" : "How to unlock") // 文言はユーザー添削待ち
+                    Text(lang == .japanese ? "解除方法" : "How to unlock") // Wording pending user review
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(AppColors.textPrimary)
                     if isLocked {
-                        // ⚠️ 文言はユーザー添削待ち
+                        // ⚠️ Wording pending user review
                         Text(lang == .japanese ? "ロック中は変更できません" : "Can't change while locked")
                             .font(.system(size: 11))
                             .foregroundColor(AppColors.textTertiary)
@@ -75,21 +76,21 @@ struct UnlockChallengeCard: View {
     }
 }
 
-// MARK: - 選択シート (スケジュール編集カードと同じ「下から出る」形)
+// MARK: - Selection sheet (same "comes up from the bottom" form as the schedule edit card)
 
 struct UnlockChallengeSheet: View {
     let lang: AppLanguage
-    /// Pro を持っているか。false なら Pro 課題に鍵を出し、タップでペイウォールへ
+    /// Whether the user has Pro. If false, show a lock on Pro challenges, and tapping goes to the paywall
     let hasPro: Bool
     @Binding var selected: UnlockChallenge
     let onRequestPro: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    /// 「自分の画像を見る」の ＋ から開く登録画面
+    /// Registration screen opened from the + of "自分の画像を見る" ("View my images")
     @State private var showImageLibrary = false
     @ObservedObject private var imageStore = UnlockImageStore.shared
 
-    /// 🔴 未実装の課題は出さない。選ばれると解除手段が無くなる
+    /// 🔴 Do not show challenges that are not implemented. If one were picked, there would be no way to unlock
     private var options: [UnlockChallenge] {
         UnlockChallenge.pickable.filter(\.isImplemented)
     }
@@ -98,9 +99,9 @@ struct UnlockChallengeSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 10) {
-                    // 🔴 この画面が何を決めているのかを最初に言う。
-                    //    「解除方法」だけでは何のことか分からない (2026-08-29 実機フィードバック)
-                    // ⚠️ 文言はユーザー添削待ち
+                    // 🔴 Say first what this screen decides.
+                    //    "解除方法" ("How to unlock") alone does not tell you what it is about (2026-08-29 real device feedback)
+                    // ⚠️ Wording pending user review
                     Text(lang == .japanese
                          ? "アプリの制限を解除しようとした時に、\n何をすれば解除できるかを決めます"
                          : "Choose what you must do to lift the app block")
@@ -117,11 +118,11 @@ struct UnlockChallengeSheet: View {
                 .padding(16)
             }
             .background(AppColors.background.ignoresSafeArea())
-            .navigationTitle(lang == .japanese ? "解除方法" : "How to unlock") // 文言はユーザー添削待ち
+            .navigationTitle(lang == .japanese ? "解除方法" : "How to unlock") // Wording pending user review
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(lang == .japanese ? "完了" : "Done") { dismiss() } // 文言はユーザー添削待ち
+                    Button(lang == .japanese ? "完了" : "Done") { dismiss() } // Wording pending user review
                 }
             }
             .sheet(isPresented: $showImageLibrary) {
@@ -142,8 +143,8 @@ struct UnlockChallengeSheet: View {
             }
         } label: {
             HStack(spacing: 12) {
-                // 🔴 アイコンはテキストとは別の固定幅カラム (2026-09-05)。
-                //    タイトルと同じ HStack に混ぜると、方法ごとに折り返し位置がズレる
+                // 🔴 The icon is in a fixed-width column separate from the text (2026-09-05).
+                //    Mixing it into the same HStack as the title shifts the wrap position for each method
                 ZStack {
                     RoundedRectangle(cornerRadius: 9)
                         .fill(AppColors.secondaryBackground)
@@ -158,9 +159,9 @@ struct UnlockChallengeSheet: View {
                         Text(option.title(lang))
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundColor(AppColors.textPrimary)
-                        // 🔴 2026-09-05 実機FB: 以前は灰色の鍵アイコン + 行ごと opacity 0.55 で、
-                        //    「一番見せたいものが一番暗い」状態だった。
-                        //    Pro 課題は沈めずに前へ出す (バッジは反転させて視線を集める)
+                        // 🔴 2026-09-05 real device feedback: before, it had a gray lock icon + opacity 0.55 on the whole row,
+                        //    so "the thing we most want to show was the darkest".
+                        //    Bring Pro challenges forward instead of sinking them (the badge is inverted to draw the eye)
                         if isLocked {
                             Text("PRO")
                                 .font(.system(size: 10, weight: .heavy))
@@ -178,12 +179,12 @@ struct UnlockChallengeSheet: View {
 
                 Spacer()
 
-                // 🔴 画像スクロールだけ ＋ を出す (2026-08-29 ユーザー指定)。
-                //    ここから登録しないと見せるものが無いので、行の中に導線を置く
+                // 🔴 Show + only for image scroll (user specified 2026-08-29).
+                //    Without registering from here there is nothing to show, so put the entry point inside the row
                 if option == .imageScroll {
-                    // 🔴 「+3」だと足し算に見える (2026-08-29 実機フィードバック)。
-                    //    枚数として読める形にし、0枚のときも必ず出す
-                    //    (0枚だと解除できないので、そこに気づけないと詰まる)
+                    // 🔴 "+3" looks like addition (2026-08-29 real device feedback).
+                    //    Use a form that reads as a number of images, and always show it, even at 0 images
+                    //    (with 0 images you cannot unlock, so if you do not notice that you get stuck)
                     Button {
                         showImageLibrary = true
                     } label: {
@@ -221,7 +222,7 @@ struct UnlockChallengeSheet: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: 14)
                             .stroke(isSelected ? AppColors.accent.opacity(0.6)
-                                    // Pro 課題は未所持でも枠で存在感を残す (沈めない)
+                                    // Pro challenges keep their presence with a frame even when not owned (do not sink them)
                                     : (isLocked ? AppColors.accent.opacity(0.35) : .clear),
                                     lineWidth: 1.5)
                     )

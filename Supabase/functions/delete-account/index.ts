@@ -1,24 +1,24 @@
 // ============================================================
 // delete-account / index.ts
-// アカウント完全削除 Edge Function (2026-07-25)
+// Edge Function for full account deletion (2026-07-25)
 // ============================================================
-// 背景: 038 の delete_my_account RPC は storage.objects を直接 DELETE していたが、
-// Supabase が storage.protect_delete() トリガーで SQL 直削除をプラットフォーム禁止に
-// しており (ERROR 42501 "Use the Storage API instead")、必ず失敗していた
-// (M8 実弾テストで発覚)。Storage API + Auth Admin API を使う正規構成に移行する。
+// Background: the delete_my_account RPC in 038 deleted storage.objects directly, but
+// Supabase forbids direct SQL deletion at the platform level with the storage.protect_delete()
+// trigger (ERROR 42501 "Use the Storage API instead"), so it always failed
+// (found in the M8 live test). Moving to the proper setup using the Storage API + Auth Admin API.
 //
-// 流れ:
-//   1. 呼び出しユーザーの JWT を検証して本人 uid を特定 (他人は消せない)
-//   2. Storage API (service_role) で avatars / post-images の本人フォルダを全削除
-//      — 公開バケットのため、消し忘れると削除後も画像が公開URLで残る (M32)
-//   3. Auth Admin API で auth.users を削除
-//      → public.users は FK CASCADE (001 SQL) で消え、投稿/コメント/いいね/通報/
-//        申し立て/通知/セッション等の全データが連鎖削除される
+// Flow:
+//   1. Verify the calling user's JWT and identify their uid (cannot delete others)
+//   2. Delete all of the user's folders in avatars / post-images with the Storage API (service_role).
+//      These are public buckets, so anything missed stays reachable by public URL after deletion (M32)
+//   3. Delete auth.users with the Auth Admin API
+//      → public.users is deleted by FK CASCADE (001 SQL), and all data (posts/comments/likes/
+//        reports/appeals/notifications/sessions etc.) is deleted in cascade
 //
-// デプロイ: `supabase functions deploy delete-account`
-//   (verify_jwt は既定の有効のまま = プラットフォームが JWT を一次検証する。
-//    moderate-post のような --no-verify-jwt は付けないこと)
-// クライアント: AccountDeletionService が functions.invoke("delete-account") で呼ぶ
+// Deploy: `supabase functions deploy delete-account`
+//   (verify_jwt stays at the default, enabled = the platform does the first JWT check.
+//    Do not add --no-verify-jwt like moderate-post)
+// Client: AccountDeletionService calls it with functions.invoke("delete-account")
 // ============================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -34,7 +34,7 @@ Deno.serve(async (req: Request) => {
     return new Response("method not allowed", { status: 405 });
   }
 
-  // 1. 本人特定 (Authorization ヘッダの JWT を anon クライアントで検証)
+  // 1. Identify the user (verify the JWT in the Authorization header with an anon client)
   const authHeader = req.headers.get("Authorization") ?? "";
   const userClient = createClient(SUPABASE_URL, ANON_KEY, {
     global: { headers: { Authorization: authHeader } },
@@ -51,9 +51,9 @@ Deno.serve(async (req: Request) => {
     auth: { persistSession: false },
   });
 
-  // 2. Storage: 本人フォルダ ({uid}/...) を Storage API で全削除。
-  //    auth 削除より先にやる (逆順だと storage 失敗時に孤児ファイルが公開URLで残る)。
-  //    パス規約はフラット ("{uid}/{file}.jpg"、UserPostService/ProfileEditView 参照)
+  // 2. Storage: delete all of the user's folders ({uid}/...) with the Storage API.
+  //    Do this before deleting auth (in reverse order, if storage fails, orphan files stay at public
+  //    URLs). The path convention is flat ("{uid}/{file}.jpg", see UserPostService/ProfileEditView)
   for (const bucket of USER_BUCKETS) {
     const { data: files, error: listError } = await admin.storage
       .from(bucket)
@@ -73,7 +73,7 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // 3. auth.users 削除 → public.users 以下すべて CASCADE
+  // 3. Delete auth.users → everything under public.users is deleted by CASCADE
   const { error: deleteError } = await admin.auth.admin.deleteUser(uid);
   if (deleteError) {
     console.error("auth deleteUser 失敗:", deleteError.message);

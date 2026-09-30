@@ -1,19 +1,20 @@
 -- ============================================================
 -- 047_moderation_model_switch.sql
--- モデレーションモデルを SQL 一発で切替可能に (2026-07-25 コスト対策)
+-- Make the moderation model switchable with one SQL statement (2026-07-25 cost measure)
 -- ============================================================
--- moderate-post Edge Function は判定のたびに moderation_config を読むため、
--- この列を UPDATE するだけで次の判定から即座にモデルが替わる (再デプロイ不要)。
+-- The moderate-post Edge Function reads moderation_config on every review, so
+-- just UPDATEing this column switches the model from the next review (no redeploy needed).
 --
--- コスト目安 (512px縮小後の1判定):
---   claude-sonnet-5            : 0.7〜1.4円 (現行。~2026-08-31 の導入価格 $2/$10 前提)
---   claude-haiku-4-5-20251001  : 0.35〜0.7円 (約半額)
+-- Cost estimate (one review after shrinking to 512px):
+--   claude-sonnet-5            : ¥0.7-1.4 (current. Assumes the introductory price $2/$10 until
+--                                ~2026-08-31)
+--   claude-haiku-4-5-20251001  : ¥0.35-0.7 (about half)
 --
--- Haiku A/B の手順: 下の UPDATE を実行 → テスト投稿バッテリー
--- (グラビア/ドライブ/パチンコ/ジム自撮り/K-POP引用/「エロい」複合) を再投稿し
--- 全件正しく判定されるか確認。品質が落ちたら Sonnet へ戻す。
+-- Haiku A/B steps: run the UPDATE below → re-post the test post battery
+-- (gravure/drive/pachinko/gym selfie/K-POP quote/"エロい" ("sexy") combined) and
+-- check that every one is judged correctly. If quality drops, switch back to Sonnet.
 --   UPDATE public.moderation_config SET model = 'claude-haiku-4-5-20251001';
---   UPDATE public.moderation_config SET model = 'claude-sonnet-5';  -- 戻す
+--   UPDATE public.moderation_config SET model = 'claude-sonnet-5';  -- revert
 -- ============================================================
 
 ALTER TABLE public.moderation_config

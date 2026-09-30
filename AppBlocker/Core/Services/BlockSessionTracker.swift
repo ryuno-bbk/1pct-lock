@@ -2,12 +2,12 @@
 //  BlockSessionTracker.swift
 //  AppBlocker
 //
-//  3 モード (timer / schedule / location) のロックセッションを記録 → Supabase で累計集計
+//  Record lock sessions of the 3 modes (timer / schedule / location) → aggregate totals in Supabase
 //
-//  設計方針: 「完了時に App Group キューへ 1 行追加 → 起動時に一括 insert」
-//  - active 状態は DB に持たない (バグり要素を最小化)
-//  - 全モード同じパターン
-//  - kill 中に完了したセッションは欠落許容 (累計の正確さは捨てる)
+//  Design policy: "on completion, append 1 row to the App Group queue → bulk insert at launch"
+//  - Do not keep the active state in the DB (minimize what can break)
+//  - Same pattern for all modes
+//  - Sessions that complete while the app is killed may be lost (we give up exact totals)
 //
 
 import Foundation
@@ -21,19 +21,19 @@ final class BlockSessionTracker: ObservableObject {
 
     // MARK: - Published
 
-    /// 累計ロック秒数 (Supabase 由来)
+    /// Total lock seconds (from Supabase)
     @Published private(set) var totalSeconds: Int = 0
 
-    /// 上位% (get_block_percentile RPC 由来)
+    /// Top percentile (from the get_block_percentile RPC)
     @Published private(set) var percentile: BlockPercentile?
 
-    /// 連続ロック日数 (get_streak_days RPC 由来)
+    /// Streak of lock days (from the get_streak_days RPC)
     @Published private(set) var streakDays: Int = 0
 
-    /// 完遂率 (直近30日・タイマーのみ・get_user_stats RPC 由来)
+    /// Completion rate (last 30 days, timer only, from the get_user_stats RPC)
     @Published private(set) var completion: CompletionRate?
 
-    /// 完遂率 (全期間)。統計セルの詳細シート用 (034)。034 未適用の DB では nil
+    /// Completion rate (all time). For the detail sheet of the stat cell (034). nil on a DB without 034
     @Published private(set) var completionAllTime: CompletionRate?
 
     // MARK: - Private
@@ -42,34 +42,38 @@ final class BlockSessionTracker: ObservableObject {
     private let appGroupID = AppGroupConstants.identifier
     private let queueKey = AppGroupConstants.Keys.pendingBlockSessions
 
-    /// M9: flushQueue は @MainActor だが insert 中の suspension で再入され得る (起動task/onChange/
-    /// SessionCompleteView/MyProfileView から並行に呼ばれる)。true の間は即 return して直列化する
+    /// M9: flushQueue is @MainActor but can be re-entered during the suspension in insert (called in
+    /// parallel from the launch task/onChange/ SessionCompleteView/MyProfileView). While true, return
+    /// immediately to serialize
     private var isFlushing = false
 
     private init(client: SupabaseClient = SupabaseManager.shared.client) {
         self.client = client
     }
 
-    // MARK: - Enqueue (メインプロセス用ヘルパー)
+    // MARK: - Enqueue (helper for the main process)
 
-    /// 完了したセッションを App Group キューに追加。
-    /// timer / location から呼ぶ。Extension は直接 UserDefaults を操作する (別ターゲットのため)。
+    /// Add a completed session to the App Group queue.
+    /// Called from timer / location. The Extension works on UserDefaults directly (because it is a separate
+    /// target).
     /// - Parameters:
-    ///   - status: "completed" (正常終了) または "aborted" (手動停止)
-    ///   - plannedSeconds: 予定ロック秒数 (タイマーのみ)。完遂率の10分フィルタを実測でなく
-    ///     予定時間で判定するための値 (033)。schedule/location は nil のまま渡す
+    ///   - status: "completed" (finished normally) or "aborted" (stopped manually)
+    ///   - plannedSeconds: planned lock seconds (timer only). Used so the 10-minute filter of the
+    ///     completion rate is judged by the planned time, not the measured time (033). Pass nil for
+    ///     schedule/location
     nonisolated static func enqueueSession(mode: String, startedAt: Date, endedAt: Date, status: String, plannedSeconds: Int? = nil) {
         guard let defaults = UserDefaults(suiteName: AppGroupConstants.identifier) else { return }
 
-        // H2 対策: 015 の validate_block_session が永久拒否する形 (未来の ended_at /
-        // start>end / 7日超 duration) を発生源で補正してから積む
+        // H2 fix: at the source, repair the shapes that 015's validate_block_session rejects forever (future
+        // ended_at / start>end / duration over 7 days) before queueing
         let (start, end) = repairedInterval(startedAt: startedAt, endedAt: endedAt, now: Date())
         let duration = max(0, Int(end.timeIntervalSince(start)))
-        guard duration > 0 else { return }  // 0 秒はノイズなので捨てる
+        guard duration > 0 else { return }  // 0 seconds is noise, so drop it
 
         var entry: [String: Any] = [
-            // flush 後の個別削除用 ID (prefix-drop 廃止, H2/H3)。
-            // このキーの有無が「新形式かどうか」の判定にも使われる (flushQueue の移行処理参照)
+            // ID for deleting individual rows after flush (prefix-drop removed, H2/H3).
+            // Whether this key exists is also used to tell whether a row is in the new format (see the migration
+            // in flushQueue)
             "entry_id": UUID().uuidString,
             "mode": mode,
             "started_at": start.timeIntervalSince1970,
@@ -77,13 +81,13 @@ final class BlockSessionTracker: ObservableObject {
             "duration_seconds": duration,
             "status": status
         ]
-        // H3: 現サインインユーザーを刻印する。サインアウト中に完了した分は user_id 無しのまま
-        // 積まれ、flush 時に破棄される (次にサインインした別人へ付け替えない)
+        // H3: Stamp the currently signed-in user. Sessions completed while signed out are queued without
+        // user_id and discarded at flush (they are not reassigned to a different person who signs in next)
         if let uid = defaults.string(forKey: AppGroupConstants.Keys.currentUserId) {
             entry["user_id"] = uid
         }
         if let plannedSeconds, plannedSeconds > 0 {
-            // 033 の CHECK 制約 (1...604800) 違反でバッチごと拒否されるのを防ぐ
+            // Prevents the whole batch from being rejected for violating 033's CHECK constraint (1...604800)
             entry["planned_seconds"] = min(plannedSeconds, 604800)
         }
 
@@ -91,26 +95,28 @@ final class BlockSessionTracker: ObservableObject {
         queue.append(entry)
         defaults.set(queue, forKey: AppGroupConstants.Keys.pendingBlockSessions)
 
-        // 🔴 2026-08-06 (Guideline 5.6.3 リジェクト対応): 評価依頼の前提条件
-        // 「ロックを実際に使ったことがあるか」を数える。実際に聞くのは MainTabView 側。
+        // 🔴 2026-08-06 (fix for the Guideline 5.6.3 rejection): count the precondition for asking for a rating:
+        // "has the user actually used the lock". The actual prompt is shown on the MainTabView side.
         //
-        // ⚠️ status で絞らない (2026-08-06 ユーザー判断)。当初は "completed" のみ数えていたが、
-        // 完遂まで至る人は多くないという見立てで撤回した。完遂を条件にすると大半の
-        // ユーザーに永久に聞けなくなる。手動停止でもコア機能には触れている。
+        // ⚠️ Do not filter by status (user decision 2026-08-06). At first only "completed" was counted,
+        // but that was reverted on the view that not many people reach completion. Making completion the condition
+        // would mean most users are never asked. Even a manual stop means they touched the core feature.
         //
-        // ⚠️ DeviceActivityMonitorExtension.recordSessionEnd は別ターゲットでここを通らない。
-        // 拡張だけが記録したセッションは数えられないが、本体を一度も開かずに
-        // 評価を聞かれることは無いので実害は無い。
+        // ⚠️ DeviceActivityMonitorExtension.recordSessionEnd is a separate target and does not pass through here.
+        // Sessions recorded only by the extension are not counted, but a user is never asked for a rating
+        // without opening the main app at least once, so there is no real harm.
         Task { @MainActor in ReviewPrompt.recordLockSessionUsed() }
     }
 
-    /// 015 の validate_block_session が永久拒否する区間を送信可能な形へ補正する。
-    /// - 未来の ended_at (時計を進めて完了→戻したケース): duration を保ったまま過去へ平行移動
-    ///   (end を単純に now へ丸めるだけだと start との差が伸びて duration が水増しされるため)
-    /// - start > end: start を end に丸める
-    /// - 7日超 (scheduleActiveStart_ キーの残留等): started_at 側を切り詰める
-    ///   (duration だけクランプすると 015 の timestamp 整合チェック ±2 秒に落ちるので、必ず両方揃える)
-    /// ⚠️ DeviceActivityMonitorExtension.recordSessionEnd に同じクランプを複製してある。片方だけ直さないこと
+    /// Repair intervals that 015's validate_block_session rejects forever into a sendable shape.
+    /// - Future ended_at (clock moved forward, completed, then moved back): shift into the past keeping the
+    ///   duration (simply rounding end down to now stretches the gap from start and inflates the duration)
+    /// - start > end: round start to end
+    /// - Over 7 days (leftover scheduleActiveStart_ keys etc.): trim the started_at side
+    ///   (clamping only the duration fails 015's timestamp consistency check of ±2 seconds, so always
+    ///   adjust both)
+    /// ⚠️ The same clamp is duplicated in DeviceActivityMonitorExtension.recordSessionEnd. Do not fix only
+    ///    one of them
     nonisolated static func repairedInterval(startedAt: Date, endedAt: Date, now: Date) -> (start: Date, end: Date) {
         var start = startedAt
         var end = endedAt
@@ -128,23 +134,26 @@ final class BlockSessionTracker: ObservableObject {
 
     // MARK: - Flush
 
-    /// App Group キューにあるセッションを Supabase へ insert。
-    /// - H3: 各行は enqueue 時に user_id が刻印されており、現ユーザーと一致する行だけを送る。
-    ///   不一致行は保留 (そのユーザーが再サインインした時に flush される)。
-    ///   entry_id 付きで user_id 無しの行 = サインアウト中に完了したセッション → 破棄
-    ///   (誰の実績でもないものを次のサインイン者へ付け替えない)。
-    ///   entry_id 自体が無い行 = このアップデート以前の旧形式 → 現ユーザーに帰属させて移行
-    ///   (同一端末・当時のサインイン者の実績である蓋然性が極めて高く、破棄はデータ消失になるため)。
-    /// - H2: バッチ失敗時、PostgrestError の SQLSTATE で「行拒否」と「ネットワーク等」を判別。
-    ///   行拒否なら 1 行ずつ再送して拒否行だけ破棄する (ポイズンピルの隔離)。
-    ///   ネットワーク等は従来通り全保持 → 次回再試行。
-    /// - M10: entry_id をサーバー行の id として upsert(onConflict: "id", ignoreDuplicates: true) する。
-    ///   応答喪失後の再送や再入 (M9 で直列化済みだが起動taskとonChangeが別タイミングで呼ばれるケース等) で
-    ///   同じ行が2度届いても ON CONFLICT DO NOTHING でサーバーが黙って無視するため二重計上されない。
-    /// 起動時 / サインイン切替 / プロフィール表示前に呼ばれる。
+    /// Insert the sessions in the App Group queue into Supabase.
+    /// - H3: each row has user_id stamped at enqueue time, and only rows matching the current user are sent.
+    ///   Non-matching rows are kept (flushed when that user signs in again).
+    ///   Rows with entry_id but no user_id = sessions completed while signed out → discard
+    ///   (do not reassign records that belong to nobody to the next person who signs in).
+    ///   Rows without entry_id at all = old format from before this update → assign to the current user and
+    ///   migrate (very likely the record of whoever was signed in on the same device at the time, and
+    ///   discarding would lose data).
+    /// - H2: when a batch fails, use the SQLSTATE in PostgrestError to tell "row rejected" from "network etc.".
+    ///   If rows are rejected, resend one row at a time and discard only the rejected rows (isolating the
+    ///   poison pill). For network etc., keep everything as before → retry next time.
+    /// - M10: upsert with entry_id as the server row's id (onConflict: "id", ignoreDuplicates: true).
+    ///   Even if the same row arrives twice due to a resend after a lost response or re-entry (serialized
+    ///   by M9, but e.g. the launch task and onChange may call at different times), the server silently
+    ///   ignores it with ON CONFLICT DO NOTHING, so it is not counted twice.
+    /// Called at launch / on sign-in change / before showing the profile.
     func flushQueue() async {
-        // M9: 二重flush防止。@MainActor なのでここで直列化すれば insert の suspension 中の
-        // 再入呼び出しは即 return する (同じキュー行の二重insertによる累計水増しを防ぐ)
+        // M9: Prevent double flush. Because it is @MainActor, serializing here makes re-entrant calls during
+        // the insert suspension return immediately (prevents inflated totals from inserting the same queue row
+        // twice)
         guard !isFlushing else { return }
         isFlushing = true
         defer { isFlushing = false }
@@ -156,10 +165,10 @@ final class BlockSessionTracker: ObservableObject {
         var queue = defaults.array(forKey: queueKey) as? [[String: Any]] ?? []
         guard !queue.isEmpty else { return }
 
-        // --- 読み取り時マイグレーション (H3) ---
-        // 旧形式 (entry_id 無し) に entry_id を採番し、現ユーザーへ帰属させて書き戻す。
-        // この書き戻しの間に extension が append する窓は、従来の prefix-drop にもあった
-        // 既知の許容リスク (UserDefaults はプロセス間アトミック append を提供しない) と同一。
+        // --- Read-time migration (H3) ---
+        // Assign an entry_id to old-format rows (no entry_id), attribute them to the current user and write
+        // them back. The window in which the extension appends during this write-back is the same known,
+        // accepted risk that the old prefix-drop had (UserDefaults does not provide atomic cross-process append).
         var migrated = false
         for i in queue.indices where queue[i]["entry_id"] == nil {
             queue[i]["entry_id"] = UUID().uuidString
@@ -175,18 +184,18 @@ final class BlockSessionTracker: ObservableObject {
         let isoFormatter = ISO8601DateFormatter()
         isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
-        // --- 送信対象の選別 ---
-        var garbageIds: Set<String> = []   // パース不能 / user_id 無し (サインアウト中の実績) → 破棄
+        // --- Select the rows to send ---
+        var garbageIds: Set<String> = []   // Unparseable / no user_id (records from while signed out) → discard
         var targets: [(entryId: String, insert: SessionInsert)] = []
         for entry in queue {
-            guard let entryId = entry["entry_id"] as? String else { continue }  // 直前で採番済みのはずだが安全側
+            guard let entryId = entry["entry_id"] as? String else { continue }  // Should already be assigned just above, but stay on the safe side
             guard let entryUserId = entry["user_id"] as? String else {
                 garbageIds.insert(entryId)
                 continue
             }
-            guard entryUserId == currentUserId else { continue }  // 他ユーザー分は保留 (本人の再サインイン待ち)
+            guard entryUserId == currentUserId else { continue }  // Other users' rows are kept (waiting for that user to sign in again)
             guard let insert = Self.makeInsert(entry: entry, entryId: entryId, userId: currentUserId, formatter: isoFormatter) else {
-                garbageIds.insert(entryId)  // パース不能 or 補正後 0 秒 = ゴミデータ
+                garbageIds.insert(entryId)  // Unparseable or 0 seconds after repair = garbage data
                 continue
             }
             targets.append((entryId, insert))
@@ -198,8 +207,8 @@ final class BlockSessionTracker: ObservableObject {
         }
 
         do {
-            // M10: id (= entry_id) で upsert。同一行の再送は ON CONFLICT DO NOTHING で無視される
-            // (M31 でUPDATEポリシーは撤去済みなので DO UPDATE にはしない)
+            // M10: upsert by id (= entry_id). A resend of the same row is ignored with ON CONFLICT DO NOTHING
+            // (the UPDATE policy was removed in M31, so do not use DO UPDATE)
             try await client
                 .from("block_sessions")
                 .upsert(targets.map(\.insert), onConflict: "id", returning: .minimal, ignoreDuplicates: true)
@@ -209,13 +218,13 @@ final class BlockSessionTracker: ObservableObject {
             print("✅ Flushed \(targets.count) block sessions")
         } catch {
             guard Self.isRowRejection(error) else {
-                // ネットワーク不達 / JWT 失効 (PGRST301) / RLS (42501) 等はデータ起因ではない
-                // → キューは残す → 次回再試行 (従来挙動)
+                // No network / expired JWT (PGRST301) / RLS (42501) etc. are not caused by the data
+                // → keep the queue → retry next time (previous behavior)
                 print("⚠️ Failed to flush block sessions: \(error)")
                 return
             }
-            // ポイズンピル隔離: どれかの行がサーバーに拒否された。1 行ずつ再送して
-            // 「拒否された行だけ破棄、通った行は削除」に分解する (H2)
+            // Poison pill isolation: some row was rejected by the server. Resend one row at a time and
+            // split it into "discard only the rejected rows, delete the rows that went through" (H2)
             var removable = garbageIds
             for target in targets {
                 do {
@@ -226,12 +235,12 @@ final class BlockSessionTracker: ObservableObject {
                     removable.insert(target.entryId)
                 } catch {
                     if Self.isRowRejection(error) {
-                        // 015 トリガー / CHECK 制約 / FK 違反 (削除済みユーザー) 等。
-                        // リトライしても永久に通らないので破棄する
+                        // 015 trigger / CHECK constraint / FK violation (deleted user) etc.
+                        // These will never go through no matter how often we retry, so discard
                         print("🗑️ Dropped rejected block session (\(target.insert.mode)): \(error)")
                         removable.insert(target.entryId)
                     } else {
-                        // 途中でネットワーク起因に転じた → 残りは次回再試行
+                        // Switched to a network-caused failure midway → retry the rest next time
                         print("⚠️ Row-by-row flush interrupted: \(error)")
                         break
                     }
@@ -241,15 +250,16 @@ final class BlockSessionTracker: ObservableObject {
         }
     }
 
-    /// キューから entry_id が一致する行を取り除いて書き戻す。
-    /// prefix-drop (件数ベース) の後継: ユーザー別送信では送信行がキューの先頭連続とは限らないため、
-    /// ID で個別に消す。flush 中に extension が追記した行は ID が一致しないので巻き込まれない
-    /// (並行 flush が二重に呼ばれても削除は冪等 — M9 を悪化させない)
+    /// Remove the rows whose entry_id matches from the queue and write it back.
+    /// Successor to prefix-drop (count-based): with per-user sending, the sent rows are not necessarily a
+    /// contiguous block at the head of the queue, so delete them individually by ID. Rows the extension
+    /// appends during flush have non-matching IDs and are not affected
+    /// (deletion is idempotent even if flush is called twice in parallel, so it does not make M9 worse)
     private func removeEntries(ids: Set<String>, defaults: UserDefaults) {
         guard !ids.isEmpty else { return }
         let current = defaults.array(forKey: queueKey) as? [[String: Any]] ?? []
         let remainder = current.filter { entry in
-            guard let id = entry["entry_id"] as? String else { return true }  // 採番前の行は残す
+            guard let id = entry["entry_id"] as? String else { return true }  // Keep rows that have no ID assigned yet
             return !ids.contains(id)
         }
         if remainder.isEmpty {
@@ -259,22 +269,24 @@ final class BlockSessionTracker: ObservableObject {
         }
     }
 
-    /// サーバーがその行のデータ自体を拒否したか (= リトライ無意味) の判定。
-    /// PostgrestError はサーバー (PostgREST) が返した構造化エラーで、code は Postgres の SQLSTATE:
-    /// - "P0001" = RAISE EXCEPTION (015 validate_block_session トリガー)
-    /// - クラス "23" = 整合性制約違反 (23514 CHECK = 033 planned_seconds 範囲, 23503 FK = 削除済みユーザー 等)
-    /// - クラス "22" = データ例外
-    /// PGRST301 (JWT 失効) / 42501 (RLS) / その他はデータ起因ではないので false (全保持リトライ側)。
-    /// ネットワーク不達やタイムアウトは URLError 等で来るため PostgrestError にキャストできず false になる
+    /// Decide whether the server rejected the data of that row itself (= retrying is pointless).
+    /// PostgrestError is a structured error returned by the server (PostgREST); code is the Postgres SQLSTATE:
+    /// - "P0001" = RAISE EXCEPTION (015 validate_block_session trigger)
+    /// - class "23" = integrity constraint violation (23514 CHECK = 033 planned_seconds range, 23503 FK =
+    ///   deleted user, etc.)
+    /// - class "22" = data exception
+    /// PGRST301 (expired JWT) / 42501 (RLS) / others are not caused by the data, so false (keep all and retry).
+    /// No network or timeouts come as URLError etc., which cannot be cast to PostgrestError, so they are false
     private static func isRowRejection(_ error: Error) -> Bool {
         guard let pgError = error as? PostgrestError, let code = pgError.code else { return false }
         return code == "P0001" || code.hasPrefix("22") || code.hasPrefix("23")
     }
 
-    /// キューの 1 エントリを SessionInsert へ変換。パース不能 / 補正後 0 秒は nil (呼び出し側で破棄)。
-    /// アップデート前に積まれてしまった「拒否必至の行」(未来 ended_at / 7日超) もここで補正して救済する。
-    /// duration_seconds は保存値でなく補正後 timestamp から再計算する (015 の ±2 秒整合チェック対策)
-    /// M10: entryId をそのままサーバー行の id として渡す (upsert の onConflict キー)
+    /// Convert 1 queue entry into a SessionInsert. Unparseable / 0 seconds after repair returns nil (the
+    /// caller discards it). Rows queued before the update that are "certain to be rejected" (future
+    /// ended_at / over 7 days) are also repaired and saved here. duration_seconds is recomputed from the
+    /// repaired timestamps, not the stored value (for 015's ±2 second consistency check)
+    /// M10: pass entryId as is as the server row's id (the onConflict key of the upsert)
     private static func makeInsert(entry: [String: Any], entryId: String, userId: String, formatter: ISO8601DateFormatter) -> SessionInsert? {
         guard let mode = entry["mode"] as? String,
               let startedTs = entry["started_at"] as? TimeInterval,
@@ -290,8 +302,8 @@ final class BlockSessionTracker: ObservableObject {
         )
         let duration = max(0, Int(end.timeIntervalSince(start)))
         guard duration > 0 else { return nil }
-        // planned_seconds は 033 で追加した新フィールド。古い形式のキューにはキー自体が無いので nil で通す。
-        // 033 の CHECK (1...604800) に落ちる値はここでもクランプ / nil 化する
+        // planned_seconds is a new field added in 033. Old-format queues do not have the key at all, so pass nil.
+        // Values that would fail 033's CHECK (1...604800) are clamped / set to nil here as well
         let plannedSeconds = (entry["planned_seconds"] as? Int).flatMap { $0 > 0 ? min($0, 604800) : nil }
         return SessionInsert(
             id: entryId,
@@ -305,17 +317,17 @@ final class BlockSessionTracker: ObservableObject {
         )
     }
 
-    /// アカウント削除時に、削除ユーザー宛の未送信行と旧形式行をキューから破棄する。
-    /// 削除済みユーザーの行はサーバー側で永久に insert できず (FK / RLS)、
-    /// 旧形式行 (entry_id 無し) を残すと次のサインイン者へ帰属されてしまうため、両方消す。
-    /// AccountDeletionService が signOut() の前 (userId がまだ取れるうち) に呼ぶ
+    /// On account deletion, discard from the queue the unsent rows for the deleted user and old-format rows.
+    /// Rows of a deleted user can never be inserted on the server (FK / RLS), and
+    /// if old-format rows (no entry_id) are kept they get attributed to the next person who signs in, so
+    /// delete both. AccountDeletionService calls this before signOut() (while userId is still available)
     nonisolated static func purgeQueue(for userId: UUID) {
         guard let defaults = UserDefaults(suiteName: AppGroupConstants.identifier) else { return }
         let target = userId.uuidString.lowercased()
         let queue = defaults.array(forKey: AppGroupConstants.Keys.pendingBlockSessions) as? [[String: Any]] ?? []
         guard !queue.isEmpty else { return }
         let remainder = queue.filter { entry in
-            guard entry["entry_id"] != nil else { return false }  // 旧形式 = 削除アカウント時代の行
+            guard entry["entry_id"] != nil else { return false }  // Old format = rows from the time of the deleted account
             return (entry["user_id"] as? String) != target
         }
         if remainder.isEmpty {
@@ -325,12 +337,12 @@ final class BlockSessionTracker: ObservableObject {
         }
     }
 
-    // MARK: - Stats (累計ロック / 上位% / ストリーク / 完遂率を1 RPCで取得)
+    // MARK: - Stats (total lock / top percentile / streak / completion rate in 1 RPC)
 
-    /// 累計ロック秒数 + 上位% + 連続ロック日数 + 完遂率 (033 get_user_stats) を Supabase から取得。
-    /// プロフィール1画面 = 1 RPC に集約するための統合呼び出し (旧 loadTotal は廃止・統合済み)。
-    /// 033 未適用 (RPC 未デプロイ) の場合は失敗して print のみ。フォールバックは持たない
-    /// (二重実装を避ける設計方針。033 適用が前提)
+    /// Fetch total lock seconds + top percentile + streak lock days + completion rate (033 get_user_stats)
+    /// from Supabase. A combined call so that 1 profile screen = 1 RPC (the old loadTotal is removed and
+    /// merged). If 033 is not applied (RPC not deployed), it fails and only prints. There is no fallback
+    /// (design policy to avoid double implementations. Assumes 033 is applied)
     func loadStats() async {
         guard let userId = UserAuthService.shared.userId else {
             self.totalSeconds = 0
@@ -360,7 +372,7 @@ final class BlockSessionTracker: ObservableObject {
         }
     }
 
-    /// 表示用フォーマット (X分 / Xh Ym)
+    /// Display format ("X分" ("X min") / Xh Ym)
     func formattedTotal() -> String {
         let hours = totalSeconds / 3600
         let minutes = (totalSeconds % 3600) / 60
@@ -374,8 +386,8 @@ final class BlockSessionTracker: ObservableObject {
     // MARK: - Types
 
     private struct SessionInsert: Encodable {
-        /// M10: enqueue 時に刻印済みの entry_id をそのままサーバー行の主キーとして送る。
-        /// upsert(onConflict: "id", ignoreDuplicates: true) の冪等性の要
+        /// M10: send the entry_id stamped at enqueue time as is as the primary key of the server row.
+        /// This is what makes upsert(onConflict: "id", ignoreDuplicates: true) idempotent
         let id: String
         let user_id: String
         let mode: String
@@ -383,12 +395,12 @@ final class BlockSessionTracker: ObservableObject {
         let ended_at: String
         let duration_seconds: Int
         let status: String
-        /// タイマーのみ非nil。nil の場合は合成 Encodable (encodeIfPresent) がキー自体を
-        /// 省略する → カラムは nullable なので DB 側は NULL になる
+        /// Non-nil only for timers. When nil, the synthesized Encodable (encodeIfPresent) omits the key itself
+        /// → the column is nullable, so it becomes NULL in the DB
         let planned_seconds: Int?
     }
 
-    /// get_block_percentile RPC 戻り値。has_data=false はロック実績ゼロ
+    /// Return value of the get_block_percentile RPC. has_data=false means zero lock records
     struct BlockPercentile: Decodable {
         let hasData: Bool
         let topPercent: Double?
@@ -403,7 +415,8 @@ final class BlockSessionTracker: ObservableObject {
         }
     }
 
-    /// 完遂率 (直近30日・タイマーのみ)。has_data=false は対象セッション0件 (10分未満除外後)
+    /// Completion rate (last 30 days, timer only). has_data=false means 0 target sessions (after excluding
+    /// those under 10 minutes)
     struct CompletionRate: Decodable {
         let hasData: Bool
         let ratePercent: Int?
@@ -418,8 +431,8 @@ final class BlockSessionTracker: ObservableObject {
         }
     }
 
-    /// get_user_stats RPC 戻り値 (プロフィール統計の統合レスポンス)。
-    /// completionAllTime は 034 で追加 (033 のみ適用の DB ではキーが無い → Optional で許容)
+    /// Return value of the get_user_stats RPC (combined response for profile stats).
+    /// completionAllTime was added in 034 (a DB with only 033 applied has no key → allowed via Optional)
     private struct UserStats: Decodable {
         let totalBlockSeconds: Int
         let streakDays: Int

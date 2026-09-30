@@ -2,8 +2,8 @@
 //  BlockingService.swift
 //  AppBlocker
 //
-//  3 モード（タイマー / スケジュール / 位置）統括サービス
-//  各 Manager は専用 named store を持つので、ここで store を直接触らない
+//  Service that coordinates the 3 modes (timer / schedule / location)
+//  Each Manager has its own named store, so do not touch the store directly here
 //
 
 import Foundation
@@ -12,52 +12,53 @@ import FamilyControls
 import ManagedSettings
 import DeviceActivity
 
-/// アプリブロック管理サービス
+/// App block management service
 final class BlockingService: ObservableObject {
 
     @MainActor static let shared = BlockingService()
 
     // MARK: - Published Properties
 
-    /// タイマーセッション（独立動作）
+    /// Timer session (runs independently)
     @Published private(set) var timerSession: BlockSession?
 
-    /// スケジュールセッション（常駐型）
+    /// Schedule session (resident type)
     @Published private(set) var scheduleSession: BlockSession?
 
-    /// 選択されたアプリ（タイマー/スケジュール共有、location は LocationManager 内で別管理）
+    /// Selected apps (shared by timer/schedule, location is managed separately inside LocationManager)
     @Published var selectedApps: FamilyActivitySelection = FamilyActivitySelection()
 
-    /// エラーメッセージ
+    /// Error message
     @Published var errorMessage: String?
 
-    /// ロック開始直後の「準備中」オーバーレイ表示フラグ。
-    /// shield 適用 (メインスレッド同期の重い書き込み) 直後にホームへ遷移すると固まる症状の緩和用。
-    /// この間ユーザーの操作を封じ、システムが enforcement を立ち上げる猶予を作る。
-    /// startTimerBlockingWithSettle 参照。
+    /// Flag for showing the "準備中" ("Preparing") overlay right after a lock starts.
+    /// Mitigates the freeze when moving to the Home screen right after applying the shield (a heavy
+    /// synchronous write on the main thread).
+    /// User input is blocked during this time to give the system time to bring up enforcement.
+    /// See startTimerBlockingWithSettle.
     @Published var isPreparingLock = false
 
-    /// いずれかの制限が有効かどうか
+    /// Whether any restriction is active
     var isBlocking: Bool {
         isTimerActive || isScheduleActive || isLocationActive
     }
 
-    /// タイマーが有効か
+    /// Whether the timer is active
     var isTimerActive: Bool {
         TimerManager.shared.isRunning
     }
 
-    /// スケジュールが有効か（時間帯内で制限中）
+    /// Whether the schedule is active (inside its time window and restricting)
     var isScheduleActive: Bool {
         ScheduleManager.shared.isShieldActive
     }
 
-    /// スケジュールが設定されているか（時間帯外でも）
+    /// Whether a schedule is configured (even outside its time window)
     var isScheduleConfigured: Bool {
         ScheduleManager.shared.isMonitoring
     }
 
-    /// 位置情報ロックが有効か（ジオフェンス内で制限中）
+    /// Whether the location lock is active (inside the geofence and restricting)
     var isLocationActive: Bool {
         LocationManager.shared.isShieldActive
     }
@@ -73,9 +74,9 @@ final class BlockingService: ObservableObject {
         restoreState()
     }
 
-    // MARK: - Timer Methods（独立セッション）
+    // MARK: - Timer Methods (independent session)
 
-    /// タイマーブロックを開始
+    /// Start timer blocking
     @MainActor
     func startTimerBlocking(durationMinutes: Int) {
         guard !selectedApps.applicationTokens.isEmpty ||
@@ -86,47 +87,53 @@ final class BlockingService: ObservableObject {
 
         errorMessage = nil
 
-        // ブロック開始ごとに新しい名言をローテーション
+        // Rotate to a new quote every time blocking starts
         QuoteService.shared.shuffleQuote()
         if let quote = QuoteService.shared.currentQuote {
             saveQuoteForShield(quote)
         }
-        // Shield 表示ごとの名言ローテーション用プールも更新 (Extension の重い JSON パース回避)
+        // Also update the pool for rotating quotes on every Shield display (avoids heavy JSON parsing in the
+        // Extension)
         saveQuotePoolForShield()
 
-        // タイマーを開始（TimerManager が timer named store に shield を設定）
+        // Start the timer (TimerManager sets the shield on the timer named store)
         TimerManager.shared.startTimer(
             durationMinutes: durationMinutes,
             apps: selectedApps
         )
 
-        // セッションを保存
+        // Save the session
         let config = TimerConfig(durationMinutes: durationMinutes)
         let session = BlockSession(mode: .timer, timerConfig: config)
         timerSession = session
         storage.saveTimerSession(session)
 
-        // 🔴 解除課題をこの時点の設定で焼き付ける。以降このセッションが終わるまで
-        //    設定を緩めても効かない (ロック中に設定を下げて逃げるのを防ぐ)
+        // 🔴 Fix the unlock challenge with the settings at this point. Until this session ends,
+        //    loosening the settings has no effect (prevents escaping by lowering the settings during a lock)
         UnlockChallengeService.shared.beginSession(id: session.id)
 
         print("⏱️ Timer blocking started: \(durationMinutes) minutes")
     }
 
-    /// ロック開始 + 「準備中」オーバーレイでの settling 猶予つき版。
+    /// Version of lock start with a settling grace period using the "準備中" ("Preparing") overlay.
     ///
-    /// 背景: startTimerBlocking 内の shield 適用 (`store.shield.applications = tokens`) は
-    /// メインスレッド同期の重い書き込み。適用直後にユーザーがホームへ遷移/バックグラウンド化
-    /// すると、システムが enforcement を立ち上げる最中とレースして固まる症状がある。
-    /// くるくるを ~3s 見せて操作を封じ、その揮発ウィンドウを跨がせないことで緩和する。
+    /// Background: applying the shield inside startTimerBlocking (`store.shield.applications = tokens`) is
+    /// a heavy synchronous write on the main thread. If the user moves to the Home screen or backgrounds the
+    /// app right after it is applied, it races with the system while the system brings up enforcement,
+    /// and the app freezes.
+    /// Mitigated by showing the spinner for ~3s, blocking input, and not letting the user cross that
+    /// volatile window.
     ///
-    /// 注意: これは Apple Extension の cold-start フリーズ (= ブロック対象アプリを開いた瞬間に
-    /// Shield extension が cold start して数秒固まる、project_known_issues.md B項) には効かない。
-    /// あれは別プロセス・別タイミングの Apple 構造制約であり、メインアプリのスピナーでは防げない。
-    /// この関数が効くなら「メインスレッドヒッチ/spin-up レース」の方 (フリーズ②) を見ていた証拠になる。
+    /// Note: this does not help the Apple Extension cold-start freeze (= the Shield extension cold starts
+    /// and freezes for a few seconds the moment a blocked app is opened, project_known_issues.md item B).
+    /// That is an Apple structural limit in a different process at a different timing, and the main app's
+    /// spinner cannot prevent it.
+    /// If this function helps, it is evidence that we were looking at the "main thread hitch/spin-up
+    /// race" (freeze ②).
     @MainActor
     func startTimerBlockingWithSettle(durationMinutes: Int) async {
-        // 前提チェックはスピナーを出す前に (アプリ未選択なら即エラーで抜ける)
+        // Check preconditions before showing the spinner (if no apps are selected, exit with an error
+        // immediately)
         guard !selectedApps.applicationTokens.isEmpty ||
               !selectedApps.categoryTokens.isEmpty else {
             errorMessage = "ブロックするアプリを選択してください"
@@ -134,18 +141,20 @@ final class BlockingService: ObservableObject {
         }
 
         isPreparingLock = true
-        // 1 フレーム譲ってスピナーを先に描画させてから重い shield 書き込みへ入る
+        // Yield one frame so the spinner is drawn first, then go into the heavy shield write
         await Task.yield()
 
         startTimerBlocking(durationMinutes: durationMinutes)
 
-        // enforcement が落ち着くまで保持。この間はオーバーレイで操作を封じ、遷移レースを防ぐ。
-        // 3秒 = ユーザー体感で「これくらい待てば固まらない」の値 (2026-07-07 実機フィードバック)
+        // Hold until enforcement settles. Input is blocked by the overlay during this time to prevent the
+        // transition race.
+        // 3 seconds = the value where users feel "waiting this long does not freeze" (2026-07-07 real device
+        // feedback)
         try? await Task.sleep(nanoseconds: 3_000_000_000)
         isPreparingLock = false
     }
 
-    /// タイマーブロックを停止
+    /// Stop timer blocking
     @MainActor
     func stopTimerBlocking() {
         TimerManager.shared.stopTimer()
@@ -156,18 +165,20 @@ final class BlockingService: ObservableObject {
         print("⏱️ Timer blocking stopped")
     }
 
-    // MARK: - Schedule Methods（常駐型）
+    // MARK: - Schedule Methods (resident type)
 
-    /// スケジュールを追加 (複数対応、上限は ScheduleManager.maxSchedules)
-    /// apps はスケジュール専用のローカル選択 (2026-07-16 Fableレビュー: タイマーの selectedApps 流用を廃止)
+    /// Add a schedule (multiple supported, the limit is ScheduleManager.maxSchedules)
+    /// apps is a local selection only for schedules (2026-07-16 Fable review: stopped reusing the timer's
+    /// selectedApps)
     @MainActor
     func startScheduleBlocking(config: ScheduleConfig, apps: FamilyActivitySelection) {
-        // ブロック開始ごとに新しい名言をローテーション
+        // Rotate to a new quote every time blocking starts
         QuoteService.shared.shuffleQuote()
         if let quote = QuoteService.shared.currentQuote {
             saveQuoteForShield(quote)
         }
-        // Shield 表示ごとの名言ローテーション用プールも更新 (Extension の重い JSON パース回避)
+        // Also update the pool for rotating quotes on every Shield display (avoids heavy JSON parsing in the
+        // Extension)
         saveQuotePoolForShield()
 
         do {
@@ -176,7 +187,7 @@ final class BlockingService: ObservableObject {
                 apps: apps
             )
 
-            // セッションを保存
+            // Save the session
             let session = BlockSession(mode: .schedule, scheduleConfig: config)
             scheduleSession = session
             storage.saveScheduleSession(session)
@@ -188,31 +199,34 @@ final class BlockingService: ObservableObject {
         }
     }
 
-    /// ロック開始 + 「準備中」オーバーレイでの settling 猶予つき版（A-7）。
+    /// Version of lock start with a settling grace period using the "準備中" ("Preparing") overlay (A-7).
     ///
-    /// startTimerBlockingWithSettle と同型。時間帯内で即座にシールドが適用される場合のみ
-    /// enforcement が落ち着くまで保持する。時間帯外での開始（監視登録だけで shield は未適用）は
-    /// 重い同期書き込みが起きないので短い待ちだけで十分。
+    /// Same shape as startTimerBlockingWithSettle. Only when the Shield is applied immediately inside the
+    /// time window do we hold until enforcement settles. A start outside the time window (only monitoring
+    /// is registered, no shield is applied) has no heavy synchronous write, so a short wait is enough.
     @MainActor
     func startScheduleBlockingWithSettle(config: ScheduleConfig, apps: FamilyActivitySelection) async {
         isPreparingLock = true
-        // 1 フレーム譲ってスピナーを先に描画させてから重い shield 書き込みへ入る
+        // Yield one frame so the spinner is drawn first, then go into the heavy shield write
         await Task.yield()
 
         startScheduleBlocking(config: config, apps: apps)
 
         if ScheduleManager.shared.isShieldActive {
-            // 時間帯内で即時 shield 適用になったケースのみ、timer と同じ 3秒保持でレースを避ける
+            // Only when the shield was applied immediately inside the time window, hold for 3 seconds like the
+            // timer to avoid the race
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         } else {
-            // 時間帯外での開始は監視登録のみ（重い shield 書き込みなし）なので短い待ちで十分
+            // A start outside the time window only registers monitoring (no heavy shield write), so a short wait
+            // is enough
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
         isPreparingLock = false
     }
 
-    /// スケジュール設定を更新 (id で対象を特定)
-    /// apps はスケジュール専用のローカル選択 (2026-07-16 Fableレビュー: タイマーの selectedApps 流用を廃止)
+    /// Update schedule settings (target found by id)
+    /// apps is a local selection only for schedules (2026-07-16 Fable review: stopped reusing the timer's
+    /// selectedApps)
     @MainActor
     func updateScheduleBlocking(config: ScheduleConfig, apps: FamilyActivitySelection) {
         do {
@@ -221,7 +235,7 @@ final class BlockingService: ObservableObject {
                 apps: apps
             )
 
-            // セッションを更新
+            // Update the session
             let session = BlockSession(mode: .schedule, scheduleConfig: config)
             scheduleSession = session
             storage.saveScheduleSession(session)
@@ -233,7 +247,7 @@ final class BlockingService: ObservableObject {
         }
     }
 
-    /// スケジュールを 1 件削除
+    /// Delete one schedule
     @MainActor
     func removeScheduleBlocking(id: UUID) {
         ScheduleManager.shared.removeSchedule(id: id)
@@ -246,7 +260,7 @@ final class BlockingService: ObservableObject {
         print("📅 Schedule removed")
     }
 
-    /// スケジュールブロックを全停止 (サインアウト等の全消し用)
+    /// Stop all schedule blocking (for wiping everything, e.g. on sign-out)
     @MainActor
     func stopScheduleBlocking() {
         ScheduleManager.shared.stopMonitoring()
@@ -258,30 +272,32 @@ final class BlockingService: ObservableObject {
 
     // MARK: - Location Methods
 
-    /// 位置情報ロックは LocationManager が CLLocationManager のジオフェンスイベントで自動 apply/remove する。
-    /// ここでは "ロック対象アプリの選択を保存" の入口だけ提供する。
+    /// The location lock is applied/removed automatically by LocationManager on CLLocationManager
+    /// geofence events. This only provides the entry point to "save the selection of apps to lock".
     @MainActor
     func saveLocationApps(_ selection: FamilyActivitySelection) {
         LocationManager.shared.saveSelection(selection)
     }
 
-    // MARK: - Location Methods (settle 付きラッパー — フリーズ調査 2026-07-15)
+    // MARK: - Location Methods (wrappers with settle, from the freeze investigation 2026-07-15)
     //
-    // ジオフェンス内でトグル/追加すると、タップと同一 runloop ティックで store への重い同期書き込みが
-    // 走り、timer が settle (A-7) で回避している enforcement 起動レースにそのまま突っ込んで
-    // フリーズ + デフォルト Shield 表示になっていた。timer/schedule と同じ保護をかける
+    // Toggling/adding inside a geofence ran a heavy synchronous write to the store in the same runloop
+    // tick as the tap, ran straight into the enforcement start-up race that the timer avoids with settle
+    // (A-7), and caused a freeze + the default Shield being shown. Apply the same protection as
+    // timer/schedule
 
-    /// 場所の有効/無効切り替え (settle 付き)
+    /// Toggle a place enabled/disabled (with settle)
     @MainActor
     func toggleLocationWithSettle(_ location: RegisteredLocation) async {
-        // これから ON にする時だけ在圏評価を待つ。toggleLocation は isEnabled を反転させるので、
-        // 渡された location がまだ OFF = これから ON 化するケース
+        // Wait for the in-region evaluation only when turning it ON. toggleLocation flips isEnabled, so
+        // a location that is still OFF when passed in = the case of turning it ON
         await runLocationMutationWithSettle(waitsForEvaluation: !location.isEnabled) {
             LocationManager.shared.toggleLocation(location)
         }
     }
 
-    /// 場所の追加 (settle 付き。追加地点の圏内に居ると即時シールドが走るため)
+    /// Add a place (with settle, because being inside the added place's region applies the Shield
+    /// immediately)
     @MainActor
     func addLocationWithSettle(_ location: RegisteredLocation) async {
         await runLocationMutationWithSettle {
@@ -289,10 +305,11 @@ final class BlockingService: ObservableObject {
         }
     }
 
-    /// 場所の更新 (settle 付き)
+    /// Update a place (with settle)
     @MainActor
     func updateLocationWithSettle(_ location: RegisteredLocation) async {
-        // updateLocation は在圏評価を要求しない (ジオフェンス再登録のみ) ので待たない
+        // updateLocation does not request an in-region evaluation (it only re-registers the geofence), so do
+        // not wait
         await runLocationMutationWithSettle(waitsForEvaluation: false) {
             LocationManager.shared.updateLocation(location)
         }
@@ -300,38 +317,40 @@ final class BlockingService: ObservableObject {
 
     @MainActor
     private func runLocationMutationWithSettle(waitsForEvaluation: Bool = true, _ mutation: () -> Void) async {
-        // Shield 拡張コールドスタート時に名言プールが確実にあるように (timer/schedule 開始時と同じ。
-        // location だけ未実施だった)
+        // So the quote pool always exists when the Shield extension cold starts (same as at timer/schedule
+        // start. Only location was not doing it)
         saveQuotePoolForShield()
 
         isPreparingLock = true
-        // 1 フレーム譲ってスピナーを先に描画させてから重い shield 書き込みへ入る
+        // Yield one frame so the spinner is drawn first, then go into the heavy shield write
         await Task.yield()
 
         mutation()
 
-        // 在圏評価は fix 到着駆動の非同期 (リトライ込みで最大 ~12 秒) なので、直後の
-        // isShieldActive 同期チェックでは常に「未適用」に見えてスピナーが一瞬で消えていた。
-        // 評価が解決するか、requestState 経由で先にシールドが付いたら待ちを打ち切る。
-        // OFF/編集 (waitsForEvaluation: false) は評価を要求しない操作なので、
-        // 先行チェーンの解決を相続して待たない。
+        // The in-region evaluation is async and driven by a location fix arriving (up to ~12 seconds with
+        // retries), so the isShieldActive sync check right after always looked "not applied" and the spinner
+        // vanished instantly.
+        // Stop waiting when the evaluation resolves or when the Shield gets applied first through requestState.
+        // OFF/edit (waitsForEvaluation: false) are actions that do not request an evaluation, so
+        // they inherit the resolution of the preceding chain and do not wait.
         //
-        // ⚠️ 上限は 6 秒。PreparingLockOverlay は全画面でタップを奪うため、リトライ全長
-        // (12秒) を待つとフリーズと区別がつかない (「今いない場所」のロックを屋内で ON に
-        // する = ごく普通の操作でこれを踏む)。6 秒で打ち切ってもシールド適用自体は
-        // 評価の解決時に非同期で走るので、ロックがかからなくなるわけではない
+        // ⚠️ The limit is 6 seconds. PreparingLockOverlay takes all taps on the full screen, so waiting the
+        // full retry length (12 seconds) cannot be told apart from a freeze (turning ON a lock for "a place you
+        // are not at now" while indoors = a very normal action hits this). Even if we stop at 6 seconds,
+        // applying the Shield itself still runs asynchronously when the evaluation resolves, so the lock does
+        // not fail to apply
         if waitsForEvaluation {
             let deadline = Date().addingTimeInterval(6)
             while LocationManager.shared.isEvaluatingRegion
                   && !LocationManager.shared.isShieldActive
                   && Date() < deadline {
-                if Task.isCancelled { break }   // キャンセル時に try? が例外を握り潰してビジーループ化するのを防ぐ
+                if Task.isCancelled { break }   // Prevents try? from swallowing the error on cancel and turning this into a busy loop
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
 
         if LocationManager.shared.isShieldActive {
-            // 即時シールド適用になったケースは enforcement が落ち着くまで保持 (timer A-7 と同じ 3 秒)
+            // When the Shield was applied immediately, hold until enforcement settles (3 seconds, same as timer A-7)
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         } else {
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -341,24 +360,25 @@ final class BlockingService: ObservableObject {
 
     // MARK: - Utility Methods
 
-    /// 選択をリセット
+    /// Reset the selection
     func resetSelection() {
         selectedApps = FamilyActivitySelection()
     }
 
-    /// 現在の名言をShield用に保存
+    /// Save the current quote for the Shield
     func saveQuoteForShield(_ quote: Quote) {
         let sharedQuote = SharedQuote(from: quote)
         storage.saveCurrentQuote(sharedQuote)
     }
 
-    /// Shield が表示のたびランダムに1件引くための名言プールを App Group に書き出す。
-    /// これで Extension は 175 件 JSON パース (コールドスタート 11 秒フリーズの主因) を
-    /// 一切せずに済み、かつロック画面が出るたび名言がローテーションする。
-    /// タイマー/スケジュール/位置いずれのブロック開始でも、また起動時にも呼ぶ
+    /// Write a quote pool to the App Group so the Shield can pick one at random on every display.
+    /// With this the Extension never has to parse the 175-item JSON (the main cause of the 11-second cold
+    /// start freeze), and the quote rotates every time the lock screen appears.
+    /// Call it when any timer/schedule/location block starts, and also at launch
     func saveQuotePoolForShield() {
-        // Shield UI強化 (2026-07-16 ユーザー確定): プールは「ユーザーがいいねした名言」を優先。
-        // personal な名言が夢の下に出る。いいねが 1 件も無ければ従来の全体ランダムプール
+        // Shield UI upgrade (confirmed by the user 2026-07-16): the pool prefers "quotes the user liked".
+        // Personal quotes appear under the dream. If there are no likes at all, use the old overall random
+        // pool
         let liked = LikeService.shared.likedQuotes
         let pool: [SharedQuote]
         if liked.isEmpty {
@@ -373,20 +393,20 @@ final class BlockingService: ObservableObject {
 
     @MainActor
     private func restoreState() {
-        // タイマーセッションを復元
+        // Restore the timer session
         //
-        // 注意: TimerManager.shared への参照は、ここで初めて TimerManager の init
-        // (= restoreTimerState、期限切れ処理を含む) を走らせるトリガーになる。
-        // BlockingService.init → restoreState() は @MainActor で TimerManager.shared も
-        // @MainActor なので、この参照時点で TimerManager 側の復元 (期限切れなら
-        // shield 解除 + storage.saveTimerSession(nil) まで) が先に完了してから
-        // 以下の判定に入る。この順序は意図的なので変更しないこと。
+        // Note: referencing TimerManager.shared here is the trigger that first runs TimerManager's init
+        // (= restoreTimerState, including expiry handling).
+        // BlockingService.init → restoreState() is @MainActor and TimerManager.shared is also
+        // @MainActor, so at the point of this reference, TimerManager's restore (if expired, including
+        // removing the shield + storage.saveTimerSession(nil)) finishes first, and only then do
+        // the checks below run. This order is intentional, do not change it.
         if let session = storage.getTimerSession(), session.isActive {
-            // TimerManager が実際に稼働していない (＝自然終了/期限切れ/停止済み) のに
-            // timerSession キーだけが残っている「幽霊アクティブセッション」を弾く。
-            // C-2 (a) で timerCompleted() / restoreTimerState() の期限切れ分岐は
-            // saveTimerSession(nil) するようにしたが、想定外の経路で残った場合の
-            // 保険としてここでもクロスチェックする。
+            // Reject a "ghost active session" where only the timerSession key remains even though TimerManager
+            // is not actually running (= ended naturally/expired/stopped).
+            // C-2 (a) made the expiry branches of timerCompleted() / restoreTimerState() call
+            // saveTimerSession(nil), but as insurance in case it remains through an unexpected path,
+            // cross-check here too.
             if TimerManager.shared.isRunning {
                 timerSession = session
             } else {
@@ -394,13 +414,14 @@ final class BlockingService: ObservableObject {
             }
         }
 
-        // スケジュールセッションを復元
+        // Restore the schedule session
         if let session = storage.getScheduleSession(), session.isActive {
             scheduleSession = session
         }
 
-        // 前回使ったタイマー用アプリ選択をプリフィルする (2026-07-15: オンボ末尾のアプリ選択を
-        // 次回起動でも引き継ぐため。従来は起動ごとに空で、毎回選び直しだった)
+        // Prefill the app selection used last time for the timer (2026-07-15: so the app selection at the end
+        // of onboarding carries over to the next launch. Previously it was empty on every launch and had to be
+        // picked again each time)
         if selectedApps.applicationTokens.isEmpty && selectedApps.categoryTokens.isEmpty,
            let defaults = UserDefaults(suiteName: AppGroupConstants.identifier),
            let data = defaults.data(forKey: AppGroupConstants.Keys.timerSelection),
@@ -409,16 +430,16 @@ final class BlockingService: ObservableObject {
         }
     }
 
-    // MARK: - Initial Shared Selection (オンボ末尾のアプリ選択)
+    // MARK: - Initial Shared Selection (app selection at the end of onboarding)
 
-    /// オンボ末尾で選んだアプリを 3 モード共通の初期値として保存する。
-    /// 以後は各モードの画面で個別に変更できる (従来仕様のまま)
+    /// Save the apps chosen at the end of onboarding as the shared initial value for all 3 modes.
+    /// After that, each mode's screen can change it separately (same as the old behavior)
     @MainActor
     func saveInitialSharedSelection(_ selection: FamilyActivitySelection) {
         selectedApps = selection
 
-        // タイマー: timerSelection キーへ直接書く (TimerManager と同じエンコード)。
-        // 次回起動時は上の restoreState プリフィルが拾う
+        // Timer: write directly to the timerSelection key (same encoding as TimerManager).
+        // On the next launch the restoreState prefill above picks it up
         if let defaults = UserDefaults(suiteName: AppGroupConstants.identifier),
            let data = try? PropertyListEncoder().encode(selection) {
             defaults.set(data, forKey: AppGroupConstants.Keys.timerSelection)

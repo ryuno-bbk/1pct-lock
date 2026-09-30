@@ -2,21 +2,24 @@
 //  SplashView.swift
 //  AppBlocker
 //
-//  起動スプラッシュ (2026-07-31 ユーザー要望で復活)。
+//  Launch splash (brought back on 2026-07-31 at the user's request).
 //
-//  ⚠️ アニメーションは入れない (2026-07-31 実機FB: 拡大して現れる版は「全然ダメ、
-//  変なアップは絶対ダメ」で却下)。**小さめのマークを中央に置くだけ**の静止画面が正解。
-//  今後ここに動きを足さないこと — 2026-07-29 に廃止した刻印アニメに続き2回却下されている。
+//  ⚠️ Do not add animation (2026-07-31 real device feedback: the version that appears by scaling up
+//     was rejected with "totally no good,
+//  weird zoom-ins are absolutely not OK"). The correct answer is a still screen that **just puts a
+//  smallish mark in the center**. Do not add motion here in the future: it has been rejected twice,
+//  after the engraving animation removed on 2026-07-29.
 //
-//  地色はアプリアイコンの実測地色 (#0A0A0B) と同じ = Launch Screen (LaunchBackground
-//  カラーアセット) から本ビューへの切り替わりで色段差が出ない。マークはアイコンから
-//  切り出した白グリフなので、地色と合わせて「アイコンがそのまま画面中央にある」状態になる。
+//  The base color is the same as the measured base color of the app icon (#0A0A0B) = no color step
+//  when switching from the Launch Screen (LaunchBackground color asset) to this view. The mark is a
+//  white glyph cut out of the icon, so together with the base color it looks like "the icon is right
+//  in the center of the screen".
 //
 
 import SwiftUI
 
 struct SplashView: View {
-    /// true = Montserrat BlackItalic の「1%」ワードマーク / false = クラシックアイコンのグリフ
+    /// true = the "1%" wordmark in Montserrat BlackItalic / false = the glyph of the classic icon
     private let useWordmark = false
 
     var body: some View {
@@ -33,7 +36,7 @@ struct SplashView: View {
                 .font(.custom("Montserrat-BlackItalic", size: 64))
                 .foregroundColor(AppColors.textPrimary)
         } else {
-            // 2026-07-31 実機FB2巡目: 84pt でもまだ大きい → 60pt へ
+            // 2026-07-31 real device feedback round 2: still too big at 84pt → 60pt
             Image("HeroClassicGlyph")
                 .resizable()
                 .scaledToFit()

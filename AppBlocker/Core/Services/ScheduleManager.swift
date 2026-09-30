@@ -2,7 +2,7 @@
 //  ScheduleManager.swift
 //  AppBlocker
 //
-//  DeviceActivitySchedule を使用したスケジュール管理 (複数スケジュール対応 2026-07-15)
+//  Schedule management using DeviceActivitySchedule (multiple schedules supported 2026-07-15)
 //
 
 import Foundation
@@ -13,15 +13,16 @@ import Combine
 
 enum ScheduleError: LocalizedError {
     case limitReached
-    /// L14: 開始=終了などの極端に短い/無効なスケジュール (ScheduleManager.minScheduleDurationMinutes 未満)
+    /// L14: extremely short/invalid schedule such as start=end (under ScheduleManager.minScheduleDurationMinutes)
     case tooShort
 
     var errorDescription: String? {
-        // サービス層なので @AppStorage は使えず、アプリ内言語設定を UserDefaults から直接読む
+        // This is the service layer, so @AppStorage cannot be used. Read the in-app language setting
+        // directly from UserDefaults
         let currentLang = AppLanguage(rawValue: UserDefaults.standard.string(forKey: "mainLanguage") ?? AppLanguage.deviceDefault.rawValue) ?? .english
         switch self {
         case .limitReached:
-            // 文言はユーザー添削待ち
+            // Wording is waiting for the user's review
             return currentLang == .japanese
                 ? "スケジュールは最大 \(ScheduleManager.maxSchedules) 個までです"
                 : "You can have up to \(ScheduleManager.maxSchedules) schedules"
@@ -31,13 +32,14 @@ enum ScheduleError: LocalizedError {
     }
 }
 
-/// スケジュール管理サービス
+/// Schedule management service
 ///
-/// 複数スケジュール設計 (上限 maxSchedules、アプリ選択は全スケジュール共通):
-/// - スケジュールごとに DeviceActivityName("AppBlocker.Schedule.<uuid>") を発行して OS に登録する
-/// - shield は従来どおり named store "schedule" 1 つ。いずれかのスケジュールが時間帯内なら適用、
-///   全て時間帯外なら解除 (= 和集合)。解除判定は「他に稼働中のスケジュールが無いか」を必ず確認する
-/// - iOS の DeviceActivity は 1 アプリ約 20 activity が上限。maxSchedules = 5 はその余裕内
+/// Multiple schedule design (limit maxSchedules, app selection shared by all schedules):
+/// - Each schedule issues DeviceActivityName("AppBlocker.Schedule.<uuid>") and registers it with the OS
+/// - The shield is still one named store "schedule" as before. Applied if any schedule is inside its
+///   time window, removed if all are outside (= union). The removal check must always confirm that
+///   "no other schedule is active"
+/// - iOS DeviceActivity allows about 20 activities per app. maxSchedules = 5 is well within that
 final class ScheduleManager: ObservableObject {
 
     @MainActor static let shared = ScheduleManager()
@@ -46,68 +48,69 @@ final class ScheduleManager: ObservableObject {
     private let store = ManagedSettingsStore(named: .init(AppGroupConstants.Stores.schedule))
     private let storage = AppGroupStorage.shared
 
-    /// 定期チェック用タイマー
+    /// Timer for periodic checks
     private var scheduleCheckTimer: Timer?
 
-    /// スケジュール数の上限。DeviceActivity の約 20 activity 制限に余裕を持たせつつ
-    /// 一覧 UI が破綻しない数 (2026-07-15 ユーザー確定)
+    /// Maximum number of schedules. Leaves room under the ~20 activity limit of DeviceActivity
+    /// and keeps the list UI from breaking (confirmed by the user 2026-07-15)
     static let maxSchedules = 5
 
-    /// L14: スケジュールとして許容する最小長 (分)。開始=終了などの実質ゼロ/極端に短い設定を弾く
+    /// L14: minimum length (minutes) accepted for a schedule. Rejects effectively zero or extremely
+    /// short settings such as start=end
     static let minScheduleDurationMinutes = 15
 
-    /// 旧・単一スケジュール時代の監視識別子。移行後は reconcileMonitoring が停止する
+    /// Monitoring identifier from the old single-schedule era. After migration, reconcileMonitoring stops it
     static let legacyActivityName = DeviceActivityName("AppBlocker.Schedule")
 
-    /// スケジュール別の監視識別子。この prefix 判定は DeviceActivityMonitorExtension と同期させること
+    /// Per-schedule monitoring identifier. Keep this prefix check in sync with DeviceActivityMonitorExtension
     static func activityName(for id: UUID) -> DeviceActivityName {
         DeviceActivityName("AppBlocker.Schedule.\(id.uuidString)")
     }
 
-    /// 現在のスケジュール設定一覧（Published）
+    /// Current list of schedule settings (Published)
     @Published private(set) var configs: [ScheduleConfig] = []
 
-    /// 1 つでもスケジュールが登録されているか
+    /// Whether at least one schedule is registered
     @Published private(set) var isMonitoring: Bool = false
 
-    /// 現在シールドが適用されているか
+    /// Whether the Shield is currently applied
     @Published private(set) var isShieldActive: Bool = false
 
     @MainActor
     private init() {
-        // 保存されている設定を読み込み (旧単一形式はここで配列形式へ移行される)
+        // Load the saved settings (the old single format is migrated to the array format here)
         configs = storage.getScheduleConfigs()
 
-        // 保存されたスケジュールがある場合、状態を復元
+        // If there are saved schedules, restore the state
         restoreScheduleState()
     }
 
-    /// アプリ起動時にスケジュール状態を復元
+    /// Restore the schedule state at app launch
     private func restoreScheduleState() {
         restoreSkippedOccurrences()
         guard !configs.isEmpty else { return }
 
         isMonitoring = true
 
-        // OS 側の監視登録を望ましい状態へ突き合わせる
-        // (旧 "AppBlocker.Schedule" の停止・BG 再起動等での登録漏れの自己修復を兼ねる)
+        // Reconcile the OS-side monitoring registrations with the desired state
+        // (also stops the old "AppBlocker.Schedule" and self-heals registrations lost after a BG relaunch etc.)
         reconcileMonitoring()
 
-        // 現在の時間がいずれかのスケジュール内かチェックしてシールドを適用/解除
-        // A-4/A-5: applyShield の戻り値で isShieldActive を決める（bail しても true を主張しない）
+        // Check whether the current time is inside any schedule and apply/remove the Shield
+        // A-4/A-5: decide isShieldActive from the return value of applyShield (do not claim true when it bails)
         reconcileShieldNow()
         print("🔄 Schedule restored - \(configs.count) config(s), shield active: \(isShieldActive)")
 
-        // タイマーを開始
+        // Start the timer
         startScheduleCheckTimer()
     }
 
     // MARK: - Monitoring Reconcile
 
-    /// OS の DeviceActivity 登録を configs (有効なもの) と突き合わせる冪等処理。
-    /// - 余分 (削除済み/無効化済み/旧単一形式の legacy 名) を停止
-    /// - 不足 (登録が消えている有効スケジュール) を再登録
-    /// prefix "AppBlocker.Schedule" のものだけ触り、他モードの activity には手を出さない
+    /// Idempotent step that reconciles the OS DeviceActivity registrations with configs (enabled ones).
+    /// - Stop extras (deleted/disabled/the legacy name of the old single format)
+    /// - Register missing ones (enabled schedules whose registration has disappeared)
+    /// Only touches names with the prefix "AppBlocker.Schedule" and leaves activities of other modes alone
     private func reconcileMonitoring() {
         let desiredByName = Dictionary(
             uniqueKeysWithValues: configs.filter(\.isEnabled)
@@ -117,14 +120,14 @@ final class ScheduleManager: ObservableObject {
         let currentScheduleActivities = center.activities
             .filter { $0.rawValue.hasPrefix("AppBlocker.Schedule") }
 
-        // 余分を停止 (legacy 名もここで落ちる)
+        // Stop extras (the legacy name is also dropped here)
         let extras = currentScheduleActivities.filter { desiredByName[$0.rawValue] == nil }
         if !extras.isEmpty {
             center.stopMonitoring(extras)
             print("🧹 Stopped stale schedule activities: \(extras.map(\.rawValue))")
         }
 
-        // 不足を登録
+        // Register missing ones
         let currentNames = Set(currentScheduleActivities.map(\.rawValue))
         for (name, config) in desiredByName where !currentNames.contains(name) {
             do {
@@ -136,9 +139,10 @@ final class ScheduleManager: ObservableObject {
         }
     }
 
-    /// L14: スケジュールの実際の長さ (分)。深夜跨ぎ (32e04ef で対応済みの isWithinSchedule と同じ考え方) を考慮する。
-    /// start == end は「24時間」ではなく実質ゼロ長 (無効な設定) として扱う。
-    /// UI 側 (ScheduleBlockView) からも参照するため internal 公開。
+    /// L14: actual length of the schedule (minutes). Takes crossing midnight into account (same idea as
+    /// isWithinSchedule, already handled in 32e04ef).
+    /// start == end is treated as effectively zero length (an invalid setting), not "24 hours".
+    /// internal access because the UI side (ScheduleBlockView) also uses it.
     static func durationMinutes(for config: ScheduleConfig) -> Int {
         let start = config.startHour * 60 + config.startMinute
         let end = config.endHour * 60 + config.endMinute
@@ -162,9 +166,9 @@ final class ScheduleManager: ObservableObject {
         )
     }
 
-    // MARK: - Public Methods (追加/更新/削除/有効切替)
+    // MARK: - Public Methods (add/update/delete/toggle enabled)
 
-    /// スケジュールを追加して監視を開始
+    /// Add a schedule and start monitoring
     func addSchedule(
         config: ScheduleConfig,
         apps: FamilyActivitySelection
@@ -173,18 +177,18 @@ final class ScheduleManager: ObservableObject {
             throw ScheduleError.limitReached
         }
 
-        // L14: 開始=終了などの極端に短い/無効なスケジュールは保存させない
+        // L14: do not let extremely short/invalid schedules such as start=end be saved
         guard Self.durationMinutes(for: config) >= Self.minScheduleDurationMinutes else {
             throw ScheduleError.tooShort
         }
 
-        // 選択したアプリを保存（全スケジュール共通、DeviceActivityMonitorExtension で使用）
+        // Save the selected apps (shared by all schedules, used in DeviceActivityMonitorExtension)
         saveSelectionToAppGroup(apps)
 
-        // L10: isEnabled=false の設定は OS 監視を登録しない。
-        // 登録してしまうと実行封じが Extension 側のミラーデコード頼みになり
-        // (デコード不能時はフェイルオープン)、無効設定でも遮断が走りうる。
-        // OS 登録に成功してから配列へ反映する (失敗時に幽霊 config を残さない)
+        // L10: configs with isEnabled=false do not register OS monitoring.
+        // If they did, suppressing execution would depend on the mirror decode on the Extension side
+        // (fail-open when it cannot decode), and blocking could run even for a disabled config.
+        // Reflect into the array only after OS registration succeeds (do not leave a ghost config on failure)
         if config.isEnabled {
             try center.startMonitoring(
                 Self.activityName(for: config.id),
@@ -196,37 +200,39 @@ final class ScheduleManager: ObservableObject {
         storage.saveScheduleConfigs(configs)
         isMonitoring = true
 
-        // 🔥 重要: 現在時刻がスケジュール時間内なら即座にシールドを適用
+        // 🔥 Important: if the current time is inside a schedule, apply the Shield immediately
         reconcileShieldNow()
 
-        // 定期チェックタイマーを開始（15秒ごとにスケジュール状態を確認）
+        // Start the periodic check timer (checks the schedule state every 15 seconds)
         startScheduleCheckTimer()
 
         print("✅ Schedule added (\(configs.count)/\(Self.maxSchedules)): \(config.startHour):\(config.startMinute) - \(config.endHour):\(config.endMinute)")
     }
 
-    /// スケジュールを更新（リアルタイム編集）。id で対象を特定し、その activity だけ再登録する
+    /// Update a schedule (live edit). Finds the target by id and re-registers only that activity
     func updateSchedule(
         config: ScheduleConfig,
         apps: FamilyActivitySelection
     ) throws {
-        // L14: 開始=終了などの極端に短い/無効なスケジュールは保存させない。
-        // 既存の監視を触る前に検証し、無効な内容で既存状態を壊さないようにする
+        // L14: do not let extremely short/invalid schedules such as start=end be saved.
+        // Validate before touching the existing monitoring, so invalid content does not break the existing
+        // state
         guard Self.durationMinutes(for: config) >= Self.minScheduleDurationMinutes else {
             throw ScheduleError.tooShort
         }
 
-        // L14b: 失敗時に「元の設定+元の監視状態」へロールバックできるよう変更前の値を保持しておく
+        // L14b: keep the values before the change so we can roll back to
+        // "original config + original monitoring state" on failure
         let previousConfig = configs.first(where: { $0.id == config.id })
 
-        // A-6: 編集で監視を切る前に、進行中のセッションがあれば確定させてキューに積む
-        // (取りこぼすと累計ロック時間の集計から消える)
+        // A-6: before editing cuts monitoring, if a session is in progress, finalize it and queue it
+        // (if it is missed, it disappears from the total lock time)
         flushActiveScheduleSession(id: config.id)
 
-        // 対象スケジュールの監視だけ一度停止（シールドは解除しない）
+        // Stop monitoring only for the target schedule for now (does not remove the Shield)
         center.stopMonitoring([Self.activityName(for: config.id)])
 
-        // 選択したアプリを更新（全スケジュール共通）
+        // Update the selected apps (shared by all schedules)
         saveSelectionToAppGroup(apps)
 
         if config.isEnabled {
@@ -236,9 +242,10 @@ final class ScheduleManager: ObservableObject {
                     during: deviceActivitySchedule(for: config)
                 )
             } catch {
-                // L14b: 新しい設定の監視登録に失敗。configs 配列はまだ書き換えていないので、
-                // 元の設定の監視を復元してから rethrow すれば「設定は元のまま・監視も元のまま」に揃う
-                // (直前で監視を止めているため、ここで復元しないと「設定は残るが監視は止まったまま」になる)
+                // L14b: registering monitoring for the new config failed. The configs array has not been rewritten
+                // yet, so if we restore monitoring for the original config and then rethrow, we end up with
+                // "config unchanged, monitoring unchanged" (monitoring was stopped just before, so without restoring
+                // here it becomes "config remains but monitoring stays stopped")
                 if let previousConfig, previousConfig.isEnabled {
                     try? center.startMonitoring(
                         Self.activityName(for: previousConfig.id),
@@ -258,10 +265,10 @@ final class ScheduleManager: ObservableObject {
         storage.saveScheduleConfigs(configs)
         isMonitoring = true
 
-        // 🔥 重要: 現在時刻の状態に合わせてシールドを適用/解除
+        // 🔥 Important: apply/remove the Shield to match the current time
         reconcileShieldNow()
 
-        // タイマーが停止していたら再開
+        // Restart the timer if it was stopped
         if scheduleCheckTimer == nil {
             startScheduleCheckTimer()
         }
@@ -269,9 +276,9 @@ final class ScheduleManager: ObservableObject {
         print("✅ Schedule updated: \(config.startHour):\(config.startMinute) - \(config.endHour):\(config.endMinute)")
     }
 
-    /// スケジュールを 1 件削除
+    /// Delete one schedule
     func removeSchedule(id: UUID) {
-        // A-6: 監視を止める前に、進行中のセッションがあれば確定させてキューに積む
+        // A-6: before stopping monitoring, if a session is in progress, finalize it and queue it
         flushActiveScheduleSession(id: id)
 
         center.stopMonitoring([Self.activityName(for: id)])
@@ -286,13 +293,13 @@ final class ScheduleManager: ObservableObject {
             isMonitoring = false
         }
 
-        // 残りのスケジュール状況に合わせてシールドを適用/解除
+        // Apply/remove the Shield to match the remaining schedules
         reconcileShieldNow()
 
         print("✅ Schedule removed (\(configs.count)/\(Self.maxSchedules) remaining)")
     }
 
-    /// スケジュールの有効/無効を切り替える (設定は残したまま監視だけ止める)
+    /// Toggle a schedule enabled/disabled (keeps the config and only stops monitoring)
     func setScheduleEnabled(id: UUID, isEnabled: Bool) {
         guard let index = configs.firstIndex(where: { $0.id == id }) else { return }
         guard configs[index].isEnabled != isEnabled else { return }
@@ -300,9 +307,9 @@ final class ScheduleManager: ObservableObject {
         configs[index].isEnabled = isEnabled
         storage.saveScheduleConfigs(configs)
 
-        // 🔴 ON に戻した = 「今すぐ遮断したい」意思表示なので、スキップを必ず捨てる。
-        //    これが無いと「今日の分を終える」→ トグルON にしても
-        //    isWithinAnySchedule が false のままで遮断が始まらない (2026-08-28 実機報告)
+        // 🔴 Turning it back ON = a signal of "I want to block right now", so always discard the skip.
+        //    Without this, even after "今日の分を終える" ("End today's session") → toggle ON,
+        //    isWithinAnySchedule stays false and blocking does not start (real device report 2026-08-28)
         if isEnabled, skippedOccurrences.removeValue(forKey: id) != nil {
             persistSkippedOccurrences()
         }
@@ -325,9 +332,9 @@ final class ScheduleManager: ObservableObject {
         print("✅ Schedule \(id) enabled=\(isEnabled)")
     }
 
-    /// 全スケジュールを削除して監視を停止 (サインアウト等の全消し用)
+    /// Delete all schedules and stop monitoring (for wiping everything, e.g. on sign-out)
     func stopMonitoring() {
-        // A-6: 監視を止める前に、進行中のセッションがあれば確定させてキューに積む
+        // A-6: before stopping monitoring, if a session is in progress, finalize it and queue it
         for config in configs {
             flushActiveScheduleSession(id: config.id)
         }
@@ -335,15 +342,15 @@ final class ScheduleManager: ObservableObject {
         let names = configs.map { Self.activityName(for: $0.id) } + [Self.legacyActivityName]
         center.stopMonitoring(names)
 
-        // タイマーを停止
+        // Stop the timer
         scheduleCheckTimer?.invalidate()
         scheduleCheckTimer = nil
 
-        // シールドを解除
+        // Remove the Shield
         store.shield.applications = nil
         store.shield.applicationCategories = nil
 
-        // 設定を削除
+        // Delete the settings
         storage.removeScheduleConfigs()
         configs = []
         isMonitoring = false
@@ -354,65 +361,69 @@ final class ScheduleManager: ObservableObject {
 
     // MARK: - Shield Reconcile
 
-    /// 定期チェックタイマーを開始
+    /// Start the periodic check timer
     private func startScheduleCheckTimer() {
-        // 既存のタイマーを停止
+        // Stop the existing timer
         scheduleCheckTimer?.invalidate()
 
-        // 15秒ごとにスケジュール状態をチェック（A-3: リコンサイル方式にしたためフラップの心配がなく、
-        // 5秒だと無駄が多いのでバッテリー配慮でこの間隔に緩めた）
+        // Check the schedule state every 15 seconds (A-3: with the reconcile approach there is no risk of
+        // flapping, and 5 seconds was wasteful, so the interval was relaxed to this for battery)
         scheduleCheckTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
             DispatchQueue.main.async {
                 self?.checkScheduleState()
             }
         }
 
-        // RunLoopに追加
+        // Add to the RunLoop
         if let timer = scheduleCheckTimer {
             RunLoop.main.add(timer, forMode: .common)
         }
 
-        // 初回チェックを即座に実行
+        // Run the first check immediately
         DispatchQueue.main.async { [weak self] in
             self?.checkScheduleState()
         }
     }
 
-    /// スケジュール状態をチェックし、必要に応じてシールドを適用/解除
+    /// Check the schedule state and apply/remove the Shield as needed
     ///
-    /// A-3: メモリ上の isShieldActive フラグとの差分ではなく、store の実状態と突き合わせる
-    /// 冪等リコンサイル。フラグ差分方式だと、コールドローンチ直後 (isShieldActive=false 初期化)
-    /// に store 側だけ前回の shield が残っているケースを検知できず放置してしまう欠陥があった。
+    /// A-3: idempotent reconcile against the actual state of the store, not a diff against the in-memory
+    /// isShieldActive flag. The flag-diff approach had a defect: right after a cold launch (isShieldActive
+    /// initialized to false), it could not detect the case where only the store still had the previous
+    /// shield, and left it as is.
     func checkScheduleState() {
         reconcileShieldNow()
     }
 
-    /// store の実状態と「いずれかの有効スケジュールが時間帯内か」を突き合わせる冪等リコンサイル
+    /// Idempotent reconcile of the store's actual state against
+    /// "is any enabled schedule inside its time window"
     private func reconcileShieldNow() {
         pruneSkippedOccurrences()
-        // C1: 課金失効が新鮮なフェッチで確定している間はスケジュール遮断を実行しない。
-        // isEnabled や OS 監視登録には触れない (ミラーが true に戻れば次のリコンサイルで自動復活)。
-        // ミラー未確定 (キー無し) はオフライン起動での誤解除を避けるため「許可」に倒す
+        // C1: while a purchase expiry is confirmed by a fresh fetch, do not run schedule blocking.
+        // Do not touch isEnabled or the OS monitoring registration (if the mirror goes back to true, the next
+        // reconcile restores it automatically).
+        // If the mirror is undetermined (no key), lean to "allowed" to avoid wrongly unblocking on an
+        // offline launch
         let desired = storage.isProBlockingEntitled() && isWithinAnySchedule()
-        // store の実状態（メモリ上のフラグではなく）を正とする
+        // Treat the actual state of the store (not the in-memory flag) as the truth
         let actuallyApplied = store.shield.applications != nil || store.shield.applicationCategories != nil
 
         if desired && !actuallyApplied {
-            // スケジュール時間内なのに store に shield がない → 適用
+            // Inside the schedule time but the store has no shield → apply
             print("⏰ Entering schedule time - Applying shield...")
             isShieldActive = applyShield()
-            // 遮断が始まった瞬間の解除方法を焼き付ける (以降ここが緩まない)
+            // Fix the unlock method at the moment blocking starts (it does not get looser after this)
             if isShieldActive { UnlockChallengeService.shared.beginSessionIfNeeded() }
             print("✅ Schedule check: Shield apply attempted (active: \(isShieldActive))")
             return
         }
 
         if !desired && actuallyApplied {
-            // スケジュール時間外なのに store に shield が残っている → 解除
+            // Outside the schedule time but a shield is still in the store → remove
             print("⏰ Leaving schedule time - Removing shield...")
             removeShield()
             isShieldActive = false
-            // タイマーが並走している場合はそちらの焼き付けを消してはいけない
+            // If a timer is running in parallel, do not erase the unlock method that one fixed
             if !TimerManager.shared.isRunning {
                 UnlockChallengeService.shared.endSession()
             }
@@ -420,44 +431,44 @@ final class ScheduleManager: ObservableObject {
             return
         }
 
-        // 一致している → 書き込みはせず、フラグだけ実状態に揃える。
-        // L3: 15秒ごとに毎回無条件代入すると値が変わっていなくても @Published が発火し、
-        // isShieldActive を observe している View を無駄に再評価させてしまうため、
-        // 実際に変化する時だけ代入するガードを挟む
+        // They match → do not write, only align the flag with the actual state.
+        // L3: assigning unconditionally every 15 seconds fires @Published even when the value has not
+        // changed, and makes views that observe isShieldActive re-evaluate for nothing, so
+        // a guard assigns only when the value actually changes
         if isShieldActive != actuallyApplied {
             isShieldActive = actuallyApplied
         }
     }
 
-    /// いずれかの有効なスケジュールが現在時間帯内か
+    /// Whether any enabled schedule is currently inside its time window
     func isWithinAnySchedule() -> Bool {
-        // 「今日の分を終える」でスキップ中の予定は遮断対象から外す。
-        // 🔴 スキップは isWithinSchedule (時間判定) には混ぜない。
-        //    あちらは Extension と同一ロジックを保つ必要があるため、上に重ねる
+        // Schedules skipped with "今日の分を終える" ("End today's session") are excluded from blocking.
+        // 🔴 Do not mix the skip into isWithinSchedule (the time check).
+        //    That one must keep the same logic as the Extension, so the skip is layered on top
         configs.contains { $0.isEnabled && isWithinSchedule(config: $0) && !isSkipped(config: $0) }
     }
 
-    // MARK: - 今日の分を終える (スキップ)
+    // MARK: - End today's session (skip)
     //
-    // 予定そのものを消さずに、今走っている回だけを終わらせる。
-    // トグルをオフにすると次回以降も止まってしまうため、この2つは別操作にする。
+    // End only the currently running occurrence without deleting the schedule itself.
+    // Turning the toggle off also stops future occurrences, so these two are separate actions.
     //
-    // 🔴 Extension とは取り合いにならない:
-    //   DeviceActivityMonitorExtension が shield に触るのは intervalDidStart /
-    //   intervalDidEnd の境界だけ。区間の途中で外すのはアプリ側の 15 秒リコンサイル
-    //   だけなので、そこがスキップを見ていれば遮断は復活しない。
+    // 🔴 No conflict with the Extension:
+    //   DeviceActivityMonitorExtension only touches the shield at the intervalDidStart /
+    //   intervalDidEnd boundaries. Only the app's 15-second reconcile removes it in the middle of an
+    //   interval, so as long as that reconcile looks at the skip, blocking does not come back.
 
-    /// スキップ中の予定 (id → スキップした時刻)。アプリ内だけの概念
+    /// Skipped schedules (id → time of the skip). A concept that exists only inside the app
     private var skippedOccurrences: [UUID: Date] = [:]
 
     private static let skippedOccurrencesKey = "schedule.skippedOccurrences"
 
-    /// 走っている回だけを終わらせる。予定は有効なまま残り、次回また動く
+    /// End only the running occurrence. The schedule stays enabled and runs again next time
     func skipCurrentOccurrence(id: UUID) {
         guard let config = configs.first(where: { $0.id == id }) else { return }
         guard isWithinSchedule(config: config) else { return }
 
-        // 統計がずれないよう、実行中セッションを先に確定させる
+        // Finalize the running session first so the stats do not drift
         flushActiveScheduleSession(id: id)
 
         skippedOccurrences[id] = Date()
@@ -466,25 +477,25 @@ final class ScheduleManager: ObservableObject {
         print("⏭️ Schedule \(id) skipped for this occurrence")
     }
 
-    /// いずれかの予定が今まさに遮断中か (スキップ済みは除く)
+    /// Whether any schedule is blocking right now (skipped ones excluded)
     var hasRunningOccurrence: Bool {
         isShieldActive && isWithinAnySchedule()
     }
 
-    /// この予定が今の回をスキップ済みか。
-    /// 区間が終われば自動的に解ける (次回の開始は妨げない)
+    /// Whether this schedule has skipped its current occurrence.
+    /// It clears automatically when the interval ends (does not prevent the next start)
     func isSkipped(config: ScheduleConfig) -> Bool {
         guard let skippedAt = skippedOccurrences[config.id] else { return false }
-        // 区間の外に出たら解除。深夜跨ぎも isWithinSchedule が面倒を見る
+        // Clear it once outside the interval. isWithinSchedule also handles crossing midnight
         guard isWithinSchedule(config: config) else { return false }
-        // 🔴 24時間に近い予定だと上の条件だけでは永久にスキップされ続けるため、
-        //    予定の長さでも上限をかける
+        // 🔴 For a schedule close to 24 hours, the condition above alone would keep it skipped forever,
+        //    so also cap it by the schedule's length
         let duration = TimeInterval(Self.durationMinutes(for: config) * 60)
         guard duration > 0 else { return false }
         return Date().timeIntervalSince(skippedAt) < duration
     }
 
-    /// 期限切れのスキップを捨てる (辞書が育ち続けないように)
+    /// Drop expired skips (so the dictionary does not keep growing)
     private func pruneSkippedOccurrences() {
         let before = skippedOccurrences.count
         skippedOccurrences = skippedOccurrences.filter { id, _ in
@@ -501,8 +512,8 @@ final class ScheduleManager: ObservableObject {
         UserDefaults.standard.set(raw, forKey: Self.skippedOccurrencesKey)
     }
 
-    /// 🔴 復元は必須。アプリを再起動したらスキップが消える作りだと、
-    ///    落として開き直すだけで遮断が復活してしまう
+    /// 🔴 Restoring is required. If skips disappeared when the app restarts,
+    ///    just killing and reopening the app would bring blocking back
     private func restoreSkippedOccurrences() {
         guard let raw = UserDefaults.standard.dictionary(forKey: Self.skippedOccurrencesKey) as? [String: Double] else { return }
         skippedOccurrences = raw.reduce(into: [UUID: Date]()) { acc, entry in
@@ -511,12 +522,13 @@ final class ScheduleManager: ObservableObject {
         }
     }
 
-    /// 現在のスケジュール時間内かどうかを確認
+    /// Check whether we are inside the current schedule time
     ///
-    /// ⚠️ この判定ロジックは DeviceActivityMonitorExtension の isWithinSchedule /
+    /// ⚠️ This check logic must be kept in sync with DeviceActivityMonitorExtension's isWithinSchedule /
     /// isIntervalStartWeekdayAllowed (DeviceActivityMonitorExtension/DeviceActivityMonitorExtension.swift)
-    /// と同期させること。片方だけ直すと深夜跨ぎスケジュールで main app と extension の判断がずれ、
-    /// 「アプリ上は時間内表示なのに OS のシールドは掛かっていない (または逆)」というフラップが再発する。
+    /// Keep them in sync. If only one side is fixed, the main app and the extension disagree on schedules
+    /// that cross midnight, and the flapping "the app shows inside the time window but the OS Shield is not
+    /// applied (or the reverse)" comes back.
     func isWithinSchedule(config: ScheduleConfig) -> Bool {
         let calendar = Calendar.current
         let now = Date()
@@ -533,13 +545,14 @@ final class ScheduleManager: ObservableObject {
         let endTime = config.endHour * 60 + config.endMinute
 
         if startTime < endTime {
-            // 同日内のスケジュール（例: 09:00 - 17:00）→ 今日の曜日で判定
+            // Schedule within the same day (e.g. 09:00 - 17:00) → check with today's weekday
             guard config.weekdays.contains(weekday) else { return false }
             return currentTime >= startTime && currentTime < endTime
         } else {
-            // 日をまたぐスケジュール（例: 22:00 - 07:00）
-            // currentTime >= startTime: 今日の夜、まだ今日の曜日のインターバル中 → 今日の曜日で判定
-            // currentTime < endTime: 日付は変わっているが、インターバルは「昨日」開始 → 昨日の曜日で判定
+            // Schedule that crosses midnight (e.g. 22:00 - 07:00)
+            // currentTime >= startTime: tonight, still in today's weekday interval → check with today's weekday
+            // currentTime < endTime: the date has changed, but the interval started "yesterday" → check with
+            // yesterday's weekday
             if currentTime >= startTime {
                 return config.weekdays.contains(weekday)
             } else if currentTime < endTime {
@@ -554,22 +567,24 @@ final class ScheduleManager: ObservableObject {
         }
     }
 
-    /// シールドを適用
-    /// ManagedSettingsStore を使用して直接シールドを設定
-    /// - Returns: 実際に shield を書き込んだら true。権限未承認・選択なしなど bail した場合は false
-    ///   （呼び元はこの戻り値で isShieldActive を設定すること。A-4: bail しても true 扱いにするバグの修正）
+    /// Apply the Shield
+    /// Set the Shield directly using ManagedSettingsStore
+    /// - Returns: true if the shield was actually written. false if it bailed (permission not approved,
+    ///   nothing selected, etc.)
+    ///   (Callers must set isShieldActive from this return value. A-4: fixes the bug that treated a bail
+    ///   as true)
     @discardableResult
     func applyShield() -> Bool {
         print("🔒 applyShield() called")
 
-        // C1: 失効確定中は書き込まない (reconcileShieldNow 以外の呼び出し経路の取りこぼし対策)
+        // C1: do not write while an expiry is confirmed (covers call paths other than reconcileShieldNow)
         guard storage.isProBlockingEntitled() else {
             print("⚠️ applyShield: Pro entitlement lapsed - Shield not applied")
             return false
         }
 
-        // Screen Time 権限が失効/未承認の場合、store に書いても enforcement されない。
-        // 「見た目だけ active」を防ぐため false で早期return（A-5）
+        // If the Screen Time permission has expired or is not approved, writing to the store is not enforced.
+        // Return false early to prevent "active only in appearance" (A-5)
         guard AuthorizationCenter.shared.authorizationStatus == .approved else {
             print("⚠️ applyShield: Family Controls not approved - Shield not applied")
             return false
@@ -590,8 +605,8 @@ final class ScheduleManager: ObservableObject {
             return false
         }
 
-        // カテゴリと個別アプリは併用可能 (和集合)。旧「カテゴリ優先」分岐は
-        // 両方選んだ時に個別アプリが遮断されない穴だった (2026-07-16 Fableレビュー)
+        // Categories and individual apps can be combined (union). The old "category first" branch
+        // was a hole where individual apps were not blocked when both were selected (2026-07-16 Fable review)
         store.shield.applications = selection.applicationTokens.isEmpty ? nil : selection.applicationTokens
         store.shield.applicationCategories = selection.categoryTokens.isEmpty ? nil : .specific(selection.categoryTokens)
         print("✅ Shield set for \(categoryCount) categories, \(appCount) applications")
@@ -600,7 +615,7 @@ final class ScheduleManager: ObservableObject {
         return true
     }
 
-    /// シールドを解除
+    /// Remove the Shield
     func removeShield() {
         store.shield.applications = nil
         store.shield.applicationCategories = nil
@@ -608,12 +623,14 @@ final class ScheduleManager: ObservableObject {
         print("✅ Shield removed")
     }
 
-    // MARK: - Session Recording (A-6: 編集/停止でのセッション取りこぼし対策)
+    // MARK: - Session Recording (A-6: prevent losing sessions on edit/stop)
 
-    /// App Group の scheduleActiveStart_<uuid> (Extension が intervalDidStart で書く開始時刻) が
-    /// 残っていれば、[start, now) を completed セッションとしてキューに積んで取りこぼしを防ぐ。
-    /// updateSchedule / removeSchedule / 無効化 の冒頭で呼ぶこと（監視を切る前に必ず確定させる）。
-    /// 旧・単一形式時代の "scheduleActiveStart" キーも移行ケアとして一緒に流す
+    /// If scheduleActiveStart_<uuid> in the App Group (the start time the Extension writes in
+    /// intervalDidStart) is still there, queue [start, now) as a completed session so it is not lost.
+    /// Call this at the start of updateSchedule / removeSchedule / disabling (always finalize before
+    /// cutting monitoring).
+    /// The "scheduleActiveStart" key from the old single-format era is also flushed along with it, as
+    /// migration care
     private func flushActiveScheduleSession(id: UUID) {
         guard let defaults = UserDefaults(suiteName: appGroupID) else { return }
 
@@ -640,9 +657,10 @@ final class ScheduleManager: ObservableObject {
     private let appGroupID = AppGroupConstants.identifier
     private let selectionKey = AppGroupConstants.Keys.scheduleSelection
 
-    /// アプリ選択の変更を反映する (全スケジュール共通)。
-    /// shield 稼働中なら store の中身も新しい選択で書き直す (リコンサイルは on/off しか見ないため、
-    /// 選択だけ変わったケースはここで明示的に再適用しないと古いアプリセットのままになる)
+    /// Apply a change to the app selection (shared by all schedules).
+    /// If the shield is active, also rewrite the store's contents with the new selection (reconcile only
+    /// looks at on/off, so when only the selection changes, it stays on the old app set unless it is
+    /// re-applied here explicitly)
     func updateSharedSelection(_ selection: FamilyActivitySelection) {
         saveSelectionToAppGroup(selection)
         if isShieldActive {
@@ -650,7 +668,8 @@ final class ScheduleManager: ObservableObject {
         }
     }
 
-    /// アプリ選択を保存 (全スケジュール共通)。UI からの選択変更を即反映するために公開している
+    /// Save the app selection (shared by all schedules). Public so that selection changes from the UI
+    /// apply immediately
     func saveSelectionToAppGroup(_ selection: FamilyActivitySelection) {
         guard let defaults = UserDefaults(suiteName: appGroupID) else { return }
 

@@ -1,21 +1,22 @@
 -- ============================================================
--- 077: user_posts.image_count の上限を 4 → 5 に緩める
+-- 077: relax the upper limit of user_posts.image_count from 4 → 5
 --
--- 理由: 公式アカウントの「走れないなら→歩け→歩けないなら→這ってでも進め→
---       とにかく前に進め」は5コマで1つの物語。4枚に削ると話が壊れ、
---       5投稿に分けると author_cap=2 とスコア順で順番が崩れて意味を成さない。
+-- Reason: the official account's "If you can't run → walk → if you can't walk → crawl if you have to →
+--       just keep moving forward" is one story in 5 frames. Cutting it to 4 images breaks the story,
+--       and splitting it into 5 posts breaks the order because of author_cap=2 and score order, so it
+--       makes no sense.
 --
--- アプリ再提出は不要:
---   FeedItem.imageUrls は (1...count) で汎用に組み立てており上限が無い。
---   FeedListCard のカルーセルも ForEach(item.imageUrls) / ページドットも
---   ForEach(0..<item.imageCount) で汎用。出荷済み 1.0.3 が5枚をそのまま描ける。
---   非表示ページは ±1 しかロードしない (M19対策) ので egress も増えない。
+-- No app resubmission needed:
+--   FeedItem.imageUrls is built generically with (1...count) and has no upper limit.
+--   FeedListCard's carousel with ForEach(item.imageUrls) / page dots with
+--   ForEach(0..<item.imageCount) are also generic. The shipped 1.0.3 can draw 5 images as is.
+--   Hidden pages load only ±1 (M19 fix), so egress does not grow either.
 --
--- 一般ユーザーへの影響なし:
---   アプリの投稿UI (PostFlowView) がクライアント側で4枚に制限しているため、
---   実ユーザーの投稿が5枚になることはない。運営が SQL で入れる時だけ効く。
+-- No effect on regular users:
+--   The app's post UI (PostFlowView) limits posts to 4 images on the client side, so
+--   real users' posts never have 5 images. It only matters when the operator inserts via SQL.
 --
--- 戻すとき (5枚投稿を先に消してから):
+-- To revert (delete the 5-image posts first):
 --   alter table public.user_posts drop constraint user_posts_image_count_range;
 --   alter table public.user_posts add constraint user_posts_image_count_range
 --     check (image_count >= 1 and image_count <= 4);

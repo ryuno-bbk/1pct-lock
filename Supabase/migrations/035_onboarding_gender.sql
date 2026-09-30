@@ -1,12 +1,14 @@
 -- ============================================================
 -- 035_onboarding_gender.sql
--- オンボ診断に性別質問を追加 (2026-07-17 ユーザー指示、生年月日の直後のステップ)
+-- Add a gender question to the onboarding diagnosis (2026-07-17 user instruction, the step right
+-- after date of birth)
 -- ============================================================
--- 選択肢は LGBTQ+ 配慮で二択にしない: male / female / nonbinary / prefer_not。
--- 「回答しない」を選んだ場合も prefer_not として保存する (NULL は未回答=旧バージョンからの
--- アップグレードや既存アカウント導線でこの質問を踏んでいないケースと区別するため)。
+-- The options are not binary, out of consideration for LGBTQ+: male / female / nonbinary /
+-- prefer_not. Choosing "prefer not to answer" is also saved as prefer_not (to distinguish it from
+-- NULL = no answer, the case where the user never saw this question, such as an upgrade from an old
+-- version or the existing account path).
 --
--- 実行順序: 026 の後ならいつでも (033/034 とは独立)。何度実行しても安全
+-- Execution order: any time after 026 (independent of 033/034). Safe to run any number of times
 -- ============================================================
 
 ALTER TABLE public.user_onboarding_profiles

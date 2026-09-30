@@ -2,20 +2,22 @@
 //  OnboardingQuiz.swift
 //  AppBlocker
 //
-//  診断オンボーディング (2026-07 v3 設計書準拠) の質問・ショック・理想の未来。
-//  設計書: 質問6問 (生年月日/立場/1日時間/依存年数/溶かしアプリ/目的) +
-//  ショック2拍 (過去の総損失 → 過去形の機会損失) + 理想の未来 (AI画像)。
+//  Questions, shock and ideal future of the diagnostic onboarding (follows the 2026-07 v3 design doc).
+//  Design doc: 6 questions (birth date / role / daily hours / years of dependence / time-draining
+//  apps / goal) + 2 shock beats (total past loss → opportunity loss in past tense) + ideal future
+//  (AI image).
 //
-//  UI原則:
-//   - 1画面1判断。単一選択は選んだ瞬間ハプティクス + 250ms 後に自動遷移 (「次へ」を置かない)
-//   - 上部 2px 進捗バー (OnboardingView 側で共通表示)
-//   - 数字は serif + tabular + カウントアップ
-//   - 完全モノクロ (AppColors)。金色不使用
+//  UI principles:
+//   - One decision per screen. Single choice: haptics the moment it is picked + auto transition after
+//     250ms (no "次へ" ("Next") button)
+//   - 2px progress bar at the top (shown in common by OnboardingView)
+//   - Numbers are serif + tabular + count-up
+//   - Fully monochrome (AppColors). No gold
 //
 
 import SwiftUI
 
-// MARK: - 回答の語彙 (raw value = 026_onboarding_profile.sql の値と一致させること)
+// MARK: - Answer vocabulary (raw value must match the values in 026_onboarding_profile.sql)
 
 enum QuizOccupation: String, CaseIterable {
     case studentHS   = "student_hs"
@@ -36,7 +38,8 @@ enum QuizOccupation: String, CaseIterable {
     }
 }
 
-/// 性別 (2026-07-17 追加、生年月日の直後)。LGBTQ+ 配慮で二択にしない +「回答しない」を必ず用意する
+/// Gender (added 2026-07-17, right after birth date). For LGBTQ+ inclusion, it is not a binary choice +
+/// "回答しない" ("Prefer not to say") is always provided
 enum QuizGender: String, CaseIterable {
     case male      = "male"
     case female    = "female"
@@ -46,10 +49,10 @@ enum QuizGender: String, CaseIterable {
     func label(_ lang: AppLanguage) -> String {
         let jp = lang == .japanese
         switch self {
-        case .male:      return jp ? "男性" : "Male" // 文言はユーザー添削待ち
-        case .female:    return jp ? "女性" : "Female" // 文言はユーザー添削待ち
-        case .nonbinary: return jp ? "ノンバイナリー・その他" : "Non-binary / other" // 文言はユーザー添削待ち
-        case .preferNot: return jp ? "回答しない" : "Prefer not to say" // 文言はユーザー添削待ち
+        case .male:      return jp ? "男性" : "Male" // Text waiting for user review
+        case .female:    return jp ? "女性" : "Female" // Text waiting for user review
+        case .nonbinary: return jp ? "ノンバイナリー・その他" : "Non-binary / other" // Text waiting for user review
+        case .preferNot: return jp ? "回答しない" : "Prefer not to say" // Text waiting for user review
         }
     }
 }
@@ -72,7 +75,7 @@ enum QuizDailyHours: String, CaseIterable {
         }
     }
 
-    /// ショック計算に使う中央値 (時間/日)
+    /// Median used for the shock calculation (hours/day)
     var medianHours: Double {
         switch self {
         case .lt2:    return 1.5
@@ -102,7 +105,7 @@ enum QuizAddictionYears: String, CaseIterable {
         }
     }
 
-    /// ショック計算に使う中央値 (年)
+    /// Median used for the shock calculation (years)
     var medianYears: Double {
         switch self {
         case .lt1:     return 0.5
@@ -114,8 +117,9 @@ enum QuizAddictionYears: String, CaseIterable {
     }
 }
 
-// QuizWastedApp (Q5 溶かしアプリ) は 2026-07 再設計で廃止。026 SQL の wasted_apps 列は
-// nullable のまま残し、push 時は常に空文字列 (= NULL) を送る (OnboardingProfileService 呼び出し側)。
+// QuizWastedApp (Q5 time-draining apps) was removed in the 2026-07 redesign. The wasted_apps column
+// from the 026 SQL stays nullable, and on push we always send an empty string (= NULL) (on the
+// OnboardingProfileService caller side).
 
 enum QuizGoal: String, CaseIterable {
     case study    = "study"
@@ -137,10 +141,10 @@ enum QuizGoal: String, CaseIterable {
         }
     }
 
-    /// 理想の未来 (AI画像) のアセット名。Assets に同名画像を置けば差し替わる
+    /// Asset name of the ideal future (AI image). Putting an image with the same name in Assets replaces it
     var idealImageName: String { "IdealFuture_\(rawValue)" }
 
-    /// 夢の宣言のプレースホルダー出し分け
+    /// Placeholder variants for the dream declaration
     func dreamPlaceholder(_ lang: AppLanguage) -> String {
         let jp = lang == .japanese
         switch self {
@@ -153,8 +157,9 @@ enum QuizGoal: String, CaseIterable {
         }
     }
 
-    /// 理想の未来のコピー (目標別)。2026-07 レビューで IdealFutureStepView の見出しは統一文言に置き換え、
-    /// 現在この関数は未使用。将来また目標別に出し分けたくなった場合のために残置
+    /// Copy for the ideal future (per goal). In the 2026-07 review the IdealFutureStepView heading was
+    /// replaced with one shared text, and this function is currently unused. Kept in case we want to vary
+    /// it per goal again in the future
     func idealCopy(_ lang: AppLanguage) -> String {
         let jp = lang == .japanese
         switch self {
@@ -168,25 +173,29 @@ enum QuizGoal: String, CaseIterable {
     }
 }
 
-// MARK: - 損失計算 (ショック2拍の燃料)
+// MARK: - Loss calculation (input for the 2 shock beats)
 
 struct QuizLossReport {
-    let totalHours: Int      // 過去の総損失 (時間)
-    let totalDays: Int       // 過去の総損失 (日) — 2026-07-13 以降 UI表示では未使用、内部保持のみ
-    let achievements: [(label: String, hours: Int)]  // 2026-07-17 ユーザー指定で買い物カゴ式 (貪欲詰め) に方針転換:
-                                                       // 「1278時間しかないのに『1万時間の技芸』が出る」のは嘘になるため、
-                                                       // ユーザーの総損失時間に収まる項目だけを重複なく積み上げて返す
-                                                       // (2026-07-13 時点の「常に同じ12件を返す」設計は廃止。詳細は greedyAchievements)
-    /// このままの1日時間を80歳まで続けた場合の追加損失を「年」換算した数字。年齢不明 or 80歳以上なら nil
+    let totalHours: Int      // Total past loss (hours)
+    let totalDays: Int       // Total past loss (days), not used in the UI since 2026-07-13, kept internally only
+    let achievements: [(label: String, hours: Int)]  // 2026-07-17: changed approach to a shopping-cart style (greedy packing) as specified by the user:
+                                                       // Showing "10,000 hours to master a craft" when "there are only 1278 hours" would be a lie, so we
+                                                       // stack up and return, without duplicates, only the items that fit in the user's total lost hours
+                                                       // (the 2026-07-13 design of "always return the same 12 items" was dropped. Details in
+                                                       // greedyAchievements)
+    /// The additional loss if the current daily hours continue until age 80, converted to "years". nil if
+    /// the age is unknown or 80 or older
     let yearsLostBy80: Int?
 
-    /// カタログ本体 (2026-07-13 新設)。研究・資格試験等の一般に流通する必要時間の代表値 (目安)。
-    /// 昇順・職業を問わず1本の共有リスト。この関数自体はフィルタしない —
-    /// 総損失時間に応じた絞り込みは呼び出し元 build() の greedyAchievements で行う (2026-07-17)
+    /// The catalog itself (added 2026-07-13). Representative values (rough guides) of the required hours
+    /// commonly cited for things like research and certification exams.
+    /// Ascending, one shared list regardless of occupation. This function itself does not filter:
+    /// narrowing by total lost hours is done in greedyAchievements in the caller build() (2026-07-17)
     static func achievementsCatalog(_ lang: AppLanguage) -> [(label: String, hours: Int)] {
         let jp = lang == .japanese
-        // 2026-07-17 ユーザー添削済み: 英語版は直訳でなく英語圏向けにローカライズする方針
-        // (東大→Oxford、「英語を」→「第二言語を」)。日本語はそのまま
+        // 2026-07-17 reviewed by the user: the English version is localized for English-speaking regions
+        // instead of a literal translation (University of Tokyo → Oxford, "English" → "a second language").
+        // Japanese stays as is
         return [
             (jp ? "フルマラソンを完走できる体" : "A marathon-ready body", 150),
             (jp ? "本を一冊書き上げる" : "Write a whole book", 300),
@@ -199,18 +208,20 @@ struct QuizLossReport {
             (jp ? "医師国家試験に合格し医者になる" : "Become a licensed doctor", 4000),
             (jp ? "司法試験に合格し法曹になる" : "Pass the bar and become a lawyer", 5000),
             (jp ? "起業し事業を軌道に乗せる" : "Start a business and get it off the ground", 6000)
-            // 「一つの技芸を世界レベルに極める (1万時間)」は 2026-07-17 ユーザーFBで削除
-            // (ヒーロー型の主役として弱い。これにより大時間ユーザーの主役は「起業」になる)
+            // "Master one craft to world level (10,000 hours)" was removed on 2026-07-17 per user feedback
+            // (weak as the hero item. As a result, the hero item for users with many hours becomes "starting a
+            // business")
         ]
     }
 
-    /// 総損失時間 (totalHours) に収まる項目だけを、時間の大きい順に貪欲に詰める
-    /// (2026-07-17 ユーザー指定・買い物カゴ式)。
-    /// 例: 1278h → プログラミング1000h採用 (残278h) → マラソン150h採用 (残128h) → 打ち切り = 2件。
-    /// 表示順はそのまま時間の大きい順 (詰めた順)。
-    /// 総損失が最小項目 (150h) 未満で1件も採用できない場合のみ、最小の1件にフォールバックする。
-    /// 実際には診断の最小回答 (1日2時間未満 × 依存1年未満、13歳未満クランプ) でも総損失は約274hになるため、
-    /// このフォールバックが実運用で発火することはない
+    /// Greedily pack only the items that fit in the total lost hours (totalHours), largest hours first
+    /// (2026-07-17 user-specified, shopping-cart style).
+    /// Example: 1278h → take programming 1000h (278h left) → take marathon 150h (128h left) → stop = 2 items.
+    /// Display order is the same, largest hours first (the packing order).
+    /// Only when the total loss is below the smallest item (150h) and nothing can be taken, fall back to
+    /// the one smallest item.
+    /// In practice, even the smallest diagnostic answers (under 2 hours a day × under 1 year of dependence,
+    /// under-13 clamp) give a total loss of about 274h, so this fallback never fires in real use
     private static func greedyAchievements(totalHours: Int, lang: AppLanguage) -> [(label: String, hours: Int)] {
         let sortedDesc = achievementsCatalog(lang).sorted { $0.hours > $1.hours }
         var remaining = totalHours
@@ -225,7 +236,8 @@ struct QuizLossReport {
         return picked
     }
 
-    /// 依存年数は (年齢 - 13) 年でクランプ (13歳からスマホを持った仮定より前に遡らせない = 誇張しない)
+    /// Years of dependence are clamped to (age - 13) years (do not go back before the assumption that they
+    /// got a smartphone at 13 = do not exaggerate)
     static func build(
         hours: QuizDailyHours,
         years: QuizAddictionYears,
@@ -241,7 +253,8 @@ struct QuizLossReport {
         let totalHours = Int((hours.medianHours * 365 * effectiveYears).rounded())
         let totalDays = max(Int((Double(totalHours) / 24).rounded()), 1)
 
-        // 80歳までこのペースを続けた場合の追加消費時間を「年」に換算 (24時間×365日 = 1年分の時間で割る)
+        // Convert the extra time consumed if this pace continues until age 80 into "years" (divide by
+        // 24 hours × 365 days = one year of time)
         let yearsLostBy80: Int? = {
             guard let age, age < 80 else { return nil }
             let remainingYears = Double(80 - age)
@@ -258,14 +271,14 @@ struct QuizLossReport {
     }
 }
 
-// MARK: - 共通部品
+// MARK: - Shared parts
 
 enum QuizHaptics {
     static func light()  { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
     static func medium() { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
 }
 
-/// 質問見出し (serif) + 補足
+/// Question heading (serif) + note
 struct QuizQuestionHeader: View {
     let question: String
     var hint: String? = nil
@@ -289,14 +302,15 @@ struct QuizQuestionHeader: View {
     }
 }
 
-/// 単一選択の行。タップでハプティクス + 選択表示 → 250ms 後に onPick (自動遷移)
+/// Single-choice row. On tap: haptics + selected state → onPick after 250ms (auto transition)
 struct QuizOptionRow: View {
     let label: String
     let isSelected: Bool
-    /// 行頭のブランドアイコン (Assets のアセット名)。流入元質問で本物のアプリアイコンを出す用
-    /// (2026-07-17 ユーザー指定「ネイティブのちゃんとしたアイコン」)。nil なら従来のテキストのみ
+    /// Brand icon at the start of the row (asset name in Assets). Used to show real app icons in the
+    /// referral source question (2026-07-17 user request: "proper native icons"). If nil, text only as
+    /// before
     var iconAsset: String? = nil
-    /// iconAsset が nil の時の代替 SF Symbol (友達・その他など、ブランドアイコンが無い選択肢用)
+    /// Fallback SF Symbol when iconAsset is nil (for options with no brand icon, such as friends or other)
     var iconSystemName: String? = nil
     let onPick: () -> Void
 
@@ -307,7 +321,7 @@ struct QuizOptionRow: View {
         } label: {
             HStack(spacing: 12) {
                 if let iconAsset {
-                    // 実アプリアイコンはホーム画面と同じ角丸スクワークル風に切る
+                    // Clip real app icons into the same rounded squircle-like shape as on the home screen
                     Image(iconAsset)
                         .resizable()
                         .scaledToFill()
@@ -340,7 +354,7 @@ struct QuizOptionRow: View {
     }
 }
 
-/// 複数選択のチップ
+/// Multi-select chip
 struct QuizChipToggle: View {
     let label: String
     let isSelected: Bool
@@ -363,14 +377,16 @@ struct QuizChipToggle: View {
     }
 }
 
-/// serif + tabular のカウントアップ数字 (ショック第1拍)
+/// Count-up number in serif + tabular (shock beat 1)
 struct CountUpNumber: View {
     let target: Int
     var duration: Double = 1.6
     var fontSize: CGFloat = 68
-    /// 指定時はこの色列の縦グラデーションで数字を描く (未指定なら textPrimary のモノクロ)。
-    /// 2026-07-13 レビュー修正: ショック第1拍の暖色グラデーション運用は廃止し完全モノクロに統一。
-    /// 現在オンボーディング内での呼び出し元は全て未指定 (nil) で、このパラメータ自体は将来の再利用のために残置
+    /// When set, the number is drawn with a vertical gradient of these colors (if not set, monochrome
+    /// textPrimary).
+    /// 2026-07-13 review fix: dropped the warm-color gradient for shock beat 1 and unified to fully
+    /// monochrome. Currently every caller in onboarding leaves it unset (nil); the parameter itself is kept
+    /// for future reuse
     var gradientColors: [Color]? = nil
     var onFinished: (() -> Void)? = nil
 
@@ -407,7 +423,7 @@ struct CountUpNumber: View {
         .onAppear {
             if startDate == nil {
                 if UIAccessibility.isReduceMotionEnabled {
-                    startDate = Date.distantPast   // 即座に確定値
+                    startDate = Date.distantPast   // Final value immediately
                 } else {
                     startDate = Date()
                 }
@@ -416,10 +432,10 @@ struct CountUpNumber: View {
     }
 }
 
-// MARK: - Q1 生年月日
+// MARK: - Q1 Birth date
 
 struct QuizBirthDateStepView: View {
-    /// "yyyy-MM-dd" で保存 (@AppStorage)
+    /// Saved as "yyyy-MM-dd" (@AppStorage)
     @Binding var birthDateRaw: String
     let onContinue: () -> Void
 
@@ -497,7 +513,7 @@ struct QuizBirthDateStepView: View {
         }
     }
 
-    /// 13歳未満ゲート (App Store 13+ レーティング準拠)。データは保存しない
+    /// Under-13 gate (complies with the App Store 13+ rating). No data is saved
     private var blockedView: some View {
         VStack(spacing: 20) {
             Spacer()
@@ -533,25 +549,28 @@ struct QuizBirthDateStepView: View {
     }
 }
 
-// MARK: - Q2 立場 / Q3 時間 / Q4 依存年数 (単一選択・自動遷移の共通形)
+// MARK: - Q2 role / Q3 hours / Q4 years of dependence (shared form: single choice, auto transition)
 
 struct QuizSingleChoiceStepView<Option: RawRepresentable & CaseIterable & Hashable>: View where Option.RawValue == String, Option.AllCases: RandomAccessCollection {
     let question: String
-    /// 2026-07 レビュー: 単一選択画面の補足文言 (「設定でスクリーンタイムを確認できます」「だいたいで構いません」等) は
-    /// 全廃し、質問+選択肢のみにすると決定。呼び出し元 (OnboardingView.swift) の `hint:` 引数はそのまま残すが
-    /// 本画面では描画しない (呼び出し元を書き換えずに互換を保つためのパラメータ)
+    /// 2026-07 review: decided to remove all notes on single-choice screens
+    /// ("設定でスクリーンタイムを確認できます" ("You can check Screen Time in Settings"),
+    /// "だいたいで構いません" ("A rough answer is fine") etc.) and show only the question + options.
+    /// The caller's (OnboardingView.swift) `hint:` argument stays, but this screen does not draw it
+    /// (a parameter kept for compatibility, so the caller does not need to be rewritten)
     var hint: String? = nil
     let labelProvider: (Option) -> String
-    /// 行頭アイコン (任意)。流入元質問のブランドアイコン用 (2026-07-17)
+    /// Icon at the start of the row (optional). For brand icons in the referral source question (2026-07-17)
     var iconAssetProvider: ((Option) -> String?)? = nil
     var iconSystemNameProvider: ((Option) -> String?)? = nil
     @Binding var selectionRaw: String
     let onContinue: () -> Void
 
-    // H10 (2026-07-20 監査): 二重タップ/250ms以内の選び直しで遅延クロージャが複数積まれると
-    // onContinue (= advance) が多重発火し、ステップを1つ飛ばす。選び直し自体 (selectionRaw の
-    // 更新) は250ms以内でも許可したまま、onContinue の発火だけを1回に制限する。
-    // .id(step) で毎ステップこの View 自体が作り直されるため、次のステップでは自然に false へ戻る
+    // H10 (2026-07-20 audit): on a double tap / re-pick within 250ms, several delayed closures pile up,
+    // onContinue (= advance) fires more than once, and a step is skipped. Re-picking itself (updating
+    // selectionRaw) is still allowed within 250ms; only the firing of onContinue is limited to once.
+    // This View itself is recreated on every step by .id(step), so it naturally goes back to false on the
+    // next step
     @State private var advanced = false
 
     var body: some View {
@@ -569,7 +588,7 @@ struct QuizSingleChoiceStepView<Option: RawRepresentable & CaseIterable & Hashab
                         iconSystemName: iconSystemNameProvider?(option)
                     ) {
                         selectionRaw = option.rawValue
-                        // 選択の白反転を見せてから自動遷移 (1画面1判断、「次へ」は置かない)
+                        // Show the white inverted selection, then auto transition (one decision per screen, no "次へ" ("Next"))
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                             guard !advanced else { return }
                             advanced = true
@@ -586,26 +605,31 @@ struct QuizSingleChoiceStepView<Option: RawRepresentable & CaseIterable & Hashab
     }
 }
 
-// Q5 (溶かしアプリ、QuizWastedAppsStepView / FlowChips) は 2026-07 再設計で廃止。
+// Q5 (time-draining apps, QuizWastedAppsStepView / FlowChips) was removed in the 2026-07 redesign.
 
-// MARK: - ◆ ショック: 80歳投影 (2026-07-17 再設計で一本化)
+// MARK: - ◆ Shock: projection to age 80 (unified into one in the 2026-07-17 redesign)
 //
-// 旧構成 (過去の総損失 = 1日時間 × 依存年数) は「昔から今の時間使ってたわけではない」という
-// 数学的な無理くりをユーザー自身が指摘し廃止。依存年数の質問・「できていたこと」ページごと
-// フローから外し、正直な計算だけで立つ80歳投影 (今のペース × 残り年数) に一本化した
+// The old setup (total past loss = daily hours × years of dependence) was dropped after the user
+// themself pointed out its mathematical stretch: "I did not always spend this much time in the past".
+// The years-of-dependence question and the whole "what you could have done" page were taken out of
+// the flow, and it was unified into the projection to age 80 (current pace × remaining years), which
+// stands on honest math only
 
 struct ShockLossStepView: View {
     let report: QuizLossReport
-    // 旧・計算内訳表示の名残。呼び出し元の init シグネチャ互換のためプロパティのみ残置
+    // Leftover from the old calculation breakdown display. Only the property is kept for compatibility
+    // with the caller's init signature
     let hoursLabel: String
-    /// 換算根拠に出す「1日◯時間」ラベル (例: "6〜8時間")。nil なら根拠行は非表示
+    /// "◯ hours a day" label shown as the basis of the conversion (e.g. "6〜8時間" ("6-8 hours")). If nil,
+    /// the basis line is hidden
     var dailyPaceLabel: String? = nil
     let onContinue: () -> Void
-    /// L17 (2026-07-20 監査): 80歳以上は yearsLostBy80 が nil になり、onAppear で即座に
-    /// スキップする。旧実装は方向を問わず onContinue (前進) しか呼ばなかったため、recovery から
-    /// 「戻る」で本画面に戻ってきた瞬間また前進スキップが発火し、実質「戻れない」詰みになっていた。
-    /// 呼び出し元 (OnboardingView) が「戻る」経由での再訪と判断した場合はこちらを呼び、
-    /// 1つ前のステップへ後退させる。未指定 (nil) の場合は従来どおり onContinue にフォールバック
+    /// L17 (2026-07-20 audit): for age 80 or older, yearsLostBy80 becomes nil and onAppear skips
+    /// immediately. The old implementation called only onContinue (forward) regardless of direction, so the
+    /// moment the user came back to this screen from recovery with "back", the forward skip fired again,
+    /// and in effect the user was stuck and "could not go back".
+    /// When the caller (OnboardingView) decides that this is a revisit via "back", it calls this, and we
+    /// move back to the previous step. If not set (nil), it falls back to onContinue as before
     var onAutoSkipBack: (() -> Void)? = nil
 
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
@@ -619,8 +643,9 @@ struct ShockLossStepView: View {
             Spacer()
 
             if let years = report.yearsLostBy80 {
-                // 文言は承認済みの1文「このままだと80歳までに◯年分無駄にすることになります」を
-                // 見出し / 大数字 / 結びに分解して配置しただけ (新規コピーの発明はしない)
+                // The text is only the approved sentence "このままだと80歳までに◯年分無駄にすることになります"
+                // ("At this pace, you will waste ◯ years by age 80") split into heading / big number / closing
+                // (no new copy is invented)
                 Text(lang == .japanese ? "このままだと80歳までに" : "At this pace, you'll waste")
                     .font(.system(size: 19, weight: .semibold))
                     .foregroundColor(AppColors.textPrimary)
@@ -646,7 +671,7 @@ struct ShockLossStepView: View {
                     .padding(.top, 16)
                     .opacity(showTail ? 1 : 0)
 
-                // 換算根拠 (この数字は「1日◯時間 × 80歳までの残り年数」)。// 文言はユーザー添削待ち
+                // Basis of the conversion (this number is "◯ hours a day × years left until age 80"). // Text waiting for user review
                 if let pace = dailyPaceLabel {
                     Text(lang == .japanese
                          ? "1日\(pace)のペースで換算"
@@ -669,9 +694,10 @@ struct ShockLossStepView: View {
         }
         .padding(.horizontal, 24)
         .onAppear {
-            // 生年月日が読めず投影が出せない場合 (≒80歳以上で余命年数が算出できない場合含む)
-            // このページに用が無いので即スキップ (birthDate は必須ステップなので実運用では
-            // ほぼ到達しない防御)。「戻る」で再訪した場合は前進ではなく後退させる (L17)
+            // If the birth date cannot be read and no projection can be made (roughly including age 80+ where the
+            // remaining years cannot be computed), this page has no purpose, so skip it immediately (birthDate is
+            // a required step, so this is a defense that is almost never reached in real use). On a revisit via
+            // "back", move back instead of forward (L17)
             if report.yearsLostBy80 == nil {
                 if let skipBack = onAutoSkipBack {
                     skipBack()
@@ -683,11 +709,12 @@ struct ShockLossStepView: View {
     }
 }
 
-// MARK: - ◆ (フロー除外・残置) 過去形の機会損失 (買い物カゴ式)
+// MARK: - ◆ (Removed from the flow, kept) Opportunity loss in past tense (shopping-cart style)
 //
-// 2026-07-17 ユーザー承認でフローから除外 (依存年数質問の廃止に伴い、前提の「過去の総損失」が
-// 計算不能になったため)。復活の可能性を考慮して View とカタログはコードごと残置している。
-// 復活させる場合は OnboardingStep に shockAchievements を戻し switch に配線するだけ
+// Removed from the flow with user approval on 2026-07-17 (with the years-of-dependence question gone,
+// the premise "total past loss" can no longer be computed). The View and the catalog are kept in code
+// in case they come back.
+// To bring it back, just put shockAchievements back into OnboardingStep and wire it in the switch
 
 struct ShockAchievementsStepView: View {
     let report: QuizLossReport
@@ -703,18 +730,22 @@ struct ShockAchievementsStepView: View {
         VStack(alignment: .leading, spacing: 0) {
             Spacer().frame(height: 64)
 
-            // 2026-07-13 レビュー修正: 見出しは ShockLoss と単位を揃えて「時間」のみ (日換算は撤去)
+            // 2026-07-13 review fix: the heading uses only "hours", to match the unit of ShockLoss (the day
+            // conversion was removed)
             QuizQuestionHeader(
-                // 2026-07-17 英語をユーザー依頼で整文 (旧 "◯ hours — of what you could have done" は文として不自然)
+                // 2026-07-17: English rewritten at the user's request (the old "◯ hours - of what you could have done"
+                // was not natural as a sentence)
                 question: lang == .japanese
                     ? "\(report.totalHours.formatted())時間で\nできていたこと"
                     : "What you could have done\nwith \(report.totalHours.formatted()) hours",
                 hint: lang == .japanese ? "一般的な必要時間の目安で換算" : "Based on commonly cited time estimates"
             )
 
-            // 2026-07-17 ヒーロー型に刷新 (ユーザーFB: 貪欲詰め化で項目が減り、ピルの羅列だと寂しい)。
-            // 最大の達成1件を大型タイポで主役に、残りは「さらに —」以下に小さく列挙。
-            // report.achievements は greedyAchievements が大きい順に絞り込み済み (先頭 = 主役)
+            // 2026-07-17: renewed to a hero layout (user feedback: greedy packing reduced the number of items, and
+            // a row of pills looked sparse).
+            // The single largest achievement is the hero in large type, and the rest are listed small under the
+            // "さらに" ("And still") line.
+            // report.achievements is already narrowed down by greedyAchievements, largest first (first = hero)
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
                     if let hero = report.achievements.first {
@@ -724,7 +755,7 @@ struct ShockAchievementsStepView: View {
                             .lineSpacing(6)
                             .fixedSize(horizontal: false, vertical: true)
 
-                        // 大数字は金ではなくオフホワイト (金は達成/上位%系限定のブランドルール)
+                        // The big number is off-white, not gold (brand rule: gold is only for achievements / top percentile)
                         HStack(alignment: .lastTextBaseline, spacing: 6) {
                             Rectangle()
                                 .fill(AppColors.textTertiary.opacity(0.5))
@@ -741,7 +772,7 @@ struct ShockAchievementsStepView: View {
 
                     let rest = Array(report.achievements.dropFirst())
                     if !rest.isEmpty {
-                        // 文言はユーザー添削待ち
+                        // Text waiting for user review
                         Text(lang == .japanese ? "さらに —" : "And still —")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundColor(AppColors.textTertiary)
@@ -767,7 +798,7 @@ struct ShockAchievementsStepView: View {
                                     RoundedRectangle(cornerRadius: 12)
                                         .fill(AppColors.cardBackground)
                                 )
-                                // 主役 (revealedCount 1つ目) の後に1件ずつ
+                                // One by one after the hero (the first of revealedCount)
                                 .opacity(idx + 1 < revealedCount ? 1 : 0)
                                 .offset(y: idx + 1 < revealedCount ? 0 : 8)
                             }
@@ -779,7 +810,7 @@ struct ShockAchievementsStepView: View {
                 .padding(.horizontal, 28)
                 .padding(.top, 26)
                 .padding(.bottom, 12)
-                // ヒーロー本体はフェード+わずかな沈み込みで登場
+                // The hero itself appears with a fade + a slight sink
                 .opacity(revealedCount > 0 ? 1 : 0)
                 .offset(y: revealedCount > 0 ? 0 : 10)
             }
@@ -795,7 +826,8 @@ struct ShockAchievementsStepView: View {
         .onAppear { revealSequentially() }
     }
 
-    /// 時間の表示形式。10000時間ちょうどは「1万時間」と表記 (それ以外は素直に「◯時間」)
+    /// Time display format. Exactly 10000 hours is written as "1万時間" ("10,000 hours") (anything else is
+    /// plainly "◯時間" ("◯ hours"))
     private func hoursDisplay(_ hours: Int) -> String {
         let jp = lang == .japanese
         if jp && hours == 10000 {
@@ -804,7 +836,7 @@ struct ShockAchievementsStepView: View {
         return jp ? "\(hours.formatted())時間" : "\(hours.formatted())h"
     }
 
-    /// 行を 160ms 間隔で1本ずつ (行ごとにハプティクス light)。12項目でもテンポよく出し切る
+    /// Rows one at a time at 160ms intervals (light haptics per row). Even 12 items come out at a good tempo
     private func revealSequentially() {
         guard revealedCount == 0 else { return }
         if UIAccessibility.isReduceMotionEnabled {
@@ -812,7 +844,7 @@ struct ShockAchievementsStepView: View {
             showCTA = true
             return
         }
-        // 主役 (ヒーロー) を1拍見せてから「さらに —」以下を 160ms 間隔で
+        // Show the hero for one beat, then the items under "さらに" ("And still") at 160ms intervals
         for i in 0..<report.achievements.count {
             let delay = i == 0 ? 0.3 : 0.85 + Double(i - 1) * 0.16
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
@@ -827,7 +859,7 @@ struct ShockAchievementsStepView: View {
     }
 }
 
-// MARK: - ◆ Recovery (ショックの直後、糾弾で終わらせない軽い1画面)
+// MARK: - ◆ Recovery (a light single screen right after the shock, so it does not end on blame)
 
 struct RecoveryStepView: View {
     let onContinue: () -> Void
@@ -839,7 +871,7 @@ struct RecoveryStepView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            // 2026-07-17 ユーザー添削済み (「覚悟」を問う形に変更)
+            // Reviewed by the user on 2026-07-17 (changed to a form that asks about the user's "resolve")
             Text(lang == .japanese
                  ? "ここまでが現状です。人生を変える覚悟はできていますか？"
                  : "That's where you stand today. Are you ready to change your life?")
@@ -859,7 +891,7 @@ struct RecoveryStepView: View {
     }
 }
 
-// MARK: - ◆ 理想の未来 (AI生成画像、Q6連動)
+// MARK: - ◆ Ideal future (AI-generated image, linked to Q6)
 
 struct IdealFutureStepView: View {
     let goal: QuizGoal
@@ -872,14 +904,16 @@ struct IdealFutureStepView: View {
 
     var body: some View {
         ZStack {
-            // 全画面写真 → 真っ黒背景 + 角丸カードの斜め重ねデッキに変更 (2026-07-17 ユーザー指定)
+            // Changed from a full-screen photo → black background + a deck of rounded cards stacked at an angle
+            // (2026-07-17, user-specified)
             AppColors.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                // OnboardingTopNav (戻る+進捗バー) を避ける余白
+                // Space to avoid OnboardingTopNav (back + progress bar)
                 Spacer().frame(height: 84)
 
-                // 2026-07-17 ユーザー添削済み (「もし継続できれば」の条件を頭に追加)。目標別の idealCopy() は不採用、温存
+                // Reviewed by the user on 2026-07-17 (added the condition "もし継続できれば" ("If you can keep it up")
+                // at the start). The per-goal idealCopy() is not used, kept for later
                 Text(lang == .japanese
                      ? "もし継続できれば1年後\nあなたは理想の姿になっている"
                      : "Stay the course, and in one year\nyou'll be the person you set out to become.")
@@ -904,7 +938,7 @@ struct IdealFutureStepView: View {
                     .opacity(appeared ? 1 : 0)
                     .animation(.easeOut(duration: 0.6).delay(0.8), value: appeared)
 
-                // 2026-07 レビューで「宣言する」系の煽りコピーを撤去し、プレーンな遷移ボタンに変更
+                // In the 2026-07 review, pushy "Declare"-style copy was removed and this became a plain transition button
                 PrimaryButton(lang == .japanese ? "次へ" : "Next") {
                     onContinue()
                 }
@@ -919,40 +953,45 @@ struct IdealFutureStepView: View {
     }
 }
 
-/// 理想の未来で流す「夢の写真」デッキ (Assets/OnboardingDream、2026-07-17 ユーザー支給の11枚)。
-/// 順序は 体 → 仕事 → 品 → 自由 → つながり の弧を描く。
-/// 素材差し替えは同名 imageset の中身を差し替えるだけ (画像が無い名前は自動で skip される)
+/// Deck of "dream photos" shown in the ideal future (Assets/OnboardingDream, 11 images provided by the
+/// user on 2026-07-17).
+/// The order follows the arc body → work → refinement → freedom → connection.
+/// To replace material, just replace the contents of the imageset with the same name (names with no
+/// image are skipped automatically)
 enum OnboardingDreamAssets {
     static let deck: [String] = [
-        "dream-body-male",         // 鏡越しの腹筋 (理想の体) — 体系が先頭 (2026-07-17 ユーザー確定)
-        "dream-body-female",       // ジムウェアの鏡越し (理想の体)
-        "dream-cabin-work",        // 森のキャビンでノートPC+珈琲 (自由な働き方)
-        "dream-watch-wrist",       // 腕時計と珈琲 (品)
-        "dream-watch-collection",  // 時計コレクション (品)
-        "dream-dinner-toast",      // 夜景のディナーで乾杯 (つながり) — パートナー系は車の直前 (2026-07-17 ユーザー指定)
-        "dream-sunset-couple",     // 夕陽を見る二人 (つながり)
-        "dream-car-drive",         // 車の運転席 (成功)
-        "dream-yacht-reading",     // 船上の読書 (自由)
-        "dream-santorini-coffee",  // サントリーニの朝 (旅)
-        "dream-paris-night"        // 夜のパリ (旅)
+        "dream-body-male",         // Abs seen in a mirror (ideal body). Body images go first (2026-07-17, confirmed by the user)
+        "dream-body-female",       // Gym wear seen in a mirror (ideal body)
+        "dream-cabin-work",        // Laptop + coffee in a forest cabin (free way of working)
+        "dream-watch-wrist",       // Wristwatch and coffee (refinement)
+        "dream-watch-collection",  // Watch collection (refinement)
+        "dream-dinner-toast",      // Toast at a dinner with a night view (connection). Partner images go right before the car (2026-07-17, user-specified)
+        "dream-sunset-couple",     // Two people watching the sunset (connection)
+        "dream-car-drive",         // Driver's seat of a car (success)
+        "dream-yacht-reading",     // Reading on a boat (freedom)
+        "dream-santorini-coffee",  // Morning in Santorini (travel)
+        "dream-paris-night"        // Paris at night (travel)
     ]
 }
 
-/// 夢の写真デッキ (2026-07-17 ユーザー指定で全画面背景 → 角丸カードの斜め重ねに変更)。
-/// 角丸カードが少し斜めに重なって積まれ、一定間隔で前面カードが左へ抜け、
-/// 1つ後ろのカードがそのまま前面へ立ち上がってくる。
-/// Assets に "IdealFuture_{goal}" を置けばその目標別画像がデッキの先頭に来る。
-/// 画像が1枚も無ければ目標別グラデーションのカード1枚でフォールバック (アセット未投入でも出荷可能)
+/// Dream photo deck (changed on 2026-07-17, user-specified, from a full-screen background → rounded
+/// cards stacked at an angle).
+/// Rounded cards are stacked slightly tilted; at a fixed interval the front card leaves to the left,
+/// and the card one behind rises up to the front as is.
+/// If you put "IdealFuture_{goal}" in Assets, that goal's image comes first in the deck.
+/// If there is no image at all, it falls back to one card with a per-goal gradient (can ship even with
+/// no assets added)
 struct DreamCardDeck: View {
     let goal: QuizGoal
 
-    /// 実在するアセットだけのデッキ。body 評価のたびに UIImage(named:) を叩かないよう init で1回だけ解決する
+    /// Deck of existing assets only. Resolved once in init so UIImage(named:) is not called on every body
+    /// evaluation
     private let deck: [String]
 
     @State private var index = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// 次の1枚に移るまでの表示時間
+    /// Display time before moving to the next card
     private let holdSeconds: UInt64 = 1_600_000_000
 
     init(goal: QuizGoal) {
@@ -961,8 +1000,9 @@ struct DreamCardDeck: View {
         self.deck = goalLead + OnboardingDreamAssets.deck.filter { UIImage(named: $0) != nil }
     }
 
-    /// デッキの1枚。identity は画像名 — index が進むと同じ画像のカードが
-    /// slot 1 → slot 0 へ移動し、「後ろのカードが前へ立ち上がる」アニメとして繋がる
+    /// One card of the deck. Its identity is the image name: when the index advances, the card with the
+    /// same image moves from slot 1 → slot 0, which connects into the "back card rises to the front"
+    /// animation
     private struct DeckEntry: Identifiable {
         let name: String
         let slot: Int
@@ -972,13 +1012,13 @@ struct DreamCardDeck: View {
     var body: some View {
         GeometryReader { geo in
             let cardWidth = min(geo.size.width * 0.64, 270)
-            let cardHeight = cardWidth * 1.5   // 素材は 1024x1536 (2:3)
+            let cardHeight = cardWidth * 1.5   // Source images are 1024x1536 (2:3)
 
             ZStack {
                 if deck.isEmpty {
                     card(fill: fallbackGradient, width: cardWidth, height: cardHeight)
                 } else {
-                    // 背面 → 前面の順に描く
+                    // Draw in back → front order
                     ForEach(visibleCards().reversed()) { entry in
                         card(
                             fill: Image(entry.name).resizable().scaledToFill(),
@@ -989,7 +1029,8 @@ struct DreamCardDeck: View {
                         .offset(x: xOffset(slot: entry.slot), y: CGFloat(entry.slot) * 10)
                         .opacity(entry.slot == 2 ? 0.65 : 1)
                         .zIndex(Double(3 - entry.slot))
-                        // 前面カードは左下へ抜けながら消え、新しい背面カードはフェードで積まれる
+                        // The front card disappears while leaving toward the bottom left, and the new back card is stacked
+                        // with a fade
                         .transition(.asymmetric(
                             insertion: .opacity,
                             removal: .offset(x: -cardWidth * 0.55, y: 26).combined(with: .opacity)
@@ -1003,13 +1044,13 @@ struct DreamCardDeck: View {
         .task { await flipThroughDeck() }
     }
 
-    /// 前面から最大3枚 (slot 0 = 前面 / 1 = 中 / 2 = 背面)
+    /// Up to 3 cards from the front (slot 0 = front / 1 = middle / 2 = back)
     private func visibleCards() -> [DeckEntry] {
         let visible = min(3, deck.count)
         return (0..<visible).map { DeckEntry(name: deck[(index + $0) % deck.count], slot: $0) }
     }
 
-    /// カードの傾き。前面もわずかに斜め (きっちり水平だと「重なってる感」が消える)
+    /// Card tilt. The front card is also slightly tilted (if it is perfectly level, the stacked look is lost)
     private func rotationDegrees(slot: Int) -> Double {
         switch slot {
         case 0:  return -2
@@ -1037,8 +1078,8 @@ struct DreamCardDeck: View {
             .shadow(color: .black.opacity(0.45), radius: 18, y: 10)
     }
 
-    /// 1枚目は即時表示。2枚目以降だけを一定間隔でめくる。
-    /// .task なので画面を離れると自動でキャンセルされる
+    /// The first card is shown immediately. Only the 2nd and later cards are flipped at a fixed interval.
+    /// It is a .task, so it is canceled automatically when leaving the screen
     private func flipThroughDeck() async {
         guard !reduceMotion, deck.count > 1 else { return }
         while !Task.isCancelled {

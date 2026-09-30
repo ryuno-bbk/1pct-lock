@@ -2,82 +2,85 @@
 //  AppColors.swift
 //  AppBlocker
 //
-//  アプリ全体のカラーパレット
+//  Color palette for the whole app
 //
 
 import SwiftUI
 
-/// アプリのカラーテーマ
+/// App color theme
 enum AppColors {
 
     // MARK: - Primary Colors
 
-    /// メインブランドカラー
+    /// Main brand color
     static let primary = Color("Primary", bundle: nil)
-    static let primaryFallback = Color(hex: "F2EFE7") // 反転CTA用のオフホワイト（旧: インディゴ）
+    static let primaryFallback = Color(hex: "F2EFE7") // Off-white for inverted CTAs (old: indigo)
 
-    /// アクセントカラー（モノクロ化。金 (gold) にはしない）
-    static let accent = Color(hex: "F2EFE7") // 旧: パープル
+    /// Accent color (made monochrome. Not gold)
+    static let accent = Color(hex: "F2EFE7") // Old: purple
 
     // MARK: - Background Colors
 
-    /// メイン背景（真っ黒。BeReal 準拠でアプリ全体を純黒に統一。2026-07-10 ユーザー指定）
+    /// Main background (pure black. The whole app is unified to pure black, following BeReal. User-specified
+    /// 2026-07-10)
     static let background = Color(hex: "000000")
 
-    /// カード背景
+    /// Card background
     static let cardBackground = Color(hex: "17171B")
 
-    /// セカンダリ背景
+    /// Secondary background
     static let secondaryBackground = Color(hex: "2A2A30")
 
     // MARK: - Text Colors
 
-    /// プライマリテキスト
+    /// Primary text
     static let textPrimary = Color(hex: "F2EFE7")
 
-    /// セカンダリテキスト
+    /// Secondary text
     static let textSecondary = Color(hex: "97928A")
 
-    /// 弱調テキスト
+    /// Low-emphasis text
     static let textTertiary = Color(hex: "6E6A63")
 
     // MARK: - Semantic Colors
 
-    /// 成功
+    /// Success
     static let success = Color(hex: "22C55E")
 
-    /// 警告
+    /// Warning
     static let warning = Color(hex: "F59E0B")
 
-    /// エラー
+    /// Error
     static let error = Color(hex: "EF4444")
 
     // MARK: - Mode Colors
     //
-    // モノクロブランドのため 3 モードとも同一のダークニュートラル。
-    // モードの区別は SF Symbol とラベル文言が担う（色では区別しない）。
+    // The brand is monochrome, so all 3 modes use the same dark neutral.
+    // Modes are told apart by the SF Symbol and the label text (not by color).
 
-    /// タイマーブロックモード
+    /// Timer block mode
     static let modeTimer = Color(hex: "2E2E33")
 
-    /// スケジュールモード
+    /// Schedule mode
     static let modeSchedule = Color(hex: "2E2E33")
 
-    /// 位置情報ロックモード
+    /// Location lock mode
     static let modeLocation = Color(hex: "2E2E33")
 
     // MARK: - Shield Colors
 
-    /// Shield背景（純黒）
+    /// Shield background (pure black)
     static let shieldBlack = Color.black
 
-    /// Shield背景（ダーク）
+    /// Shield background (dark)
     static let shieldDark = Color(hex: "111111")
 
-    // MARK: - Gold (専用・限定使用)
+    // MARK: - Gold (dedicated, limited use)
 
-    /// 上位%バッジ / 1%(Pro)バッジ / ペイウォール強調 / セッション完了画面の達成数字 専用の金色。
-    /// ブランドは完全モノクロが基本のため、この4箇所以外での使用は禁止。
+    /// Gold used only for the top percentile badge / 1% (Pro) badge / paywall emphasis / achievement
+    /// numbers on the session complete screen.
+    /// The brand is fully monochrome by default, so using it anywhere other than these 4 places is
+    /// prohibited.
     static let gold = Color(hex: "C6A14B")
 }
 
@@ -85,7 +88,8 @@ enum AppColors {
 
 enum AppGradients {
 
-    /// プライマリグラデーション（モノクロ化のためオフホワイト単色。呼び出し側は事実上ベタ塗り）
+    /// Primary gradient (a single off-white color because of the monochrome change. Callers are in effect a
+    /// flat fill)
     static let primary = LinearGradient(
         colors: [
             Color(hex: "F2EFE7"),
@@ -95,7 +99,7 @@ enum AppGradients {
         endPoint: .bottomTrailing
     )
 
-    /// Shield背景グラデーション
+    /// Shield background gradient
     static let shieldBackground = LinearGradient(
         colors: [
             Color(hex: "0F0F0F"),
@@ -106,7 +110,7 @@ enum AppGradients {
         endPoint: .bottom
     )
 
-    /// カード背景グラデーション
+    /// Card background gradient
     static let cardGlow = RadialGradient(
         colors: [
             Color.white.opacity(0.05),
@@ -117,7 +121,7 @@ enum AppGradients {
         endRadius: 200
     )
 
-    /// タイマーモードグラデーション（モノクロ化：3モード共通のダークニュートラル）
+    /// Timer mode gradient (monochrome: dark neutral shared by the 3 modes)
     static let timerMode = LinearGradient(
         colors: [
             Color(hex: "17171B"),
@@ -127,7 +131,7 @@ enum AppGradients {
         endPoint: .bottomTrailing
     )
 
-    /// スケジュールモードグラデーション（モノクロ化：3モード共通のダークニュートラル）
+    /// Schedule mode gradient (monochrome: dark neutral shared by the 3 modes)
     static let scheduleMode = LinearGradient(
         colors: [
             Color(hex: "17171B"),
@@ -137,7 +141,7 @@ enum AppGradients {
         endPoint: .bottomTrailing
     )
 
-    /// 位置情報モードグラデーション（モノクロ化：3モード共通のダークニュートラル）
+    /// Location mode gradient (monochrome: dark neutral shared by the 3 modes)
     static let locationMode = LinearGradient(
         colors: [
             Color(hex: "17171B"),

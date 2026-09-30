@@ -2,20 +2,21 @@
 //  RankingService.swift
 //  AppBlocker
 //
-//  累計ロック時間のランキング (082_block_ranking.sql の get_block_ranking)
+//  Ranking by total lock time (get_block_ranking in 082_block_ranking.sql)
 //
-//  🔴 週次ランキングは作らない (2026-09-05 ユーザー決定)。
-//     ランキングが2つあると「どっちが自分の順位か」が分からなくなる。累計1本だけ。
+//  🔴 No weekly ranking (user decision 2026-09-05).
+//     With 2 rankings it becomes unclear "which one is my rank". Only the all-time one.
 //
-//  ⚠️ チート対策は入っていない (ユーザー判断)。block_sessions は端末申告なので
-//     順位は改ざんに強くない。順位をさらに強く見せる機能を足すときは再検討すること。
+//  ⚠️ There is no anti-cheat (user decision). block_sessions is reported by the device, so
+//     the ranking is not robust against tampering. Reconsider when adding features that make the
+//     rank more prominent.
 //
 
 import Foundation
 import Combine
 import Supabase
 
-/// ランキング1行
+/// One ranking row
 struct BlockRankingRow: Decodable, Equatable, Identifiable {
     let rank: Int
     let userId: UUID
@@ -25,7 +26,7 @@ struct BlockRankingRow: Decodable, Equatable, Identifiable {
     let isPro: Bool
     let isOfficial: Bool
     let totalSeconds: Int
-    /// 自分の行かどうか (サーバー側で auth.uid() と比較済み)
+    /// Whether this is your own row (compared with auth.uid() on the server)
     let isMe: Bool
 
     var id: UUID { userId }
@@ -56,11 +57,11 @@ struct BlockRankingRow: Decodable, Equatable, Identifiable {
     }
 }
 
-/// get_block_ranking の戻り値
+/// Return value of get_block_ranking
 struct BlockRanking: Decodable, Equatable {
-    /// 母数 = 全実ユーザー (0秒の人も含む / 種アカは除く)
+    /// Pool = all real users (including people with 0 seconds / excluding seed accounts)
     let totalUsers: Int
-    /// 実際に掲載している人数 (上位10%。最低10人)
+    /// Number of people actually listed (top 10%. At least 10)
     let shown: Int
     let rows: [BlockRankingRow]
 
@@ -77,7 +78,7 @@ final class RankingService: ObservableObject {
 
     @Published private(set) var ranking: BlockRanking?
     @Published private(set) var isLoading = false
-    /// 取得に失敗したか。画面は「まだ出せません」と「通信失敗」を出し分ける
+    /// Whether the fetch failed. The screen shows "not available yet" and "network failure" differently
     @Published private(set) var loadFailed = false
 
     private let client: SupabaseClient
@@ -101,13 +102,13 @@ final class RankingService: ObservableObject {
                 .execute()
                 .value
         } catch {
-            // 082 未適用の DB でもクラッシュさせない
+            // Do not crash even on a DB without 082 applied
             print("⚠️ Failed to load ranking: \(error)")
             loadFailed = true
         }
     }
 
-    /// サインアウト時に持ち越さない
+    /// Do not carry it over after sign-out
     func clear() {
         ranking = nil
         loadFailed = false

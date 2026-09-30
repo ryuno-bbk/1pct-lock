@@ -1,34 +1,39 @@
 -- ============================================================
 -- 033_completion_rate_stats.sql
--- 統計パック: 完遂率 (completion rate) + プロフィール統計の 1 RPC 集約
+-- Stats pack: completion rate + profile stats gathered into 1 RPC
 -- ============================================================
--- 確定した定義 (2026-07-16 ユーザー承認済み・変更禁止):
---   完遂率 = 直近30日の「タイマーモード」セッションのうち completed の割合 (件数ベース、%表示)
---     - 対象モードはタイマーのみ (schedule/location は分母に入れない。
---       それらは aborted が記録されない構造のため)
---     - 集計窓 = 直近30日 (started_at 基準)
---     - ガーミング対策: 予定時間 (planned) 10分未満のセッションは分子分母から除外
---     - 公開範囲: 他人のプロフィールにも公開 (MyProfileView + UserProfileView 両方)
+-- Finalized definition (approved by the user 2026-07-16, do not change):
+--   Completion rate = share of completed among "timer mode" sessions in the last 30 days (by count,
+--   shown as %)
+--     - Only timer mode (schedule/location are not in the denominator,
+--       because by structure they never record aborted)
+--     - Window = last 30 days (based on started_at)
+--     - Anti-gaming: sessions with planned time under 10 minutes are excluded from both numerator
+--       and denominator
+--     - Visibility: public on other users' profiles too (both MyProfileView + UserProfileView)
 --
--- planned_seconds が必要な理由:
---   「10分未満除外」を実測 duration でフィルタすると、60分タイマーを2分で中断した
---   セッション (duration=2分) が除外されてしまい、数えたい失敗ほど消える。
---   除外判定は予定時間で行うため、block_sessions に予定秒数のカラムを追加する。
---   - 新カラム planned_seconds (nullable)。タイマーのみ値を入れる
---   - 過去データは NULL。適格判定は:
+-- Why planned_seconds is needed:
+--   If "exclude under 10 minutes" filtered by actual duration, a session where a 60-minute timer
+--   was stopped after 2 minutes (duration=2 min) would be excluded, so exactly the failures we want
+--   to count would disappear. Exclusion is decided by the planned time, so a planned seconds column
+--   is added to block_sessions.
+--   - New column planned_seconds (nullable). Set only for timers
+--   - Past data is NULL. Eligibility is:
 --       COALESCE(planned_seconds, CASE WHEN status='completed' THEN duration_seconds END) >= 600
---     - 過去の completed はタイマー満了なので実測≒予定 → duration で代用可
---     - 過去の aborted は予定不明 → 除外 (30日窓で自然に解消、未リリースなので実害なし)
+--     - Past completed rows ran the timer to the end, so actual ≈ planned → duration can be used
+--       instead
+--     - Past aborted rows have an unknown plan → excluded (resolves itself with the 30-day window,
+--       and it is not released yet so there is no real harm)
 --
--- 既存 016 の RPC (get_block_percentile / get_streak_days / get_total_block_seconds) は変更しない。
--- get_user_stats はプロフィール1画面 = 1 RPC に集約するための統合関数で、
--- 上記3つ + 完遂率をまとめて jsonb で返す。
+-- The existing RPCs from 016 (get_block_percentile / get_streak_days / get_total_block_seconds) are
+-- unchanged. get_user_stats is a combined function so the profile screen = 1 RPC, and it
+-- returns the 3 above + completion rate together as jsonb.
 --
--- 実行順序: 032 の後。何度実行しても安全 (IF NOT EXISTS / CREATE OR REPLACE)
+-- Run order: after 032. Safe to run any number of times (IF NOT EXISTS / CREATE OR REPLACE)
 -- ============================================================
 
 -- ============================================
--- 1. block_sessions.planned_seconds カラム
+-- 1. block_sessions.planned_seconds column
 -- ============================================
 ALTER TABLE public.block_sessions
     ADD COLUMN IF NOT EXISTS planned_seconds integer;
@@ -46,14 +51,14 @@ COMMENT ON COLUMN public.block_sessions.planned_seconds IS
     '予定ロック秒数 (タイマーのみ)。完遂率の10分フィルタは実測 (duration_seconds) でなくこれで判定する';
 
 -- ============================================
--- 2. 完遂率集計用の部分インデックス
+-- 2. Partial index for the completion rate aggregation
 -- ============================================
 CREATE INDEX IF NOT EXISTS idx_block_sessions_timer_completion
     ON public.block_sessions (user_id, started_at DESC)
     WHERE mode = 'timer';
 
 -- ============================================
--- 3. get_user_stats RPC (プロフィール統計の統合エンドポイント)
+-- 3. get_user_stats RPC (combined endpoint for profile stats)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.get_user_stats(
     target_user_id uuid,
@@ -74,7 +79,7 @@ BEGIN
     SELECT total_block_seconds INTO total_seconds
     FROM public.users WHERE id = target_user_id;
 
-    -- 既存 RPC をそのまま呼び出す (二重実装しない)
+    -- Call the existing RPCs as is (no duplicate implementation)
     streak          := public.get_streak_days(target_user_id, tz);
     percentile_json := public.get_block_percentile(target_user_id);
 
@@ -117,9 +122,9 @@ COMMENT ON FUNCTION public.get_user_stats(uuid, text) IS
     'プロフィール統計の統合RPC (累計ロック秒 / 連続日数 / 上位% / 完遂率)。他人の user_id で呼べるのは仕様 (公開統計)';
 
 -- ============================================
--- 4. 動作確認用クエリ (実行不要、コメント)
+-- 4. Queries for checking behavior (no need to run, comments)
 -- ============================================
 -- SELECT get_user_stats(auth.uid());
 -- SELECT get_user_stats(auth.uid(), 'Asia/Tokyo');
--- 他人の統計 (公開範囲の確認):
---   SELECT get_user_stats('<他人の user_id>'::uuid);
+-- Another user's stats (check the visibility):
+--   SELECT get_user_stats('<other_user_id>'::uuid);

@@ -2,30 +2,31 @@
 //  CommentPageView.swift
 //  AppBlocker
 //
-//  BeReal 風コメントフルページ (旧 CommentsSheet を置き換え、2026-07-10 確定仕様)。
-//  push 遷移の完全別ページ:
-//    - 上部: 投稿画像の固定ヘッダー (コラプシブル)。開いた直後は縮小状態で、
-//      コメントをどれだけスクロールしても固定。リスト最上部でさらに引き下げると
-//      画像がほぼ全画面まで拡大され、タップ/チェブロンで縮小に戻る
-//    - 中段: 親コメント + 返信 (1 階層) のスクロールリスト
-//    - 下段: CommentInputBar (独立 View、タイピング再描画を局所化)
-//  UGC 投稿 (post) と公式名言 (quote) の両対応 (CommentTarget)。
+//  BeReal-style full comment page (replaces the old CommentsSheet, spec finalized 2026-07-10).
+//  A fully separate page reached by push:
+//    - Top: fixed header with the post image (collapsible). Right after opening it is collapsed,
+//      and it stays fixed no matter how far the comments scroll. Pulling down further at the top of
+//      the list expands the image to almost full screen, and a tap / the chevron collapses it again
+//    - Middle: scroll list of parent comments + replies (1 level)
+//    - Bottom: CommentInputBar (separate View, keeps typing redraws local)
+//  Supports both UGC posts (post) and official quotes (quote) (CommentTarget).
 //
 
 import SwiftUI
 import UIKit
 
-/// コメントページへの push リクエスト (navigationDestination(item:) 用)
+/// Push request to the comment page (for navigationDestination(item:))
 struct CommentPageRequest: Identifiable, Hashable {
-    /// 画像ヘッダー用。nil なら画像なしのプレーン表示 (通知からの遷移など)
+    /// For the image header. nil means a plain display with no image (e.g. navigation from a notification)
     let item: FeedItem?
     let target: CommentTarget
-    /// target が .post の時のみ意味を持つ (投稿者の user_id、全削除メニュー表示判定に使用)
+    /// Meaningful only when target is .post (the post author's user_id, used to decide whether to show the
+    /// delete-all menu)
     let postOwnerId: UUID?
 
     var id: UUID { target.id }
 
-    /// FeedItem から標準的なリクエストを構築
+    /// Build the standard request from a FeedItem
     init(item: FeedItem) {
         self.item = item
         switch item.kind {
@@ -62,7 +63,8 @@ struct CommentPageView: View {
     @State private var showUserProfile: Bool = false
     @State private var reportTarget: ReportSheetView.Target?
     @State private var showReportThanks = false
-    /// 返信を展開中の親コメント id (TikTok 準拠でデフォルトは全部畳む、2026-07-25 実機FB)
+    /// Ids of parent comments whose replies are expanded (like TikTok, all collapsed by default,
+    /// 2026-07-25 real device feedback)
     @State private var expandedParentIds: Set<UUID> = []
 
     private var target: CommentTarget { request.target }
@@ -88,16 +90,16 @@ struct CommentPageView: View {
         return me == owner
     }
 
-    // BeReal 準拠 (2026-07-11 実機FB 6回目で挙動確定):
-    // ヘッダー画像は「横幅いっぱいの実寸 (width×5/4)」でスクロール内に常に存在し、
-    // 開いた時点で上 1/3 だけ見える位置までスクロール済みにしておく。
-    // 引き下げれば下げたぶんだけ画像が現れて手を離してもそこで止まり (バネ戻りなし)、
-    // 実寸まで達したらコンテンツ最上端なので自然に止まる。ただの素のスクロール。
+    // Following BeReal (behavior finalized in real device feedback round 6, 2026-07-11):
+    // The header image always exists inside the scroll at "full width, actual size (width×5/4)", and on
+    // open it is already scrolled so that only the top 1/3 is visible.
+    // Pulling down reveals as much of the image as you pull, and it stays there when released (no spring
+    // back). At actual size it is the top of the content, so it stops naturally. Just a plain scroll.
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
             let headerFullHeight = width * 5.0 / 4.0
-            // 初期に見せる高さ = 画面全高 (ステータスバー込み) の 1/3 強
+            // Height shown initially = a bit over 1/3 of the full screen height (including the status bar)
             let baseVisible = (geo.size.height + geo.safeAreaInsets.top) * 0.36
             let initialOffset = max(0, headerFullHeight - baseVisible)
 
@@ -105,8 +107,8 @@ struct CommentPageView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 0) {
                         if let item = request.item {
-                            // 実寸 (width×5/4) のヘッダー。コンテンツ最上端でさらに引き下げた時だけ、
-                            // プロフィールヒーローと同じく上端ピン留めのままズームする (minY > 0 の間のみ)
+                            // Header at actual size (width×5/4). Only when pulled down further at the top of the content does it
+                            // zoom while pinned to the top, like the profile hero (only while minY > 0)
                             Color.clear
                                 .frame(height: headerFullHeight)
                                 .overlay {
@@ -117,7 +119,7 @@ struct CommentPageView: View {
 
                                         FeedCardMediaView(item: item, lang: lang, showOriginal: showOriginal)
                                             .frame(width: width, height: headerFullHeight)
-                                            // 上端は画面にべったり付くので下 2 角だけ角丸
+                                            // The top edge is flush with the screen, so only the bottom 2 corners are rounded
                                             .clipShape(UnevenRoundedRectangle(cornerRadii: .init(
                                                 topLeading: 0, bottomLeading: 24, bottomTrailing: 24, topTrailing: 0
                                             )))
@@ -125,7 +127,7 @@ struct CommentPageView: View {
                                             .offset(y: -stretch)
                                     }
                                 }
-                                // 初期スクロール位置用の目印 (ここが画面上端に来ると 1/3 だけ見える)
+                                // Marker for the initial scroll position (when this reaches the top of the screen, 1/3 is visible)
                                 .overlay(alignment: .topLeading) {
                                     Color.clear
                                         .frame(width: 1, height: 1)
@@ -134,12 +136,12 @@ struct CommentPageView: View {
                                 }
                         }
 
-                        // コメント部は「viewport − 初期ヘッダー」以上の高さを確保する。
-                        // コメントが少なくても初期位置 (1/3 表示) が成立し、スクロール範囲が
-                        // ちょうど「1/3 ⇔ 実寸」の往復になる。
-                        // プレーンモード (item == nil、通知からの名言コメント等) はヒーロー画像が
-                        // 存在しないため 36% ぶんの見込み高さを差し引く必要がない。差し引いたままだと
-                        // ヘッダーの無い分だけ上部にスクロール可能な空白 (dead scroll region) ができてしまう
+                        // The comment area gets at least "viewport - initial header" of height.
+                        // Even with few comments the initial position (1/3 visible) works, and the scroll range is
+                        // exactly a round trip of "1/3 ⇔ actual size".
+                        // Plain mode (item == nil, e.g. quote comments opened from a notification) has no hero image, so
+                        // there is no need to subtract the expected 36% height. If it stays subtracted, a scrollable blank
+                        // space (dead scroll region) the size of the missing header appears at the top
                         VStack(spacing: 0) {
                             commentsSectionHeader
                             commentsContent
@@ -155,21 +157,21 @@ struct CommentPageView: View {
                 }
                 .coordinateSpace(name: "commentPageScroll")
                 .scrollDismissesKeyboard(.interactively)
-                // 2026-07-25 実機FB: 入力欄の外 (コメント一覧やヒーロー画像) をタップしたら
-                // キーボードを閉じる。Button が乗っている場所は Button が優先されるので、
-                // ここに届くのは「関係ない場所」のタップだけ
+                // 2026-07-25 real device feedback: tapping outside the input (comment list or hero image) closes the
+                // keyboard. Where a Button sits, the Button takes priority, so
+                // only taps on "unrelated places" reach here
                 .onTapGesture {
                     UIApplication.shared.sendAction(
                         #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
                     )
                 }
-                // ヒーロー画像がある時だけ画面上端 (ステータスバー下) までべったり付ける。
-                // プレーンモードは safe area を無視しないので、コメント見出しがステータスバー/
-                // 戻るシェブロンの下に潜り込まない (通常のナビゲーションバー下からコンテンツが始まる)
+                // Attach flush to the top of the screen (under the status bar) only when there is a hero image.
+                // Plain mode does not ignore the safe area, so the comment heading does not slide under the status
+                // bar / back chevron (content starts below the normal navigation bar)
                 .ignoresSafeArea(edges: request.item != nil ? .top : [])
                 .onAppear {
                     guard request.item != nil else { return }
-                    // レイアウト確定後に初期位置 (画像 1/3 見え) までジャンプ (アニメなし)
+                    // After layout is settled, jump to the initial position (image 1/3 visible) (no animation)
                     DispatchQueue.main.async {
                         proxy.scrollTo("commentInitialAnchor", anchor: .top)
                     }
@@ -177,7 +179,7 @@ struct CommentPageView: View {
             }
         }
         .background(Color.black.ignoresSafeArea())
-        // BeReal 風: ネイティブな半透明カプセルの入力欄を下端に固定
+        // BeReal style: pin a native semi-transparent capsule input to the bottom edge
         .safeAreaInset(edge: .bottom, spacing: 0) {
             CommentInputBar(
                 target: target,
@@ -190,11 +192,12 @@ struct CommentPageView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
-        // コメントは完全別ページなのでタブバー (フィード/タイマー/マイページ) は隠す (実機FB 2026-07-11)
+        // Comments are a fully separate page, so hide the tab bar (Feed/Timer/My page) (real device feedback
+        // 2026-07-11)
         .toolbar(.hidden, for: .tabBar)
         .toolbarRole(.editor)
         .toolbar {
-            // 投稿者のみ「全削除」メニュー
+            // "全削除" ("Delete all") menu only for the post author
             if isPostOwner && !allComments.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -212,13 +215,13 @@ struct CommentPageView: View {
             }
         }
         .task(id: target) {
-            // 🔴 「キャッシュが空のときだけ取る」にしてはいけない。
-            //    CommentService はシングルトンでキャッシュがアプリ生存期間ずっと残るため、
-            //    一度開いた投稿は二度と通信せず、新しいコメントが永久に出なくなる
-            //    (カード下部のプレビューは別RPC fetch_feed_extras で更新されるので、
-            //     「プレビューには出るのに開くと無い」というズレになる。2026-08-28 実機報告)。
-            //    スピナーは allComments.isEmpty のときだけ出るので、キャッシュがある間は
-            //    古い内容を表示したまま裏で取り直す形になりちらつかない
+            // 🔴 Do not change this to "fetch only when the cache is empty".
+            //    CommentService is a singleton and its cache lives as long as the app, so
+            //    a post that was opened once would never hit the network again, and new comments would never show
+            //    (the preview under the card is updated by a separate RPC, fetch_feed_extras, so
+            //     you get a mismatch: "it shows in the preview but not when opened". Real device report 2026-08-28).
+            //    The spinner shows only when allComments.isEmpty, so while there is a cache
+            //    the old content stays on screen and is refetched in the background, without flicker
             await commentService.loadComments(target: target)
         }
         .alert(L.commentsDeleteAllConfirmTitle(lang), isPresented: $showDeleteAllConfirm) {
@@ -231,8 +234,9 @@ struct CommentPageView: View {
         } message: {
             Text(L.commentsDeleteAllConfirmMessage(lang))
         }
-        // 2026-07-22 実機FB: confirmationDialog (画面端のアクションシート) は押した削除ボタンから
-        // 遠い位置に出て違和感がある → 画面中央の標準 alert に変更 (全削除の既存 alert とも揃う)
+        // 2026-07-22 real device feedback: confirmationDialog (action sheet at the screen edge) appears far
+        // from the pressed delete button and feels wrong → changed to the standard alert in the center of the
+        // screen (also matches the existing delete-all alert)
         .alert(
             L.commentsDeleteConfirmTitle(lang),
             isPresented: Binding(
@@ -265,7 +269,7 @@ struct CommentPageView: View {
         }
     }
 
-    // MARK: - Comments Section (単一スクロール内)
+    // MARK: - Comments Section (inside a single scroll)
 
     private var commentsSectionHeader: some View {
         HStack(spacing: 8) {
@@ -305,8 +309,9 @@ struct CommentPageView: View {
                         onReport: { reportTarget = .comment(parent.id) }
                     )
 
-                    // TikTok 準拠 (2026-07-25 実機FB): 返信はデフォルト全部畳み、
-                    // 「── 返信N件を表示 ∨」で展開 / 展開後は「── 返信を隠す ∧」
+                    // Following TikTok (2026-07-25 real device feedback): replies are all collapsed by default,
+                    // expanded with "── 返信N件を表示 ∨" ("── View N replies ∨"). After expanding:
+                    // "── 返信を隠す ∧" ("── Hide replies ∧")
                     let replyList = replies(to: parent.id)
                     if !replyList.isEmpty {
                         if expandedParentIds.contains(parent.id) {
@@ -319,7 +324,7 @@ struct CommentPageView: View {
                                     lang: lang,
                                     ownerAvatarUrl: request.item?.authorAvatarUrl,
                                     onLike: { Task { await commentService.toggleLike(commentId: reply.id, target: target, viewerIsPostOwner: isPostOwner) } },
-                                    onReply: { startReply(to: parent) },  // 子への返信も親に紐づける (1 階層維持)
+                                    onReply: { startReply(to: parent) },  // Replies to a child are also attached to the parent (keeps 1 level)
                                     onAvatarTap: { openUserProfile(userId: reply.authorUserId) },
                                     onDelete: { deleteTargetComment = reply },
                                     onReport: { reportTarget = .comment(reply.id) }
@@ -341,7 +346,7 @@ struct CommentPageView: View {
         return false
     }
 
-    /// 自分のコメントは通報できない (auth.userId が nil = 未サインインも不可)
+    /// You cannot report your own comment (auth.userId nil = not signed in, also not allowed)
     private func canReport(_ comment: UserComment) -> Bool {
         guard let me = auth.userId else { return false }
         return comment.authorUserId != me
@@ -349,17 +354,19 @@ struct CommentPageView: View {
 
     private func startReply(to parent: UserComment) {
         replyingTo = parent
-        requestFocus = true  // CommentInputBar 側でフォーカスを取って flag をリセット
-        // 返信先の既存返信は畳まれていても展開しておく (送った返信が畳みの中に消えないように)
+        requestFocus = true  // CommentInputBar takes the focus and resets the flag
+        // Expand the existing replies of the reply target even if they are collapsed (so the sent reply does
+        // not vanish inside the collapsed part)
         expandedParentIds.insert(parent.id)
     }
 
-    /// 「── 返信N件を表示 ∨」/「── 返信を隠す ∧」(TikTok 準拠、親の本文開始位置に揃える)
+    /// "── 返信N件を表示 ∨" ("── View N replies ∨") / "── 返信を隠す ∧" ("── Hide replies ∧")
+    /// (following TikTok, aligned with where the parent's body text starts)
     private func repliesToggleRow(parentId: UUID, count: Int) -> some View {
         let isExpanded = expandedParentIds.contains(parentId)
         return Button {
-            // アニメーション強制無効 (2026-07-25 実機FB: 行が滑って移動する経過が見えるのが不要。
-            // withAnimation を外すだけでは暗黙アニメーションが残ったため Transaction で殺す)
+            // Force-disable animation (2026-07-25 real device feedback: seeing the rows slide into place is not
+            // wanted. Removing withAnimation alone left the implicit animation, so it is killed with a Transaction)
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) {
@@ -375,18 +382,18 @@ struct CommentPageView: View {
                     .fill(AppColors.textTertiary.opacity(0.5))
                     .frame(width: 26, height: 1)
                 Text(isExpanded
-                     ? (lang == .japanese ? "返信を隠す" : "Hide replies")  // 文言はユーザー添削待ち
-                     : (lang == .japanese ? "返信\(count)件を表示" : "View \(count) replies"))  // 文言はユーザー添削待ち
+                     ? (lang == .japanese ? "返信を隠す" : "Hide replies")  // Wording is waiting for the user's review
+                     : (lang == .japanese ? "返信\(count)件を表示" : "View \(count) replies"))  // Wording is waiting for the user's review
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(AppColors.textTertiary)
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(AppColors.textTertiary)
             }
-            .padding(.leading, 56)  // 親のアバター(32)+間隔(10)+左余白(14) = 本文の開始位置
+            .padding(.leading, 56)  // parent avatar (32) + spacing (10) + left padding (14) = where the body text starts
             .padding(.trailing, 14)
             .padding(.top, 0)
-            .padding(.bottom, 6)  // 返信ボタンとの距離を詰める (2026-07-25 実機FB)
+            .padding(.bottom, 6)  // Reduce the distance to the reply button (2026-07-25 real device feedback)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -401,7 +408,8 @@ struct CommentPageView: View {
 
     private var emptyView: some View {
         VStack(spacing: 12) {
-            // 2026-07-25 実機FB: クオーテーションマークは意味不明 → コメントの吹き出しアイコンに
+            // 2026-07-25 real device feedback: the quotation mark made no sense → changed to a comment speech
+            // bubble icon
             Image(systemName: "ellipsis.bubble")
                 .font(.system(size: 34, weight: .thin))
                 .foregroundColor(AppColors.textTertiary)
@@ -424,19 +432,19 @@ struct CommentPageView: View {
     }
 }
 
-// MARK: - CommentInputBar (独立 View)
+// MARK: - CommentInputBar (separate View)
 //
-// 重要: タイピング時の inputText 変化、focus 変化を CommentPageView 本体の
-// body 再描画から完全に切り離すために独立 View にしている。
-// これがないと 1 文字ごとに header / commentList / AvatarImage 群まで再評価されて
-// 実機でカクつく。
+// Important: this is a separate View to fully isolate the inputText changes and focus changes while
+// typing from the body redraws of CommentPageView itself.
+// Without it, every character re-evaluates the header / commentList / AvatarImage views too, and it
+// stutters on a real device.
 
 private struct CommentInputBar: View {
 
     let target: CommentTarget
     let lang: AppLanguage
     @Binding var replyingTo: UserComment?
-    /// 親から focus 要求が来るたびに true にセットされる。受け取った側で focus 後に false に戻す
+    /// Set to true every time the parent requests focus. The receiver sets it back to false after focusing
     @Binding var requestFocus: Bool
 
     @ObservedObject private var auth = UserAuthService.shared
@@ -444,12 +452,12 @@ private struct CommentInputBar: View {
 
     @State private var inputText: String = ""
     @State private var isSending: Bool = false
-    /// 送信失敗時のアラート文言 (046 レート制限/汎用。nil = 非表示)
+    /// Alert text when sending fails (046 rate limit / generic. nil = hidden)
     @State private var sendError: String?
     @FocusState private var focused: Bool
 
-    // BeReal 風: バー自体は背景を持たず浮かせ、半透明マテリアルのカプセル入力欄 +
-    // 白丸の送信ボタンだけを置く (2026-07-10 実機FB)
+    // BeReal style: the bar itself has no background and floats, with only a semi-transparent material
+    // capsule input + a white round send button (2026-07-10 real device feedback)
     var body: some View {
         VStack(spacing: 6) {
             if let target = replyingTo {
@@ -464,8 +472,8 @@ private struct CommentInputBar: View {
                         .padding(.vertical, 12)
                     Spacer()
                 } else {
-                    // BeReal のガラス質感: ultraThinMaterial + 薄い白ストローク +
-                    // 明るめプレースホルダー。下をコメントが通ると透けてぼける
+                    // BeReal glass look: ultraThinMaterial + a thin white stroke +
+                    // a brighter placeholder. Comments passing underneath show through, blurred
                     TextField(
                         "",
                         text: $inputText,
@@ -509,9 +517,9 @@ private struct CommentInputBar: View {
                 requestFocus = false
             }
         }
-        // 削除/エラー系モーダルは中央 .alert 統一 (2026-07-22 設計ルール)
+        // Delete/error modals are unified as a centered .alert (2026-07-22 design rule)
         .alert(
-            lang == .japanese ? "コメントできません" : "Can't comment",  // 文言はユーザー添削待ち
+            lang == .japanese ? "コメントできません" : "Can't comment",  // Wording is waiting for the user's review
             isPresented: Binding(
                 get: { sendError != nil },
                 set: { if !$0 { sendError = nil } }
@@ -572,16 +580,16 @@ private struct CommentInputBar: View {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             inputText = ""
             replyingTo = nil
-            focused = false  // 送信成功時にキーボードを閉じる
+            focused = false  // Close the keyboard on a successful send
         } else {
-            // 失敗を無言で握りつぶさない (046 レート制限は専用文言、それ以外は汎用)
+            // Do not silently swallow failures (046 rate limit has its own text, everything else is generic)
             sendError = commentService.lastCreateWasRateLimited
                 ? (lang == .japanese
                     ? "本日のコメント上限に達しました。また明日コメントできます"
-                    : "You've reached today's comment limit. You can comment again tomorrow")  // 文言はユーザー添削待ち
+                    : "You've reached today's comment limit. You can comment again tomorrow")  // Wording is waiting for the user's review
                 : (lang == .japanese
                     ? "コメントを送信できませんでした。時間をおいて再試行してください"
-                    : "Couldn't send your comment. Please try again later")  // 文言はユーザー添削待ち
+                    : "Couldn't send your comment. Please try again later")  // Wording is waiting for the user's review
         }
     }
 }
@@ -590,11 +598,12 @@ private struct CommentInputBar: View {
 
 private struct CommentRow: View {
     let comment: UserComment
-    let indent: Int  // 0 = 親、1 = 返信
+    let indent: Int  // 0 = parent, 1 = reply
     let canDelete: Bool
     let canReport: Bool
     let lang: AppLanguage
-    /// 「投稿者がいいねしました」バッジ用 (投稿の作者のアバター。名言コメント等では nil)
+    /// For the "投稿者がいいねしました" ("Liked by the author") badge (the post author's avatar. nil for
+    /// quote comments etc.)
     let ownerAvatarUrl: String?
     let onLike: () -> Void
     let onReply: () -> Void
@@ -602,14 +611,15 @@ private struct CommentRow: View {
     let onDelete: () -> Void
     let onReport: () -> Void
 
-    // TikTok 準拠レイアウト (2026-07-25 実機FB):
-    //   1段目=名前+日付 / 2段目=本文 / 3段目=返信(左)+ハート・数字横並び(右下)。
-    //   通報/削除はテキストボタンをやめて行の長押しメニューに格納 (TikTok と同じ構造。
-    //   コメントUGCの通報手段を残すことで App Store 1.2 も満たす)
+    // TikTok-style layout (2026-07-25 real device feedback):
+    //   Row 1 = name + date / row 2 = body / row 3 = reply (left) + heart and count side by side
+    //   (bottom right).
+    //   Report/delete are no longer text buttons and live in the row's long press menu (same structure as
+    //   TikTok. Keeping a way to report comment UGC also satisfies App Store 1.2)
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Button(action: onAvatarTap) {
-                // 2026-07-25 実機FB: コメント欄のアイコンは一回り小さく
+                // 2026-07-25 real device feedback: icons in the comment area are one size smaller
                 AvatarImage(urlString: comment.authorAvatarUrl, size: indent == 0 ? 32 : 24)
             }
             .buttonStyle(.plain)
@@ -625,8 +635,8 @@ private struct CommentRow: View {
                         .foregroundColor(AppColors.textTertiary)
                 }
 
-                // 本文が主役: サイズを一段格上げし、行間を確保
-                // @メンションは YouTube と同じ青系 (アクセント=オフホワイトだと地の文に溶ける)
+                // The body is the focus: one size larger, with enough line spacing
+                // @mentions use a blue like YouTube (with the accent color = off-white they blend into the text)
                 if let replyTo = comment.replyToName, indent == 1 {
                     (Text("@\(replyTo) ").foregroundColor(Color(hex: "3EA6FF"))
                      + Text(comment.text).foregroundColor(AppColors.textPrimary))
@@ -641,7 +651,8 @@ private struct CommentRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                // 3段目: 返信 (左) + 投稿者いいねバッジ + いいね (右端、ハートの右に数字 = TikTok 準拠)
+                // Row 3: reply (left) + author-liked badge + like (right edge, count to the right of the heart = like
+                // TikTok)
                 HStack(spacing: 12) {
                     Button(action: onReply) {
                         Text(L.commentsReply(lang))
@@ -652,8 +663,8 @@ private struct CommentRow: View {
                     }
                     .buttonStyle(.plain)
 
-                    // 投稿者がいいねしたバッジ (TikTok の作成者ハート。投稿者アバター+右下に赤ハート、
-                    // ハートは背景色リングでアバターと分離)
+                    // Badge for "liked by the author" (TikTok's creator heart. Author avatar + red heart at the bottom
+                    // right, the heart is separated from the avatar by a ring in the background color)
                     if comment.isLikedByOwner {
                         ZStack(alignment: .bottomTrailing) {
                             AvatarImage(urlString: ownerAvatarUrl, size: 18)
@@ -664,14 +675,14 @@ private struct CommentRow: View {
                                 .background(Circle().fill(AppColors.background))
                                 .offset(x: 4, y: 4)
                         }
-                        .padding(.trailing, 4)  // はみ出したハートぶんの余白
+                        .padding(.trailing, 4)  // Padding for the heart that sticks out
                     }
 
                     Spacer(minLength: 0)
 
                     Button(action: onLike) {
-                        // ハートの位置を固定するため、数字側に固定幅スロットを常に確保する
-                        // (いいねで 0→1、999→1K 等になってもハートが動かない。想定最大 = "999K")
+                        // To keep the heart in a fixed position, always reserve a fixed-width slot for the count
+                        // (the heart does not move even when a like changes 0→1, 999→1K etc. Expected max = "999K")
                         HStack(spacing: 5) {
                             Image(systemName: comment.isLikedByMe ? "heart.fill" : "heart")
                                 .font(.system(size: 15))
@@ -692,9 +703,9 @@ private struct CommentRow: View {
         }
         .padding(.leading, indent == 0 ? 14 : 56)
         .padding(.trailing, 14)
-        .padding(.vertical, 6)  // 2026-07-25 実機FB: コメント同士の間隔を詰める
+        .padding(.vertical, 6)  // 2026-07-25 real device feedback: reduce the spacing between comments
         .contentShape(Rectangle())
-        // 長押しメニュー: 他人のコメント=通報 / 自分(or 投稿者権限)=削除
+        // Long press menu: other users' comments = report / own (or post author permission) = delete
         .contextMenu {
             if canReport {
                 Button {
@@ -713,8 +724,8 @@ private struct CommentRow: View {
         }
     }
 
-    /// TikTok 式の省略表記 (999 → 999 / 1500 → 1K / 1_200_000 → 1M)。
-    /// 固定幅スロット (34pt) に収まる長さを保証する
+    /// TikTok-style short notation (999 → 999 / 1500 → 1K / 1_200_000 → 1M).
+    /// Guarantees a length that fits in the fixed-width slot (34pt)
     static func compactCount(_ n: Int) -> String {
         if n >= 1_000_000 { return "\(n / 1_000_000)M" }
         if n >= 1_000 { return "\(n / 1_000)K" }

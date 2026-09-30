@@ -2,7 +2,7 @@
 //  FeedService.swift
 //  AppBlocker
 //
-//  混在フィード (公式 quotes + UGC user_posts) の取得
+//  Fetching the mixed feed (official quotes + UGC user_posts)
 //  RPC: fetch_mixed_feed_random / fetch_following_feed / fetch_tag_feed
 //
 
@@ -19,9 +19,9 @@ final class FeedService: ObservableObject {
     @Published private(set) var followingFeed: [FeedItem] = []
     @Published private(set) var isLoadingRecommended: Bool = false
     @Published private(set) var isLoadingFollowing: Bool = false
-    /// 直近の取得失敗 (2026-07-31): 以前は catch で print するだけだったため、
-    /// 引き下げ更新がサーバーエラーで空振りしても画面上は「何も起きない」ようにしか見えず、
-    /// 原因の切り分けに何往復もかかった。失敗は必ず画面に出す
+    /// Most recent fetch failure (2026-07-31): previously the catch only printed, so even when
+    /// pull-to-refresh failed with a server error, on screen it only looked like "nothing happens", and
+    /// isolating the cause took many round trips. Failures are always shown on screen
     @Published private(set) var lastFeedError: String?
 
     private let client: SupabaseClient
@@ -30,23 +30,23 @@ final class FeedService: ObservableObject {
         self.client = client
     }
 
-    // MARK: - クリア (M20: アカウント切替/サインアウト時の残留防止)
+    // MARK: - Clear (M20: prevents leftovers on account switch/sign-out)
 
-    /// サインアウト/アカウント切替時に両フィードキャッシュを破棄する。
-    /// これを呼ばないと、別アカウントで再サインインした直後に前ユーザー視点の
-    /// おすすめ/フォロー中フィードが一瞬 (再ロード完了まで) 残留表示されてしまう。
+    /// Discard both feed caches on sign-out/account switch.
+    /// Without this, right after signing in again with another account, the previous user's
+    /// Recommended/Following feeds stay visible for a moment (until the reload finishes).
     func clear() {
         recommendedFeed = []
         followingFeed = []
     }
 
-    // MARK: - おすすめフィード (公式 + UGC ランダム混在)
+    // MARK: - Recommended feed (official + UGC randomly mixed)
 
-    /// おすすめフィードを取得する。
-    /// 2026-07-31: 並びの種 (seed) を毎回新しく作って渡す (063 SQL)。
-    /// 以前はサーバーの random() 任せで、引き下げ更新しても並びが変わらないことがあった
-    /// (STABLE 宣言の関数内で random() を使っていたためプランが再利用され得た)。
-    /// 呼ぶたびに seed が変わる = 並びが必ず変わることをアプリ側で保証する
+    /// Fetch the Recommended feed.
+    /// 2026-07-31: create and pass a new order seed every time (063 SQL).
+    /// Previously it relied on the server's random(), and the order sometimes did not change on
+    /// pull-to-refresh (random() was used inside a function declared STABLE, so the plan could be reused).
+    /// A different seed on every call = the app side guarantees that the order always changes
     func loadRecommended(limit: Int = 50) async {
         isLoadingRecommended = true
         defer { isLoadingRecommended = false }
@@ -74,9 +74,11 @@ final class FeedService: ObservableObject {
         lastFeedError = nil
     }
 
-    /// 画面に出す用の短い文言。生の NSError ダンプは長すぎて画面を覆うので出さない。
-    /// キャンセル (-999) は「取得が中断されただけ」でユーザーの操作起因ではないため表示しない
-    /// (2026-07-31: refreshable のタスクキャンセルが原因の中断は非構造化 Task 化で解消済み)
+    /// Short text for showing on screen. A raw NSError dump is too long and covers the screen, so it is not
+    /// shown. Cancel (-999) means "the fetch was just interrupted" and is not caused by the user's action,
+    /// so it is not shown
+    /// (2026-07-31: interruptions caused by refreshable's task cancellation were fixed by moving to an
+    /// unstructured Task)
     private static func userFacingMessage(for error: Error) -> String? {
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain {
@@ -85,15 +87,15 @@ final class FeedService: ObservableObject {
                 return nil
             case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost,
                  NSURLErrorTimedOut, NSURLErrorCannotConnectToHost:
-                return "接続できませんでした。通信環境を確認してください" // 文言はユーザー添削待ち
+                return "接続できませんでした。通信環境を確認してください" // Text waiting for user review
             default:
                 break
             }
         }
-        return "フィードを更新できませんでした" // 文言はユーザー添削待ち
+        return "フィードを更新できませんでした" // Text waiting for user review
     }
 
-    // MARK: - フォロー中フィード (フォロー対象の公式 + UGC、新着順)
+    // MARK: - Following feed (official + UGC from followed accounts, newest first)
 
     func loadFollowing(limit: Int = 50) async {
         isLoadingFollowing = true
@@ -117,15 +119,16 @@ final class FeedService: ObservableObject {
         }
     }
 
-    // MARK: - コメント数の楽観更新
+    // MARK: - Optimistic update of the comment count
 
-    /// 指定 post に対する recommended / following 両キャッシュの comment_count を増減
-    /// CommentService からコメント作成/削除時に呼ばれる
+    /// Increase/decrease comment_count in both the recommended / following caches for the given post
+    /// Called from CommentService when a comment is created/deleted
     func adjustCommentCount(forPostId postId: UUID, by delta: Int) {
         adjustCommentCount(kind: .post, itemId: postId, by: delta)
     }
 
-    /// 指定 quote (公式名言) に対する recommended / following 両キャッシュの comment_count を増減
+    /// Increase/decrease comment_count in both the recommended / following caches for the given quote
+    /// (official quote)
     func adjustCommentCount(forQuoteId quoteId: UUID, by delta: Int) {
         adjustCommentCount(kind: .quote, itemId: quoteId, by: delta)
     }
@@ -165,7 +168,7 @@ final class FeedService: ObservableObject {
         )
     }
 
-    // MARK: - タグフィード (ハッシュタグタップ用、公式 + UGC 混在ランダム)
+    // MARK: - Tag feed (for hashtag taps, official + UGC mixed at random)
 
     func fetchTagFeed(tag: String, limit: Int = 50) async -> [FeedItem] {
         let params: [String: AnyJSON] = [

@@ -1,27 +1,27 @@
 -- ============================================================
 -- 083_search_users_official.sql
--- ユーザー検索の結果に公式マークを出せるようにする + 運営アカウントの作成
+-- Allow the official badge to show in user search results + create the operator account
 -- ============================================================
--- 背景 (2026-09-09 の点検で発覚):
---   075/076 で公式マーク (users.is_official) を入れたが、**ユーザー検索だけ
---   返り値に含まれていなかった**。フィード / 投稿検索 / タグ / プロフィールは
---   すべて is_official を返しており、検索だけが穴だった:
+-- Background (found in the 2026-09-09 review):
+--   075/076 added the official badge (users.is_official), but **only user search did not
+--   include it in its return value**. Feed / post search / tags / profile
+--   all return is_official; only search was a hole:
 --     fetch_mixed_feed_random  ✅
 --     fetch_following_feed     ✅
 --     fetch_tag_feed           ✅
 --     search_posts             ✅
---     search_users             ❌  ← ここ
---   運営アカウントを探す人が最初に使うのは検索なので塞ぐ。
+--     search_users             ❌  ← here
+--   Search is the first thing people use when looking for the operator account, so close the hole.
 --
--- 🔴 RETURNS TABLE の型が変わるので CREATE OR REPLACE では差し替えられない。
---    DROP → CREATE が必須。DROP したら末尾で REVOKE/GRANT を必ず貼り直すこと
---    (2026-07-31 の再発防止ルール)。
+-- 🔴 The RETURNS TABLE type changes, so it cannot be replaced with CREATE OR REPLACE.
+--    DROP → CREATE is required. After a DROP, always re-apply REVOKE/GRANT at the end
+--    (rule to prevent a repeat of 2026-07-31).
 --
--- ⚠️ 検索結果にマークが出るのは 1.0.4 以降のアプリだけ。
---    1.0.3 は is_official を読むコード自体を持っていないが、
---    JSON に増えたキーは無視されるだけなので**古いアプリは壊れない**。
+-- ⚠️ The badge shows in search results only in app 1.0.4 and later.
+--    1.0.3 does not even have the code that reads is_official, but
+--    extra keys in the JSON are simply ignored, so **old apps do not break**.
 --
--- 実行順序: 082 の後。何度実行しても安全
+-- Run order: after 082. Safe to run any number of times
 -- ============================================================
 
 DROP FUNCTION IF EXISTS public.search_users(text, integer);
@@ -39,7 +39,7 @@ LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = public
 AS $$
     WITH escaped AS (
-        -- LIKE 特殊文字 (\ % _) をエスケープしてリテラル扱いにする
+        -- Escape the LIKE special characters (\ % _) so they are treated as literals
         SELECT replace(replace(replace(trim(query), '\', '\\'), '%', '\%'), '_', '\_') AS q
     )
     SELECT
@@ -60,14 +60,14 @@ AS $$
         SELECT blocked_user_id FROM public.user_blocks WHERE blocker_id = auth.uid()
       )
     ORDER BY
-        -- 公式アカウントを先頭に寄せる (運営を探しに来た人が一番上で見つかる)
+        -- Put official accounts first (people looking for the operator find it at the very top)
         COALESCE(u.is_official, false) DESC,
         CASE WHEN u.handle LIKE lower(e.q) || '%' THEN 0 ELSE 1 END,
         u.handle
     LIMIT limit_count;
 $$;
 
--- 🔴 DROP したので権限を貼り直す (065 と同じ方針: anon は一切触れない)
+-- 🔴 We did a DROP, so re-apply the privileges (same policy as 065: anon cannot touch it at all)
 REVOKE EXECUTE ON FUNCTION public.search_users(text, integer) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.search_users(text, integer) TO authenticated;
 

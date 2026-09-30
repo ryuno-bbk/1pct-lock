@@ -1,50 +1,52 @@
 -- ============================================================
 -- 027_ai_moderation.sql
--- AI モデレーション (投稿/コメントの自動判定 + 通報AIトリアージ)
+-- AI moderation (automatic review of posts/comments + AI triage of reports)
 -- ============================================================
--- 設計: Fable 5 / 実装: Sonnet 5
--- 設計書: Docs/ai_moderation_design_2026_07_10.md (2層タクソノミー/非同期webhook構成)
+-- Design: Fable 5 / Implementation: Sonnet 5
+-- Design doc: Docs/ai_moderation_design_2026_07_10.md (2-layer taxonomy / async webhook setup)
 --
--- 目的:
---   1. user_posts / user_comments に moderation_status を追加し、投稿直後は
---      'pending' (フィードには即時表示、UXを止めない)、Edge Function
---      (moderate-post) が非同期で Claude API 判定し 'approved'/'flagged'/'rejected'
---      に更新する。
---   2. user_reports に AI トリアージ結果 (ai_severity 1-5 / ai_summary) を追加し、
---      手動運用 (SQL Editor で status='pending' を確認) を軽くする。
---   3. moderation_config (1行のみ) にルーブリック本文を保管し、SQL の UPDATE 1発で
---      チューニングできるようにする。ethos_enforce=false の間は層2 (1%エトス) は
---      シャドウ判定のみ (flagged でもフィード表示は継続、記録だけ行う)。
+-- Purpose:
+--   1. Add moderation_status to user_posts / user_comments. Right after posting it is
+--      'pending' (shown in the feed immediately, does not block the UX), and an Edge Function
+--      (moderate-post) asynchronously judges it with the Claude API and updates it to
+--      'approved'/'flagged'/'rejected'.
+--   2. Add the AI triage result (ai_severity 1-5 / ai_summary) to user_reports,
+--      to lighten manual operation (checking status='pending' in SQL Editor).
+--   3. Store the rubric text in moderation_config (one row only), so it can be tuned with
+--      a single SQL UPDATE. While ethos_enforce=false, layer 2 (the 1% ethos) is
+--      shadow judgment only (even if flagged it stays in the feed; it is only recorded).
 --
--- 設計判断:
---   - 層1 (安全性: 暴力/性的/ヘイト/ハラスメント/スパム/違法) → rejected はハード非表示。
---     誤爆コストより放置コストが高いため、初期から enforce。
---   - 層2 (1%エトス: ジャンクフード/スポーツ以外のエンタメ視聴/遊んでいる様子 等) →
---     初期は shadow (flagged でも表示継続、moderation_verdict に記録するだけ)。
---     moderation_config.ethos_enforce を true にした瞬間だけ flagged も非表示化する。
---     アプリ更新不要、SQL Editor の UPDATE 1文で切替 (Edge Function 側のロジック変更不要、
---     フィード RPC 側で config を都度参照する)。
---   - moderation_status の 4 値: pending (判定待ち、表示継続) / approved (合格) /
---     flagged (層2 NG、shadow 表示継続) / rejected (層1 NG、非表示)。
---   - moderation 列はクライアントから書けない。protect trigger は pg_roles.rolbypassrls
---     判定パターンを踏襲 (014_b_comments_notifications.sql の教訓:
---     `current_setting('role') = 'service_role'` は SECURITY DEFINER 内でも呼び出し元の
---     role のままなので機能しない。正しくは rolbypassrls — SECURITY DEFINER の所有者
---     postgres と service_role キーで直接叩く場合は bypass されるので通り、一般ユーザーの
---     authenticated 直 UPDATE は拒否される)。
---   - moderation_config は RLS ON + ポリシー無し = クライアントからは常に 0 行
---     (service_role / SECURITY DEFINER 関数の所有者 postgres のみ読める)。
---     フィード RPC は SECURITY DEFINER なので、クライアントに一切公開せずに参照できる。
---   - 既存投稿/コメントは遡及判定しない。'pending' で ADD COLUMN された直後に
---     'approved' へ一括バックフィルする。再実行しても新規の pending 行を巻き込まない
---     よう、バックフィルは「このマイグレーション適用時点より前の created_at」に限定する
---     (下記 cutoff 定数を参照)。
+-- Design decisions:
+--   - Layer 1 (safety: violence/sexual/hate/harassment/spam/illegal) → rejected is hard hidden.
+--     Leaving such content up costs more than false positives, so it is enforced from the start.
+--   - Layer 2 (1% ethos: junk food / watching entertainment other than sports / people playing,
+--     etc.) → shadow at first (even if flagged it stays visible; it is only recorded in
+--     moderation_verdict).
+--     flagged is also hidden only from the moment moderation_config.ethos_enforce is set to true.
+--     No app update needed, switched with one UPDATE statement in SQL Editor (no logic change in the
+--     Edge Function; the feed RPCs read the config each time).
+--   - The 4 values of moderation_status: pending (waiting for review, stays visible) / approved
+--     (passed) / flagged (layer 2 NG, shadow, stays visible) / rejected (layer 1 NG, hidden).
+--   - The moderation columns cannot be written by the client. The protect trigger follows the
+--     pg_roles.rolbypassrls check pattern (lesson from 014_b_comments_notifications.sql:
+--     `current_setting('role') = 'service_role'` does not work because even inside SECURITY DEFINER
+--     it stays the caller's role. The correct check is rolbypassrls: the SECURITY DEFINER owner
+--     postgres and direct calls with the service_role key are bypassed so they pass, and a normal
+--     user's direct authenticated UPDATE is rejected).
+--   - moderation_config is RLS ON + no policies = always 0 rows from the client
+--     (only service_role / postgres, the owner of SECURITY DEFINER functions, can read it).
+--     The feed RPCs are SECURITY DEFINER, so they can read it without exposing anything to the
+--     client.
+--   - Existing posts/comments are not judged retroactively. Right after the column is added with
+--     'pending' via ADD COLUMN, they are backfilled to 'approved' in bulk. So that a rerun does not
+--     pull in new pending rows, the backfill is limited to "created_at before the time this migration
+--     was applied" (see the cutoff constant below).
 --
--- 実行順序:
---   026 完了後。何度実行しても安全 (IF NOT EXISTS / CREATE OR REPLACE / ON CONFLICT
---   DO NOTHING パターン)。ただし当時点で存在する 'pending' 行を 'approved' に
---   バックフィルする一括 UPDATE のみ、cutoff (このファイルの適用日 2026-07-10) より
---   created_at が前の行に限定して安全に再実行可能にしてある。
+-- Execution order:
+--   After 026 is done. Safe to run any number of times (IF NOT EXISTS / CREATE OR REPLACE / ON CONFLICT
+--   DO NOTHING pattern). Only the bulk UPDATE that backfills the 'pending' rows existing at that time
+--   to 'approved' is limited to rows whose created_at is before the cutoff (the date this file was
+--   applied, 2026-07-10), so it can be rerun safely.
 -- ============================================================
 
 -- ============================================================
@@ -72,16 +74,16 @@ COMMENT ON COLUMN public.user_posts.moderation_verdict IS
     'Claude API 判定結果全文 (jsonb)。ルーブリックチューニングの学習データ';
 COMMENT ON COLUMN public.user_posts.moderated_at IS 'AI 判定が完了した日時 (NULL=未判定)';
 
--- 既存投稿の遡及判定は行わない: この移行を最初に適用した時点で存在する行のみ
--- 'approved' で埋める。cutoff より後の created_at (= この移行より後に投稿された行) は
--- 実際に Edge Function の判定対象なので、再実行時に触らない。
+-- Existing posts are not judged retroactively: only rows that existed when this migration was first
+-- applied are filled with 'approved'. Rows with created_at after the cutoff (= posted after this
+-- migration) are real targets of the Edge Function's review, so a rerun does not touch them.
 UPDATE public.user_posts
     SET moderation_status = 'approved'
     WHERE moderation_status = 'pending'
       AND created_at < '2026-07-10 00:00:00+00'::timestamptz;
 
 -- ============================================================
--- 2. user_comments: 同 3 列
+-- 2. user_comments: the same 3 columns
 -- ============================================================
 ALTER TABLE public.user_comments
     ADD COLUMN IF NOT EXISTS moderation_status text NOT NULL DEFAULT 'pending';
@@ -111,7 +113,7 @@ UPDATE public.user_comments
       AND created_at < '2026-07-10 00:00:00+00'::timestamptz;
 
 -- ============================================================
--- 3. user_reports: AI トリアージ列
+-- 3. user_reports: AI triage columns
 -- ============================================================
 ALTER TABLE public.user_reports
     ADD COLUMN IF NOT EXISTS ai_severity integer;
@@ -131,9 +133,10 @@ COMMENT ON COLUMN public.user_reports.ai_severity IS
 COMMENT ON COLUMN public.user_reports.ai_summary IS 'AI による通報内容の要約';
 
 -- ============================================================
--- 4. moderation_config (1行のみ、ルーブリック本文をDBに保管)
+-- 4. moderation_config (one row only, stores the rubric text in the DB)
 -- ============================================================
--- 1行制約: id を boolean PK にして CHECK(id) で true 固定 (よくある単一行テーブルの型)
+-- One-row constraint: make id a boolean PK and fix it to true with CHECK(id) (a common pattern for
+-- single-row tables)
 CREATE TABLE IF NOT EXISTS public.moderation_config (
     id             boolean PRIMARY KEY DEFAULT true,
     ethos_enforce  boolean NOT NULL DEFAULT false,
@@ -148,19 +151,19 @@ COMMENT ON TABLE public.moderation_config IS
 COMMENT ON COLUMN public.moderation_config.ethos_enforce IS
     'true にすると層2(1%エトス) flagged も rejected 同様にフィードから除外する。false の間は記録のみ (shadow mode)';
 
--- updated_at 自動更新 (既存 set_updated_at 関数を再利用)
+-- Auto-update updated_at (reuses the existing set_updated_at function)
 DROP TRIGGER IF EXISTS moderation_config_set_updated_at ON public.moderation_config;
 CREATE TRIGGER moderation_config_set_updated_at
     BEFORE UPDATE ON public.moderation_config
     FOR EACH ROW
     EXECUTE FUNCTION public.set_updated_at();
 
--- RLS: ポリシーを一切定義しない = クライアント(anon/authenticated)からは常に0行。
--- service_role (Edge Function) と SECURITY DEFINER 関数の所有者 postgres は
--- rolbypassrls=true のため RLS を素通りし、フィード RPC からは問題なく参照できる。
+-- RLS: define no policies at all = always 0 rows from clients (anon/authenticated).
+-- service_role (Edge Function) and postgres, the owner of SECURITY DEFINER functions, have
+-- rolbypassrls=true, so they pass through RLS, and the feed RPCs can read it without problems.
 ALTER TABLE public.moderation_config ENABLE ROW LEVEL SECURITY;
 
--- 初期ルーブリック投入 (ユーザー確定ポリシーの日本語化、2026-07-10)
+-- Insert the initial rubrics (Japanese version of the policy confirmed by the user, 2026-07-10)
 INSERT INTO public.moderation_config (id, ethos_enforce, safety_rubric, ethos_rubric)
 VALUES (
     true,
@@ -205,12 +208,12 @@ $ethos$
 ON CONFLICT (id) DO NOTHING;
 
 -- ============================================================
--- 5. moderation 列の改ざん防止 trigger (protect trigger)
+-- 5. Trigger that prevents tampering with the moderation columns (protect trigger)
 -- ============================================================
--- rolbypassrls 判定パターン (014 の教訓を踏襲、current_setting('role') は使わない):
---   - service_role (Edge Function の直接 UPDATE) と SECURITY DEFINER 関数所有者 postgres は
---     rolbypassrls=true のため通す
---   - 一般ユーザーの authenticated 直 UPDATE は moderation 列の変更を拒否
+-- rolbypassrls check pattern (follows the lesson from 014, does not use current_setting('role')):
+--   - service_role (direct UPDATE from the Edge Function) and postgres, the owner of SECURITY DEFINER
+--     functions, have rolbypassrls=true, so they pass
+--   - A normal user's direct authenticated UPDATE is rejected for changes to the moderation columns
 
 CREATE OR REPLACE FUNCTION public.protect_user_posts_moderation()
 RETURNS trigger
@@ -264,20 +267,20 @@ CREATE TRIGGER user_comments_protect_moderation
     FOR EACH ROW
     EXECUTE FUNCTION public.protect_user_comments_moderation();
 
--- user_reports の ai_severity / ai_summary も同様にクライアントから書けないようにする
--- (user_reports は 006 で UPDATE ポリシー自体が存在しない = クライアントは元々 UPDATE 不可。
---  service_role からの UPDATE のみ許可されるのは RLS が「ポリシー無し」で拒否する対象は
---  authenticated/anon のみで、rolbypassrls ロールは RLS を素通りするため追加の trigger は不要)
+-- Likewise, ai_severity / ai_summary in user_reports cannot be written by the client
+-- (user_reports has had no UPDATE policy at all since 006 = the client could never UPDATE it.
+--  Only UPDATEs from service_role are allowed because RLS with "no policy" only rejects
+--  authenticated/anon, and rolbypassrls roles pass through RLS, so no extra trigger is needed)
 
 -- ============================================================
--- 6. フィード RPC 3 本にモデレーションフィルタを追加
+-- 6. Add the moderation filter to the 3 feed RPCs
 -- ============================================================
--- ベース: 021_post_carousel.sql の v4 定義 (image_count 追加版、最新)。
--- 戻り値の列は変更しないため CREATE OR REPLACE で足りる (DROP FUNCTION 不要)。
--- 追加するフィルタ (user_posts 側のみ、quotes は公式なので対象外):
---   - moderation_status <> 'rejected'  (層1 NG は常に非表示)
---   - ethos_enforce=true の間だけ moderation_status = 'flagged' も除外
---     (false の間は flagged も表示継続 = shadow mode)
+-- Base: the v4 definition in 021_post_carousel.sql (the version with image_count, the latest).
+-- The return columns do not change, so CREATE OR REPLACE is enough (no DROP FUNCTION needed).
+-- Filters added (user_posts only; quotes are official, so they are not covered):
+--   - moderation_status <> 'rejected'  (layer 1 NG is always hidden)
+--   - only while ethos_enforce=true, also exclude moderation_status = 'flagged'
+--     (while false, flagged stays visible = shadow mode)
 
 -- ---- 6-1. fetch_mixed_feed_random ----
 CREATE OR REPLACE FUNCTION public.fetch_mixed_feed_random(limit_count integer DEFAULT 50)
@@ -405,7 +408,8 @@ AS $$
             NULL::integer AS image_count
         FROM public.quotes q
         JOIN public.authors a ON a.id = q.author_id
-        -- 「著者をフォロー」ではなく「1% 公式アカウントをフォロー」していれば全公式名言が対象 (020 と同じ)
+        -- If the user follows "the official 1% account" (not "follows the author"), all official quotes are
+        -- included (same as 020)
         WHERE EXISTS (
             SELECT 1 FROM public.user_follows
             WHERE follower_id = auth.uid()

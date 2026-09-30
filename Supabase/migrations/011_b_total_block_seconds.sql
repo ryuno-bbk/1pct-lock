@@ -1,13 +1,13 @@
 -- ============================================================
 -- 011_b_total_block_seconds.sql
--- S13: 他人プロフィールに累計ロック時間を表示するための RPC
+-- S13: RPC to show total lock time on other users' profiles
 -- ============================================================
--- 目的:
---   block_sessions の RLS は「自分のみ SELECT 可」を維持したまま、
---   合計値だけ誰でも取得できる SECURITY DEFINER 関数を追加。
---   (詳細レコード = いつ何時間ブロックしたか はプライバシー保護)
+-- Purpose:
+--   Keep the block_sessions RLS as "only the owner can SELECT", and
+--   add a SECURITY DEFINER function that lets anyone get only the total.
+--   (Detailed records = when and for how many hours someone blocked, stay private)
 --
--- 実行順序: 010 完了後。何度実行しても安全 (CREATE OR REPLACE)
+-- Run order: after 010. Safe to run any number of times (CREATE OR REPLACE)
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.get_total_block_seconds(target_user_id uuid)

@@ -2,19 +2,19 @@
 //  FeedExtrasService.swift
 //  AppBlocker
 //
-//  BeReal 風フィードカードの付加情報 (028 SQL):
-//    - いいねした人 ≤3 (画像左下のアバタースタック)
-//    - コメントプレビュー ≤3 (カード下部)
-//    - 投稿詳細の閲覧計上 (record_post_view)
-//  フィード読み込み後に fetch_feed_extras で 1 ラウンドトリップのバッチ取得し、
-//  FeedItem.id ("kind-uuid") キーの辞書でキャッシュする。
+//  Extra info for the BeReal-style feed card (028 SQL):
+//    - ≤3 people who liked it (avatar stack at the bottom left of the image)
+//    - ≤3 comment previews (bottom of the card)
+//    - Counting views of post details (record_post_view)
+//  After the feed loads, fetch in one round trip as a batch with fetch_feed_extras, and
+//  cache in a dictionary keyed by FeedItem.id ("kind-uuid").
 //
 
 import Foundation
 import Combine
 import Supabase
 
-/// fetch_feed_extras の 1 行 (likers / comments は jsonb 配列)
+/// One row of fetch_feed_extras (likers / comments are jsonb arrays)
 struct FeedExtras: Decodable {
     let kind: FeedItem.Kind
     let itemId: UUID
@@ -28,7 +28,7 @@ struct FeedExtras: Decodable {
         case comments
     }
 
-    /// FeedItem.id と同じキー形式
+    /// Same key format as FeedItem.id
     var key: String { "\(kind.rawValue)-\(itemId.uuidString)" }
 }
 
@@ -36,7 +36,7 @@ struct FeedLiker: Decodable, Identifiable, Equatable {
     let userId: UUID
     let displayName: String?
     let avatarUrl: String?
-    /// fetch_likers (030、一覧) のみ返す。fetch_feed_extras (≤3 スタック) では nil
+    /// Returned only by fetch_likers (030, list). nil in fetch_feed_extras (≤3 stack)
     var isPro: Bool? = nil
 
     var id: UUID { userId }
@@ -69,12 +69,13 @@ final class FeedExtrasService: ObservableObject {
     /// FeedItem.id ("kind-uuid") → extras
     @Published private(set) var extras: [String: FeedExtras] = [:]
 
-    /// FeedItem.id → 最後にバッチ取得した時刻 (TTL 判定用。extrasTTL 未満なら再取得をスキップする)
+    /// FeedItem.id → time of the last batch fetch (for the TTL check. Skip refetching if it is under
+    /// extrasTTL)
     private var fetchedAt: [String: Date] = [:]
 
-    /// キャッシュの有効期間。同一キーはこの秒数以内なら再フェッチしない
-    /// (おすすめ⇄フォロー中の連続トグルで FeedCardListView が再マウントされるたびに
-    /// .task が同じバッチを撃つのを防ぐ。2026-07 修正)
+    /// How long the cache is valid. The same key is not refetched within this many seconds
+    /// (prevents .task from firing the same batch every time FeedCardListView is remounted by quickly
+    /// toggling Recommended ⇄ Following. Fixed 2026-07)
     private let extrasTTL: TimeInterval = 60
 
     private let client: SupabaseClient
@@ -87,21 +88,21 @@ final class FeedExtrasService: ObservableObject {
         extras[item.id]
     }
 
-    /// 指定キーの TTL キャッシュだけを無効化する (extras の中身自体は消さない。次の
-    /// loadExtras で再取得されるまで古い値を出し続けても実害は無いため、消すのは
-    /// 「再取得すべき」というマーク=fetchedAt のみ)。
-    /// 自分のいいね/コメント操作は TTL (60秒) を待たずに全ての表示箇所へ即時反映すべき
-    /// というプロジェクト共通ルールのため、該当キーだけピンポイントで再取得対象にする (F6)
+    /// Invalidate only the TTL cache of the given key (does not delete the extras contents themselves.
+    /// Showing the old value until the next loadExtras refetches it does no real harm, so only the
+    /// "should refetch" mark = fetchedAt is removed).
+    /// Because of the project-wide rule that your own like/comment actions should show up immediately
+    /// everywhere without waiting for the TTL (60 seconds), only that key is pinpointed for refetch (F6)
     func invalidate(key: String) {
         fetchedAt.removeValue(forKey: key)
     }
 
-    // MARK: - バッチ取得
+    // MARK: - Batch fetch
 
-    /// フィード読み込み後に呼ぶ。デフォルトでは各アイテムを `extrasTTL` 秒以内に取得済みなら
-    /// スキップし、未取得のキーだけ取得する。`force: true` を渡すと TTL を無視して全件再取得する
-    /// (いいね/コメントの変動を確実に拾いたい真の再読み込み時に使う。例: pull-to-refresh 後の
-    /// items 差し替え)
+    /// Call after the feed loads. By default, items already fetched within `extrasTTL` seconds are
+    /// skipped and only unfetched keys are fetched. Passing `force: true` ignores the TTL and refetches
+    /// everything (used for a real reload where like/comment changes must be picked up. Example:
+    /// replacing items after pull-to-refresh)
     func loadExtras(for items: [FeedItem], force: Bool = false) async {
         guard !items.isEmpty else { return }
 
@@ -128,14 +129,15 @@ final class FeedExtrasService: ObservableObject {
             for row in rows {
                 extras[row.key] = row
             }
-            // リクエストしたキー全件に fetchedAt を記録する (いいね/コメントが 0 件で行が
-            // 返らないアイテムも毎回リトライしないようにするため、返却有無に関わらず記録する)
+            // Record fetchedAt for every requested key (recorded regardless of whether a row came back, so that
+            // items with 0 likes/comments that return no row are not retried every time)
             for item in targets {
                 fetchedAt[item.id] = now
             }
-            // fetchedAt はアプリ起動中スクロールし続ける限り増え続ける (キーを消す経路が
-            // invalidate(key:) 程度しか無いため)。無制限に太らないよう上限を設け、
-            // 超えたら古い ~100 件を間引く (最新のキャッシュ判定には影響しない程度の粒度)
+            // fetchedAt keeps growing as long as the user keeps scrolling while the app is running (the only
+            // path that removes keys is roughly invalidate(key:)). Put a cap on it so it does not grow without
+            // limit, and when it is exceeded, thin out the ~100 oldest (a granularity that does not affect the
+            // latest cache checks)
             if fetchedAt.count > 500 {
                 let sortedByAge = fetchedAt.sorted { $0.value < $1.value }
                 for (key, _) in sortedByAge.prefix(100) {
@@ -147,7 +149,7 @@ final class FeedExtrasService: ObservableObject {
         }
     }
 
-    // MARK: - いいねした人の一覧 (030 fetch_likers、スタックタップ時にオンデマンド取得)
+    // MARK: - List of people who liked it (030 fetch_likers, fetched on demand when the stack is tapped)
 
     func fetchLikers(for item: FeedItem, limit: Int = 200) async -> [FeedLiker] {
         let params: [String: AnyJSON] = [
@@ -167,11 +169,11 @@ final class FeedExtrasService: ObservableObject {
         }
     }
 
-    // MARK: - 閲覧計上
+    // MARK: - View counting
 
-    /// 投稿詳細 (カードリスト) に投稿が表示されたら呼ぶ。
-    /// 二重計上を避けるためセッション内で同じ投稿は 1 回だけ送る
-    /// (DB 側でも自己閲覧は無視される)
+    /// Call when a post is shown in post details (card list).
+    /// To avoid double counting, the same post is sent only once per session
+    /// (the DB side also ignores self-views)
     private var recordedThisSession: Set<UUID> = []
 
     func recordPostView(postId: UUID) {
@@ -184,9 +186,9 @@ final class FeedExtrasService: ObservableObject {
                     .rpc("record_post_view", params: ["target_post_id": AnyJSON.string(postId.uuidString)])
                     .execute()
             } catch {
-                // ベストエフォート: 失敗しても UI は止めない。id はセットに残したままにする
-                // (削除すると LazyVStack の onAppear 再発火のたびに再送し、オフライン時に
-                // 失敗 RPC が無限に飛ぶリトライストームになるため、セッション内は1回だけ試す)
+                // Best effort: do not block the UI even on failure. Leave the id in the set
+                // (removing it would resend on every onAppear re-fire of LazyVStack, and when offline
+                // it would become an endless retry storm of failing RPCs, so try only once per session)
                 print("⚠️ Failed to record post view: \(error)")
             }
         }

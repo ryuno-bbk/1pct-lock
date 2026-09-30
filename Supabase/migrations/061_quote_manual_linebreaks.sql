@@ -1,9 +1,11 @@
 -- 061_quote_manual_linebreaks.sql
--- 名言68件の改行をユーザーが手動確定 (2026-07-31、Docs/quote_linebreaks_2026_07_31.txt が原本)。
--- text_jp/text_en に改行 (\n) を焼き込む。クライアントの QuoteTypography.displayLines は
--- \n 入りテキストをそのまま尊重し、フォントは最長行に自動フィットする設計済み。
--- 一部は改行と同時に文言も微修正されている (ユーザー編集)。
--- 前提: 060 適用済み (未適用でも壊れないが、削除予定の旧名言は更新されないだけ)。冪等。
+-- The user manually fixed the line breaks of 68 quotes (2026-07-31, the original is
+-- Docs/quote_linebreaks_2026_07_31.txt).
+-- Bake line breaks (\n) into text_jp/text_en. The client's QuoteTypography.displayLines is already
+-- designed to respect text containing \n as is, and the font auto-fits to the longest line.
+-- Some also had their wording slightly fixed along with the line breaks (user edits).
+-- Prerequisite: 060 already applied (not applying it does not break anything; the old quotes planned
+-- for deletion are just not updated). Idempotent.
 BEGIN;
 
 UPDATE public.quotes SET text_jp = E'目標に向けて動く\n衝動が湧いたら、\n5秒以内に身体を動かせ。\nさもないと脳がそれを殺す。', text_en = E'If you have an impulse to act on a goal, you must physically move within 5 seconds or your brain will kill it.' WHERE id = '049fd4d6-b443-419b-b0e5-1b0b74b90411';

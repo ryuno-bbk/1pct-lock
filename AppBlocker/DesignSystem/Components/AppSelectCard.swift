@@ -2,9 +2,11 @@
 //  AppSelectCard.swift
 //  AppBlocker
 //
-//  「ブロックするアプリ」共通カード (3モード統一リデザイン 2026-07-15)。
-//  タイマー/スケジュール/位置情報の全モードで同じ見た目・同じ位置 (CTA 直上/最下部) に置く。
-//  以前は 3 モードがそれぞれ別デザインのピルを持っていて不統一だった (実機FB)。
+//  Shared "ブロックするアプリ" ("Apps to block") card (redesign that unifies the 3 modes, 2026-07-15).
+//  Placed with the same look and in the same position (right above the CTA / at the bottom) in all
+//  modes: timer/schedule/location.
+//  Previously the 3 modes each had a pill with a different design and were inconsistent (real-device
+//  feedback).
 //
 
 import SwiftUI
@@ -13,7 +15,7 @@ import FamilyControls
 struct AppSelectCard: View {
     let selection: FamilyActivitySelection
     let lang: AppLanguage
-    /// 補足行 (例: 「全スケジュール共通」)。nil なら非表示
+    /// Extra line (e.g. "全スケジュール共通" ("Shared by all schedules")). Hidden if nil
     var subtitle: String? = nil
     let action: () -> Void
 
@@ -34,7 +36,7 @@ struct AppSelectCard: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(lang == .japanese ? "ブロックするアプリ" : "Apps to block") // 文言はユーザー添削待ち
+                    Text(lang == .japanese ? "ブロックするアプリ" : "Apps to block") // Text waiting for user review
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(AppColors.textPrimary)
 
@@ -71,6 +73,6 @@ struct AppSelectCard: View {
         if totalCount > 0 {
             return lang == .japanese ? "\(totalCount)個" : "\(totalCount)"
         }
-        return lang == .japanese ? "選択する" : "Select" // 文言はユーザー添削待ち
+        return lang == .japanese ? "選択する" : "Select" // Text waiting for user review
     }
 }

@@ -2,7 +2,7 @@
 //  ShieldConfigurationExtension.swift
 //  ShieldConfigurationExtension
 //
-//  アプリがブロックされた時に表示される名言Shield UI
+//  Quote Shield UI shown when an app is blocked
 //
 
 import Foundation
@@ -13,17 +13,19 @@ import os.log
 
 private let logger = Logger(subsystem: "com.jeimii.AppBlocker.ShieldConfigurationExtension", category: "ShieldConfig")
 
-// App Group identifier / keys は AppGroupConstants と必ず一致させる
-// (Extension はメインアプリと別ターゲットなので import 不可、ハードコード必須)
+// App Group identifier / keys must always match AppGroupConstants
+// (the Extension is a separate target from the main app and cannot import it, so hardcoding is required)
 private let appGroupID = "group.com.ryunosuke.appblocker.shared"
 private let keyCurrentQuote = "currentQuote"
 private let keyQuotePool = "quotePool"
-/// 案A (アプリ名主導) のサブタイトル用。本体が users_dreams をミラー保存する (AppGroupStorage.saveUserDream)
+/// For the subtitle of plan A (app-name first). The main app saves a mirror of users_dreams
+/// (AppGroupStorage.saveUserDream)
 private let keyUserDream = "userDream"
-/// UsageReportExtension と共有の表示言語キー ("japanese"/"english")。未設定は日本語扱い
+/// Display language key shared with UsageReportExtension ("japanese"/"english"). Not set = treated as
+/// Japanese
 private let keyOnboardingLang = "onboardingLanguage"
 
-/// 名言タプル型 (Extension はメインアプリの型を import できないため独自定義)
+/// Quote tuple type (defined here because the Extension cannot import the main app's types)
 private typealias ShieldQuote = (textEn: String, textJp: String, author: String)
 
 class ShieldConfigurationExtension: ShieldConfigurationDataSource {
@@ -31,29 +33,32 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
     // MARK: - Cached (Extension lifetime)
 
     private static var cachedConfig: ShieldConfiguration?
-    /// 直近に生成した title (=アプリ名主導の文言)。キャッシュはこれが変わったら即座に無効化する
-    /// (例: A→ホーム→B と連続でロック画面を見た時に A の文言が B に残らないようにするため)
+    /// The most recently generated title (= app-name-first text). The cache is invalidated immediately when
+    /// this changes
+    /// (e.g. so that when the user sees lock screens for A → home → B in a row, A's text does not stay on B)
     private static var cachedTitle: String?
-    /// 直近表示時刻。1 回の表示中に複数回 configuration() が呼ばれてもチラつかないよう
-    /// 短時間 (1.5 秒) だけ同じ config を返す。それを超えたら新しい名言を引き直す
-    /// = ロック画面が出るたびに名言(夢が無い場合のフォールバック)がローテーションする
+    /// Time of the most recent display. So that it does not flicker when configuration() is called several
+    /// times during one display, the same config is returned only for a short time (1.5 seconds). After
+    /// that, a new quote is picked
+    /// = the quote (the fallback when there is no dream) rotates every time the lock screen appears
     private static var lastShownTime: Date = .distantPast
 
-    /// App Group の UserDefaults は Extension プロセス内で使い回す (getShieldConfig 1 回につき
-    /// 最大 4 回 UserDefaults(suiteName:) を作っていたのを 1 個に集約。suiteName は不変なので
-    /// プロセス生存中は再構築の必要が無い
+    /// The App Group UserDefaults is reused within the Extension process (one getShieldConfig used to create
+    /// UserDefaults(suiteName:) up to 4 times, now it is one. suiteName never changes, so
+    /// there is no need to rebuild it while the process is alive
     private static let sharedDefaults = UserDefaults(suiteName: appGroupID)
 
-    /// 1% モノグラム (拡張バンドル同梱の 180px 縮小版)。
-    /// 1024px の原本アセットをそのまま渡すとデコードだけで約 4MB 食い、
-    /// Shield 拡張の約 6MB メモリ上限に接触しかねないため縮小コピーを使う
+    /// 1% monogram (a 180px reduced version bundled with the extension).
+    /// Passing the 1024px original asset as is uses about 4MB just to decode it,
+    /// which could hit the Shield extension's memory limit of about 6MB, so a reduced copy is used
     private static let shieldIcon = UIImage(named: "ShieldIcon")
 
-    /// App Group が読めない時 (フレッシュインストール直後 / 端末ロック中のデータ保護) の
-    /// 埋め込みフォールバック。❌ 175 件バンドル JSON のパースはしない
-    /// (コールドスタート時 11 秒フリーズの主因だったため完全に廃止)
-    /// author は画面には一切出していない (resolvedSubtitle 参照) が、実名全廃方針により
-    /// バイナリ解析で偉人の実名が読み取れてしまうのを防ぐため "Anonymous" に統一している
+    /// Embedded fallback for when the App Group cannot be read (right after a fresh install / data
+    /// protection while the device is locked). ❌ The 175-entry bundled JSON is not parsed
+    /// (it was the main cause of an 11-second freeze on cold start, so it was removed completely)
+    /// author is never shown on screen (see resolvedSubtitle), but under the policy of removing all real
+    /// names, it is unified to "Anonymous" so that the real names of famous people cannot be read by
+    /// analyzing the binary
     private static let embeddedFallback: [ShieldQuote] = [
         ("The job's not finished.", "仕事はまだ終わっていない。", "Anonymous"),
         ("Discipline is choosing between what you want now and what you want most.", "規律とは、今欲しいものと最も欲しいものを選び分けること。", "Anonymous"),
@@ -72,10 +77,10 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
     override init() {
         super.init()
         logger.log("🛡️ ShieldConfigurationExtension INIT — process launched")
-        // ❌ init で重い処理をしない（XPC cold start を最短化）
+        // ❌ Do no heavy work in init (keep the XPC cold start as short as possible)
     }
 
-    // MARK: - App Group Read（軽量パスのみ、重い JSON パースは一切しない）
+    // MARK: - App Group Read (lightweight paths only, no heavy JSON parsing at all)
 
     private func loadQuoteFromAppGroup() -> ShieldQuote? {
         guard let defaults = Self.sharedDefaults,
@@ -86,8 +91,8 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
         return parseQuoteDict(json)
     }
 
-    /// App Group の名言プール (メインアプリが事前シャッフルして書いた数十件) を読む。
-    /// 175 件のバンドル JSON と違い、数十件の軽量デコードなのでフリーズしない
+    /// Reads the quote pool in the App Group (a few dozen entries pre-shuffled and written by the main app).
+    /// Unlike the 175-entry bundled JSON, this is a light decode of a few dozen entries, so it does not freeze
     private func loadQuotePoolFromAppGroup() -> [ShieldQuote]? {
         guard let defaults = Self.sharedDefaults,
               let data = defaults.data(forKey: keyQuotePool),
@@ -107,8 +112,8 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
         return (textEn, textJp, author)
     }
 
-    /// 表示のたびに引く 1 件を選ぶ。
-    /// プール（複数件・ローテーション用）→ 単一 currentQuote → 埋め込みフォールバック の順
+    /// Picks the 1 entry drawn for each display.
+    /// Order: pool (multiple entries, for rotation) → single currentQuote → embedded fallback
     private func pickRandomQuote() -> ShieldQuote {
         if let pool = loadQuotePoolFromAppGroup(), let quote = pool.randomElement() {
             return quote
@@ -120,10 +125,10 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
             ?? ("The job's not finished.", "仕事はまだ終わっていない。", "Anonymous")
     }
 
-    // MARK: - Dream / Language (案A: アプリ名主導)
+    // MARK: - Dream / Language (plan A: app-name first)
 
-    /// 本体が users_dreams からミラー保存した「夢」を読む (AppGroupStorage.saveUserDream)。
-    /// UserDefaults の string 読み出しのみで JSON パースは無いため軽量
+    /// Reads the "dream" that the main app mirrored from users_dreams (AppGroupStorage.saveUserDream).
+    /// Only reads a string from UserDefaults with no JSON parsing, so it is light
     private func loadUserDreamFromAppGroup() -> String? {
         guard let defaults = Self.sharedDefaults,
               let raw = defaults.string(forKey: keyUserDream) else {
@@ -133,11 +138,12 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// UsageReportExtension と同じ判定式 (raw != "english" → 日本語扱い)。
-    /// キー未設定 (=本体の言語同期がまだ一度も走っていない: フレッシュインストール、または
-    /// 既存の英語ユーザーがアップデート後に本体を一度も起動しないまま schedule/location の
-    /// Shield が先に発火したケース) は、キー未設定を即日本語扱いにせず端末言語にフォールバックする
-    /// (2026-07 リグレッション修正: 既存英語ユーザーに日本語オンリー Shield が出る事故を防ぐ)
+    /// Same check as UsageReportExtension (raw != "english" → treated as Japanese).
+    /// If the key is not set (= the main app's language sync has never run: a fresh install, or an
+    /// existing English user whose schedule/location Shield fired first after an update, before the main
+    /// app was launched even once), the missing key is not treated as Japanese right away and it falls
+    /// back to the device language
+    /// (2026-07 regression fix: prevents an accident where existing English users see a Japanese-only Shield)
     private func loadIsJapanese() -> Bool {
         guard let raw = Self.sharedDefaults?.string(forKey: keyOnboardingLang) else {
             return Locale.preferredLanguages.first?.hasPrefix("ja") == true
@@ -145,8 +151,8 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
         return raw != "english"
     }
 
-    /// タイトル = 「[アプリ名] はロック中」。アプリ名が取れない場合は
-    /// WebDomain か通常アプリかで文言を分ける (F2: サイトとアプリで別コピー)
+    /// Title = "[app name] is locked". If the app name is not available,
+    /// the text differs between a WebDomain and a normal app (F2: separate copy for sites and apps)
     private func resolvedTitle(applicationName: String?, isWebDomain: Bool, isJapanese: Bool) -> String {
         if let name = applicationName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
             return isJapanese ? "\(name) はロック中" : "\(name) is locked"
@@ -157,22 +163,27 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
         return isJapanese ? "このアプリはロック中" : "This app is locked"
     }
 
-    /// サブタイトル = 「あなたの目標」ラベル + 夢 + 空行 + いいね名言 (2026-07-16 ユーザー確定)。
-    /// - 名言に**著者名は出さない** (ユーザー指定「ここで偉人の名前は使わない」。偉人実名の法的リスク方針とも整合)
-    /// - ShieldConfiguration のラベルは title/subtitle の2つ・各1色のみ。夢と名言の濃淡差は
-    ///   API上つけられないため、空行と引用符で階層を表現する
-    /// - 夢が未宣言なら名言のみ (こちらも著者名なし)
+    /// Subtitle = "あなたの目標" ("YOUR GOAL") label + dream + empty line + liked quote (2026-07-16 confirmed
+    /// by the user).
+    /// - **No author name** on the quote (user spec: "do not use the names of famous people here". Also
+    ///   consistent with the policy on the legal risk of famous people's real names)
+    /// - ShieldConfiguration has only 2 labels, title/subtitle, with one color each. The API does not
+    ///   allow different shades for the dream and the quote, so the hierarchy is expressed with an empty
+    ///   line and quotation marks
+    /// - If no dream is declared, only the quote (also without the author name)
     private func resolvedSubtitle(isJapanese: Bool) -> String {
         let quote = pickRandomQuote()
         let quoteText = isJapanese ? quote.textJp : quote.textEn
         let quoteLine = "\u{201C}\(quoteText)\u{201D}"
 
         if let dream = loadUserDreamFromAppGroup() {
-            let label = isJapanese ? "あなたの目標" : "YOUR GOAL" // 文言はユーザー添削待ち
-            // 先頭の空行 = タイトル「◯◯はロック中」との隙間 (実機FB第15弾)。
-            // ラベルだけ小さく/夢だけ色変えはサブタイトル1枠1色のAPI制約で不可のため、
-            // 夢本文は鍵括弧で括って名言と区別する (2026-07-16 ユーザー確定)。EN は括弧文化が
-            // 異なるので素のまま (名言側が引用符を持つため区別はつく)
+            let label = isJapanese ? "あなたの目標" : "YOUR GOAL" // Copy waiting for user review
+            // The leading empty line = the gap from the title "◯◯はロック中" ("◯◯ is locked") (real-device feedback
+            // round 15).
+            // Making only the label smaller / only the dream a different color is impossible because of the API
+            // limit of one color per subtitle, so the dream text is wrapped in Japanese corner brackets to tell it
+            // apart from the quote (2026-07-16 confirmed by the user). In EN the bracket convention is different,
+            // so it is left bare (the quote side has quotation marks, so they can still be told apart)
             let dreamLine = isJapanese ? "「\(dream)」" : dream
             return "\n\(label)\n\(dreamLine)\n\n\(quoteLine)"
         }
@@ -186,10 +197,10 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
         let isJapanese = loadIsJapanese()
         let title = resolvedTitle(applicationName: applicationName, isWebDomain: isWebDomain, isJapanese: isJapanese)
 
-        // 1 回の表示中に複数回呼ばれてもチラつかないよう、短時間・同じアプリ名なら
-        // キャッシュを返す。1.5 秒を超える、またはアプリ名が変わったら引き直す
-        // (= ロック画面が出るたびに夢が無い場合の名言がローテーションし、
-        //   異なるアプリを連続でロックした時に前のアプリ名が残らない)
+        // So that it does not flicker when called several times during one display, return the cache for a
+        // short time with the same app name. If more than 1.5 seconds pass, or the app name changes, pick again
+        // (= the quote shown when there is no dream rotates every time the lock screen appears, and
+        //   when different apps are locked in a row, the previous app name does not remain)
         if let cached = Self.cachedConfig,
            Self.cachedTitle == title,
            now.timeIntervalSince(Self.lastShownTime) < 1.5 {
@@ -198,7 +209,7 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
 
         let subtitle = resolvedSubtitle(isJapanese: isJapanese)
         let closeLabel = isJapanese ? "閉じる" : "Close"
-        // オフホワイト F2EFE7 (デザイン承認案A)
+        // Off-white F2EFE7 (design approved plan A)
         let titleColor = UIColor(red: 0xF2 / 255.0, green: 0xEF / 255.0, blue: 0xE7 / 255.0, alpha: 1.0)
 
         let config = ShieldConfiguration(
@@ -213,9 +224,10 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
                 text: subtitle,
                 color: UIColor(white: 0.58, alpha: 1.0)
             ),
-            // ラベル色と背景色は必ずペアで指定する (F3: 黒文字 + nil=システム既定背景だと
-            // ダークモード等で黒地に黒文字になり判読不能になるリスクがあったため)。
-            // オフホワイト F2EFE7 の背景に黒文字を固定ペアにしてブランド統一・判読性を両立する
+            // Always specify the label color and background color as a pair (F3: black text + nil = the system
+            // default background risked black text on a black background in dark mode etc., making it unreadable).
+            // Black text on an off-white F2EFE7 background is a fixed pair for both brand consistency and
+            // readability
             primaryButtonLabel: ShieldConfiguration.Label(text: closeLabel, color: UIColor.black),
             primaryButtonBackgroundColor: UIColor(red: 242 / 255.0, green: 239 / 255.0, blue: 231 / 255.0, alpha: 1.0),
             secondaryButtonLabel: nil

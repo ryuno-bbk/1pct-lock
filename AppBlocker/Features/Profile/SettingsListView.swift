@@ -2,7 +2,7 @@
 //  SettingsListView.swift
 //  AppBlocker
 //
-//  マイページの歯車アイコンから遷移する設定画面
+//  Settings screen opened from the gear icon on My Page
 //
 
 import SwiftUI
@@ -31,8 +31,8 @@ struct SettingsListView: View {
     var body: some View {
         List {
             Section(L.settingsSectionDisplay(mainLanguage)) {
-                // 既定は端末言語に追従 (キー無し)。この Picker で明示選択した時だけ固定される。
-                // 「端末の設定に従う」の明示行は不要 (ユーザー判断 2026-07-25)
+                // By default it follows the device language (no key). It is fixed only when explicitly chosen in this
+                // Picker. An explicit "follow device settings" row is not needed (user decision 2026-07-25)
                 Picker(selection: $mainLanguageRaw) {
                     ForEach(AppLanguage.allCases) { lang in
                         Text(lang.displayName).tag(lang.rawValue)
@@ -42,17 +42,19 @@ struct SettingsListView: View {
                         .foregroundColor(AppColors.textPrimary)
                 }
 
-                // 「英語の原文を併記」トグルは 2026-07-19 ユーザー決定で撤去 —
-                // 公式名言アカウント専用の設定が全体設定に居るのは不自然 (「何の原文?」となる)。
-                // 併記の挙動自体は AppStorage("showOriginal") の初期値 (日本語端末=ON) のまま維持。
-                // 「背景デザイン」「著者アイコン」の近日公開行も 2026-07-20 ユーザー決定で撤去
-                // (トーストを出すだけのハリボテはリリースに載せない。機能実装時に行ごと復活させる)
+                // The "show the English original too" toggle was removed by user decision 2026-07-19:
+                // a setting only for the official quote account does not belong in the global settings (people ask
+                // "original of what?"). The side-by-side behavior itself stays as the initial value of
+                // AppStorage("showOriginal") (Japanese device = ON).
+                // The coming-soon rows "background design" and "author icon" were also removed by user decision
+                // 2026-07-20 (fake rows that only show a toast do not ship in the release. Bring the whole row back
+                // when the feature is implemented)
 
-                // アプリアイコン切替 (エリート特典、2026-07-20 新設)
+                // App icon switching (Elite perk, added 2026-07-20)
                 NavigationLink {
                     AppIconPickerView()
                 } label: {
-                    Label(mainLanguage == .japanese ? "アプリアイコン" : "App Icon", // 文言はユーザー添削待ち
+                    Label(mainLanguage == .japanese ? "アプリアイコン" : "App Icon", // Wording is waiting for the user's review
                           systemImage: "app.badge.checkmark")
                         .foregroundColor(AppColors.textPrimary)
                 }
@@ -65,30 +67,31 @@ struct SettingsListView: View {
                     Text(appVersion)
                         .foregroundColor(AppColors.textSecondary)
                 }
-                // お問い合わせ: 準備中トーストから実装に差し替え (M26)
-                settingRow(icon: "envelope.fill", label: mainLanguage == .japanese ? "お問い合わせ" : "Contact us") { // 文言はユーザー添削待ち
+                // Contact us: replaced the coming-soon toast with a real implementation (M26)
+                settingRow(icon: "envelope.fill", label: mainLanguage == .japanese ? "お問い合わせ" : "Contact us") { // Wording is waiting for the user's review
                     if let url = LegalLinks.supportMailURL {
                         UIApplication.shared.open(url)
                     }
                 }
 
-                // 利用規約・プライバシーポリシー (M6一部/M26): URL は LegalLinks の TODO プレースホルダ、公開後差し替え (M6/H1)
-                settingRow(icon: "doc.text", label: mainLanguage == .japanese ? "利用規約" : "Terms of Service") { // 文言はユーザー添削待ち
+                // Terms of Service / Privacy Policy (part of M6/M26): the URLs are TODO placeholders in LegalLinks,
+                // to be replaced after publishing (M6/H1)
+                settingRow(icon: "doc.text", label: mainLanguage == .japanese ? "利用規約" : "Terms of Service") { // Wording is waiting for the user's review
                     UIApplication.shared.open(LegalLinks.termsURL)
                 }
-                settingRow(icon: "hand.raised.fill", label: mainLanguage == .japanese ? "プライバシーポリシー" : "Privacy Policy") { // 文言はユーザー添削待ち
+                settingRow(icon: "hand.raised.fill", label: mainLanguage == .japanese ? "プライバシーポリシー" : "Privacy Policy") { // Wording is waiting for the user's review
                     UIApplication.shared.open(LegalLinks.privacyURL)
                 }
             }
 
             if userAuth.isSignedIn {
-                // 週次レポート (080)。過去分は block_sessions から再集計するので
-                // 「保存された履歴」ではなく、いつ開いても最新の集計定義で出る
-                Section(mainLanguage == .japanese ? "レポート" : "Reports") {  // 文言はユーザー添削待ち
+                // Weekly report (080). Past weeks are recomputed from block_sessions, so
+                // it is not a "saved history"; whenever it is opened it uses the latest aggregation definition
+                Section(mainLanguage == .japanese ? "レポート" : "Reports") {  // Wording is waiting for the user's review
                     NavigationLink {
                         WeeklyReportListView()
                     } label: {
-                        Label(mainLanguage == .japanese ? "週次レポート" : "Weekly Reports",  // 文言はユーザー添削待ち
+                        Label(mainLanguage == .japanese ? "週次レポート" : "Weekly Reports",  // Wording is waiting for the user's review
                               systemImage: "chart.bar.doc.horizontal")
                             .foregroundColor(AppColors.textPrimary)
                     }
@@ -102,12 +105,12 @@ struct SettingsListView: View {
                             .foregroundColor(AppColors.textPrimary)
                     }
 
-                    // フォロー中一覧 (2026-07-30 D案改2: プロフィールの導線を撤去しここへ移動。
-                    // 低頻度の管理機能=設定が定位置)
+                    // Following list (2026-07-30 plan D revision 2: removed the entry point from the profile and moved
+                    // it here. A low-frequency management feature = its place is Settings)
                     NavigationLink {
                         FollowedAccountsView()
                     } label: {
-                        Label(mainLanguage == .japanese ? "フォロー中のアカウント" : "Following", systemImage: "person.2")  // 文言はユーザー添削待ち
+                        Label(mainLanguage == .japanese ? "フォロー中のアカウント" : "Following", systemImage: "person.2")  // Wording is waiting for the user's review
                             .foregroundColor(AppColors.textPrimary)
                     }
 
@@ -137,9 +140,9 @@ struct SettingsListView: View {
         }
         .navigationTitle(L.settingsTitle(mainLanguage))
         .navigationBarTitleDisplayMode(.inline)
-        // ProfileEditView と同じ「ヘッダー貫通」対策 (2026-08-04)。
-        // 親 (MyProfileView) の toolbarBackground(.hidden) を引き継ぐと List の中身が
-        // ナビバーを素通りして見える。歯車から1タップで来る画面なので同時に塞ぐ
+        // Same "header bleed-through" fix as ProfileEditView (2026-08-04).
+        // If it inherits toolbarBackground(.hidden) from the parent (MyProfileView), the List contents
+        // show through the nav bar. This screen is one tap from the gear, so fix it at the same time
         .toolbarBackground(AppColors.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)

@@ -1,16 +1,17 @@
 -- ============================================================
 -- 023_user_bio.sql
--- プロフィールに自己紹介 (bio) を追加
+-- Add a self-introduction (bio) to the profile
 -- ============================================================
--- 目的:
---   users.bio 列を追加。プロフィール画面 (自分/他人) に表示、ProfileEditView で編集。
---   160文字以内、任意 (NULL 可)。検索対象にはしない (search_users は handle/display_name のみ)。
+-- Purpose:
+--   Add a users.bio column. Shown on the profile screen (own/others), edited in ProfileEditView.
+--   Up to 160 characters, optional (NULL allowed). Not searchable (search_users only uses
+--   handle/display_name).
 --
--- 適用方法:
---   019〜022 適用済みの環境に対し、Supabase Dashboard の SQL Editor で貼り付け実行、
---   または `NEW_DB_URL=... bash apply_sql.sh Supabase/migrations/023_user_bio.sql`
+-- How to apply:
+--   On an environment with 019-022 applied, paste and run it in the SQL Editor of the Supabase
+--   Dashboard, or `NEW_DB_URL=... bash apply_sql.sh Supabase/migrations/023_user_bio.sql`
 --
--- 実行順序: 022 完了後。冪等 (IF NOT EXISTS / DROP CONSTRAINT IF EXISTS)
+-- Execution order: after 022. Idempotent (IF NOT EXISTS / DROP CONSTRAINT IF EXISTS)
 -- ============================================================
 
 ALTER TABLE public.users
@@ -26,5 +27,6 @@ ALTER TABLE public.users
 
 COMMENT ON COLUMN public.users.bio IS 'プロフィールの自己紹介。160文字以内、任意。プロフィール画面に表示、検索対象外';
 
--- RLS: users の SELECT/UPDATE ポリシーは既存 (001/013) のまま。bio は列追加のみで
--- 新規ポリシー不要 (自分の行のみ UPDATE 可、SELECT は全員可の既存設定が bio にもそのまま効く)。
+-- RLS: the SELECT/UPDATE policies of users stay as they are (001/013). bio is only a column addition
+-- and needs no new policy (the existing setup, UPDATE only on your own row and SELECT for everyone,
+-- applies to bio as is).

@@ -1,11 +1,11 @@
 -- ============================================================
 -- 040_revenuecat_event_ordering.sql
--- 監査 L24: RevenueCat webhookイベントの順序保証 (rc_last_event_ms)
+-- Audit L24: ordering guarantee for RevenueCat webhook events (rc_last_event_ms)
 -- ============================================================
--- 背景: RevenueCatのwebhookは順序保証がない。DB障害時のリトライで、
--- 遅延到着した古いEXPIRATIONが、その後に処理された新しいINITIAL_PURCHASEの
--- is_pro=trueを誤って上書きするシーケンスが起こりうる。
--- event_timestamp_msの単調性をDB側でガードすることで解決する。
+-- Background: RevenueCat webhooks have no ordering guarantee. With retries during a DB outage,
+-- a sequence can happen where an old EXPIRATION that arrives late wrongly overwrites is_pro=true set
+-- by a newer INITIAL_PURCHASE that was processed after it.
+-- Solved by guarding the monotonicity of event_timestamp_ms on the DB side.
 
 ALTER TABLE public.users
     ADD COLUMN IF NOT EXISTS rc_last_event_ms bigint;
@@ -13,10 +13,11 @@ ALTER TABLE public.users
 COMMENT ON COLUMN public.users.rc_last_event_ms IS
     'RevenueCat webhookで最後に反映したevent.event_timestamp_ms。古いイベントの巻き戻り防止用';
 
--- is_pro を event_timestamp_ms の単調性を守りながら更新するSECURITY DEFINER関数。
--- 015のprotect_users_is_proトリガーはservice_role/postgresのrolbypassrlsを通すので、
--- この関数もpostgres所有のSECURITY DEFINERとして同様に通過する。
--- p_event_ms が NULL の場合はガード無しで従来通り更新する (イベントにタイムスタンプが無いケースへのフォールバック)。
+-- SECURITY DEFINER function that updates is_pro while keeping event_timestamp_ms monotonic.
+-- The protect_users_is_pro trigger from 015 lets rolbypassrls of service_role/postgres through, so
+-- this function, as a postgres-owned SECURITY DEFINER, passes the same way.
+-- If p_event_ms is NULL it updates as before without the guard (fallback for events without a
+-- timestamp).
 CREATE OR REPLACE FUNCTION public.set_is_pro_guarded(
     p_user_id  uuid,
     p_is_pro   boolean,
@@ -46,25 +47,26 @@ END;
 $$;
 
 REVOKE EXECUTE ON FUNCTION public.set_is_pro_guarded(uuid, boolean, bigint) FROM PUBLIC, anon, authenticated;
--- この関数は Edge Function が PostgREST /rpc 経由で service_role として直接呼ぶ。
--- create_notification のような「postgres 所有の SECURITY DEFINER 内部からの呼び出し」と
--- 違い、EXECUTE 権限チェックが service_role 自身に掛かる (rolbypassrls が素通りさせる
--- のは RLS のみで、関数 ACL は対象外)。Supabase の default privileges に依存せず明示 GRANT
+-- This function is called directly by the Edge Function via PostgREST /rpc as service_role.
+-- Unlike "calls from inside a postgres-owned SECURITY DEFINER" such as create_notification,
+-- the EXECUTE privilege check applies to service_role itself (rolbypassrls only bypasses
+-- RLS, not function ACLs). GRANT explicitly instead of relying on Supabase default privileges
 GRANT EXECUTE ON FUNCTION public.set_is_pro_guarded(uuid, boolean, bigint) TO service_role;
 
 -- ============================================================
--- rc_last_event_ms の列レベル保護 (レビューで発見、L24修正自身が生みかけた抜け穴)
+-- Column-level protection for rc_last_event_ms (found in review: a hole the L24 fix itself almost
+-- created)
 -- ============================================================
--- users_update_own ポリシー (003_a_rls_rpc.sql:70-73) は auth.uid()=id の行全体
--- UPDATE を許可しており列単位の制限が無い。rc_last_event_ms を無防備のままにすると、
--- 認証済みユーザーが自分のJWTで直接この列に未来の巨大値を書き込め、
--- set_is_pro_guarded の単調性ガード (rc_last_event_ms < p_event_ms) が以後届く
--- 本物のRevenueCatイベント全てに対して永久に不成立になる。結果、実際にサブスクが
--- 失効しても EXPIRATION が無視され is_pro=true が恒久固定される
--- (H12 と同種の課金バイパスを、この L24 修正自身が新設してしまうところだった)。
--- is_pro と同じ trigger (015 protect_users_is_pro) で一緒に守ることで解決する。
--- トリガー本体 (015 で定義済みの users_protect_is_pro, BEFORE UPDATE) はそのまま
--- 流用され、関数の CREATE OR REPLACE だけで新しい列も保護対象になる。
+-- The users_update_own policy (003_a_rls_rpc.sql:70-73) allows UPDATE of the whole row where
+-- auth.uid()=id, with no per-column restriction. If rc_last_event_ms were left unprotected,
+-- an authenticated user could write a huge future value into this column directly with their own
+-- JWT, and the monotonic guard of set_is_pro_guarded (rc_last_event_ms < p_event_ms) would then fail
+-- forever for every real RevenueCat event that arrives. As a result, even when the subscription
+-- actually expires, EXPIRATION is ignored and is_pro=true is fixed permanently
+-- (this L24 fix itself was about to create a purchase bypass of the same kind as H12).
+-- Solved by protecting it together with is_pro in the same trigger (015 protect_users_is_pro).
+-- The trigger itself (users_protect_is_pro, BEFORE UPDATE, defined in 015) is reused as is,
+-- and CREATE OR REPLACE of the function alone puts the new column under protection.
 CREATE OR REPLACE FUNCTION public.protect_users_is_pro()
 RETURNS trigger
 LANGUAGE plpgsql

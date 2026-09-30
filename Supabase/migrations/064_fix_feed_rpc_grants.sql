@@ -1,45 +1,46 @@
 -- 064_fix_feed_rpc_grants.sql
 --
--- 🔴 出荷ブロッカーの修正 (2026-07-31 出荷前セキュリティ差分チェックで発見)
+-- 🔴 Fix for a shipping blocker (found in the 2026-07-31 pre-ship security diff check)
 --
--- 【何が起きていたか】
--- 063 は fetch_mixed_feed_random(integer) を DROP して、新しいシグネチャ
--- fetch_mixed_feed_random(integer, text) で作り直している (063:32-34)。
--- ところが末尾の REVOKE/GRANT の再設定が抜けていた。
+-- [What was happening]
+-- 063 DROPs fetch_mixed_feed_random(integer) and recreates it with the new signature
+-- fetch_mixed_feed_random(integer, text) (063:32-34).
+-- But the REVOKE/GRANT at the end was missing.
 --
--- PostgreSQL は CREATE FUNCTION 時に暗黙で PUBLIC へ EXECUTE を与えるため
--- (015_security_audit.sql:136 に同じ記述あり)、063 適用後のこの関数は
--- **未認証 (anon) から実行可能な状態**になっていた。
+-- PostgreSQL implicitly grants EXECUTE to PUBLIC on CREATE FUNCTION
+-- (the same note is in 015_security_audit.sql:136), so after 063 was applied this function was
+-- **executable by unauthenticated users (anon)**.
 --
--- 【影響】
--- アプリバイナリから取れる publishable キーだけで、ログインせずに
+-- [Impact]
+-- With only the publishable key that can be extracted from the app binary, without logging in,
+-- anyone could call
 --   POST /rest/v1/rpc/fetch_mixed_feed_random
--- を叩き、直近30日の全投稿 (本文/タイトル/image_path/author_id/display_name/
--- avatar_url) を seed を変えながら全件スクレイプできた。
--- さらに SECURITY DEFINER 下で auth.uid() が NULL になるため、063:154-158 の
--- ブロック除外サブクエリが空集合となり NOT IN が常に真 =
--- **ブロック機能ごと無効化された全件**が返っていた。
--- 加えて本関数は全行に md5() を計算する全走査で、046/047 のレート制限も
--- かからないため、未認証者が無制限に DB CPU を消費できる状態でもあった。
+-- and scrape every post from the last 30 days (body/title/image_path/author_id/display_name/
+-- avatar_url) by changing the seed.
+-- Also, under SECURITY DEFINER auth.uid() is NULL, so the block exclusion subquery at 063:154-158
+-- became an empty set and NOT IN was always true =
+-- **all rows were returned with the block feature itself disabled**.
+-- In addition, this function is a full scan that computes md5() for every row, and the 046/047 rate
+-- limits do not apply, so an unauthenticated user could also consume DB CPU without limit.
 --
--- 【再発防止】
--- 029:41 に「DROP すると既存の GRANT/REVOKE も消えるため末尾で再設定する」と
--- 明記されているのに 063 で漏れた。今後 DROP FUNCTION を書いたら、同じファイルの
--- 末尾に必ず REVOKE/GRANT をセットで書くこと。
--- 052/054/057/062 は CREATE OR REPLACE のみ (DROP なし) なので権限は維持されており
--- 影響なし。058/059 は DROP しているが両方とも REVOKE/GRANT を正しく再設定済み。
--- 052〜063 を横断確認した結果、権限が抜けているのは 063 のこの1本のみ。
+-- [Preventing recurrence]
+-- 029:41 clearly says "a DROP also removes the existing GRANT/REVOKE, so set them again at the
+-- end", yet 063 missed it. From now on, whenever you write DROP FUNCTION, always write REVOKE/GRANT
+-- as a set at the end of the same file.
+-- 052/054/057/062 are CREATE OR REPLACE only (no DROP), so their permissions were kept and
+-- they are not affected. 058/059 do DROP, but both reset REVOKE/GRANT correctly.
+-- Checking 052 to 063 across the board, the only one missing permissions is this one in 063.
 
 -- ---------------------------------------------------------------------------
--- 修正本体
+-- The fix itself
 -- ---------------------------------------------------------------------------
 REVOKE EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer, text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer, text) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer, text) TO authenticated;
 
 -- ---------------------------------------------------------------------------
--- 検証: 実行後にこれを流し、proacl に anon= が無く authenticated=X が有ることを確認する。
--- 併せて他のフィード系 RPC も同じ状態か見比べること。
+-- Verification: run this after applying, and confirm that proacl has no anon= and does have
+-- authenticated=X. Also compare whether the other feed RPCs are in the same state.
 -- ---------------------------------------------------------------------------
 -- SELECT p.proname,
 --        pg_get_function_identity_arguments(p.oid) AS args,

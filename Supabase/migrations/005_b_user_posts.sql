@@ -1,34 +1,36 @@
 -- ============================================================
--- Phase B-2 (S9): user_posts + RLS + 関連 RPC
+-- Phase B-2 (S9): user_posts + RLS + related RPCs
 -- ============================================================
--- 目的:
---   ユーザー投稿 (UGC) を保存する user_posts テーブル + そのいいね機能
---   + 公式 quotes と UGC user_posts を混在してフィードに出す RPC 3 種
+-- Purpose:
+--   user_posts table for storing user posts (UGC) + its like feature
+--   + 3 RPCs that show official quotes and UGC user_posts mixed in the feed
 --
--- 設計判断 (S9 確定):
---   - body 単一 (jp/en 分離なし、500 文字制限)。表示は AppLanguage で切替不要 (投稿そのまま表示)
---   - tags text[] 0-3 個、既存 16 種から選択
---   - status / モデレ列なし (Phase B-3 = S10 で user_reports / user_blocks を別テーブルで実装)
---   - 投稿者は自分の投稿を削除可
---   - 「おすすめ」フィード = quotes + user_posts ランダム混在
---   - 「フォロー中」フィード = フォロー対象の quotes + user_posts (新着順)
---   - ハッシュタグタップ = 同タグの quotes + user_posts 混在 (ランダム)
+-- Design decisions (finalized in S9):
+--   - Single body (no jp/en split, 500 character limit). No AppLanguage switch for display (the post
+--     is shown as is)
+--   - tags text[] 0-3, chosen from the existing 16
+--   - No status / moderation columns (Phase B-3 = S10 implements user_reports / user_blocks as
+--     separate tables)
+--   - Authors can delete their own posts
+--   - "おすすめ" ("Recommended") feed = quotes + user_posts mixed randomly
+--   - "フォロー中" ("Following") feed = quotes + user_posts from followed accounts (newest first)
+--   - Hashtag tap = quotes + user_posts with the same tag, mixed (random)
 --
--- RPC 返却型:
---   既存 Quote モデルとの整合性のため body_jp / body_en の 2 カラムを返す
---   - 公式 quote: body_jp = quotes.text_jp, body_en = quotes.text_en
---   - UGC post:  body_jp = user_posts.body, body_en = NULL (Quote.displayPrimary がフォールバック)
+-- RPC return type:
+--   Returns 2 columns body_jp / body_en to stay consistent with the existing Quote model
+--   - Official quote: body_jp = quotes.text_jp, body_en = quotes.text_en
+--   - UGC post:  body_jp = user_posts.body, body_en = NULL (Quote.displayPrimary falls back)
 --
--- 前提:
---   001 (users) / 002 (user_likes/user_follows) / 003 (RLS+RPC) / 004 (is_official) 実行済み
---   user_likes.post_id は 002 で予約済み、FK のみ未追加
+-- Prerequisites:
+--   001 (users) / 002 (user_likes/user_follows) / 003 (RLS+RPC) / 004 (is_official) already run
+--   user_likes.post_id was reserved in 002, only the FK is not added yet
 --
--- 実行順序:
---   004 完了後 → このファイル (S9)
+-- Run order:
+--   after 004 → this file (S9)
 -- ============================================================
 
 -- ============================================
--- 1. user_posts テーブル
+-- 1. user_posts table
 -- ============================================
 CREATE TABLE IF NOT EXISTS public.user_posts (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -43,7 +45,7 @@ CREATE TABLE IF NOT EXISTS public.user_posts (
 COMMENT ON TABLE public.user_posts IS 'UGC: ユーザー投稿。body 単一、tags は既存 16 種から 0-3 個';
 COMMENT ON COLUMN public.user_posts.tags IS '既存 quotes.category と同じプール (mindset / action / ... / life)';
 
--- updated_at 自動更新
+-- Auto-update updated_at
 DROP TRIGGER IF EXISTS user_posts_set_updated_at ON public.user_posts;
 CREATE TRIGGER user_posts_set_updated_at
     BEFORE UPDATE ON public.user_posts
@@ -51,7 +53,7 @@ CREATE TRIGGER user_posts_set_updated_at
     EXECUTE FUNCTION public.set_updated_at();
 
 -- ============================================
--- 2. インデックス
+-- 2. Indexes
 -- ============================================
 CREATE INDEX IF NOT EXISTS idx_user_posts_created_at
     ON public.user_posts (created_at DESC);
@@ -59,12 +61,12 @@ CREATE INDEX IF NOT EXISTS idx_user_posts_created_at
 CREATE INDEX IF NOT EXISTS idx_user_posts_user_id_created_at
     ON public.user_posts (user_id, created_at DESC);
 
--- ハッシュタグ検索高速化
+-- Speeds up hashtag search
 CREATE INDEX IF NOT EXISTS idx_user_posts_tags
     ON public.user_posts USING GIN (tags);
 
 -- ============================================
--- 3. user_likes.post_id FK 追加 (002 で予約済み列)
+-- 3. Add FK on user_likes.post_id (column reserved in 002)
 -- ============================================
 ALTER TABLE public.user_likes
     DROP CONSTRAINT IF EXISTS user_likes_post_id_fkey;
@@ -78,7 +80,7 @@ ALTER TABLE public.user_likes
 -- ============================================
 ALTER TABLE public.user_posts ENABLE ROW LEVEL SECURITY;
 
--- 冪等性のため既存ポリシーを drop (S1 草案の古いポリシー名もカバー)
+-- Drop existing policies for idempotency (also covers old policy names from the S1 draft)
 DROP POLICY IF EXISTS "user_posts_select_approved" ON public.user_posts;
 DROP POLICY IF EXISTS "user_posts_select_own"      ON public.user_posts;
 DROP POLICY IF EXISTS "user_posts_select_all"      ON public.user_posts;
@@ -86,29 +88,29 @@ DROP POLICY IF EXISTS "user_posts_insert_own"      ON public.user_posts;
 DROP POLICY IF EXISTS "user_posts_update_own"      ON public.user_posts;
 DROP POLICY IF EXISTS "user_posts_delete_own"      ON public.user_posts;
 
--- SELECT: 全員可
+-- SELECT: everyone
 CREATE POLICY "user_posts_select_all"
     ON public.user_posts FOR SELECT
     USING (true);
 
--- INSERT: 自分の user_id でのみ
+-- INSERT: only with your own user_id
 CREATE POLICY "user_posts_insert_own"
     ON public.user_posts FOR INSERT
     WITH CHECK (auth.uid() = user_id);
 
--- UPDATE: 自分の投稿のみ (like_count は後述 trigger で保護)
+-- UPDATE: own posts only (like_count is protected by the trigger below)
 CREATE POLICY "user_posts_update_own"
     ON public.user_posts FOR UPDATE
     USING (auth.uid() = user_id)
     WITH CHECK (auth.uid() = user_id);
 
--- DELETE: 自分の投稿のみ
+-- DELETE: own posts only
 CREATE POLICY "user_posts_delete_own"
     ON public.user_posts FOR DELETE
     USING (auth.uid() = user_id);
 
 -- ============================================
--- 5. like_count 改ざん防止 trigger
+-- 5. Trigger that prevents tampering with like_count
 -- ============================================
 CREATE OR REPLACE FUNCTION public.protect_user_posts_like_count()
 RETURNS trigger
@@ -126,18 +128,19 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS user_posts_protect_columns   ON public.user_posts; -- 旧トリガー名 (S1 草案)
+DROP TRIGGER IF EXISTS user_posts_protect_columns   ON public.user_posts; -- Old trigger name (S1 draft)
 DROP TRIGGER IF EXISTS user_posts_protect_like_count ON public.user_posts;
 CREATE TRIGGER user_posts_protect_like_count
     BEFORE UPDATE ON public.user_posts
     FOR EACH ROW
     EXECUTE FUNCTION public.protect_user_posts_like_count();
 
--- 旧 S1 草案の protect_user_posts_columns 関数は status カラムを参照しているため削除
+-- The protect_user_posts_columns function from the old S1 draft references the status column, so it
+-- is removed
 DROP FUNCTION IF EXISTS public.protect_user_posts_columns() CASCADE;
 
 -- ============================================
--- 6. toggle_post_like RPC (UGC いいね)
+-- 6. toggle_post_like RPC (UGC likes)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.toggle_post_like(target_post_id uuid)
 RETURNS jsonb
@@ -191,9 +194,9 @@ REVOKE EXECUTE ON FUNCTION public.toggle_post_like(uuid) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.toggle_post_like(uuid) TO authenticated;
 
 -- ============================================
--- 7. fetch_mixed_feed_random RPC (おすすめフィード)
+-- 7. fetch_mixed_feed_random RPC (Recommended feed)
 -- ============================================
--- 公式 quotes + UGC user_posts を完全ランダム混在で返す
+-- Returns official quotes + UGC user_posts in a fully random mix
 CREATE OR REPLACE FUNCTION public.fetch_mixed_feed_random(limit_count integer DEFAULT 50)
 RETURNS TABLE (
     kind                text,         -- 'quote' or 'post'
@@ -252,9 +255,9 @@ REVOKE EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer) TO authenticated;
 
 -- ============================================
--- 8. fetch_following_feed RPC (フォロー中フィード)
+-- 8. fetch_following_feed RPC (Following feed)
 -- ============================================
--- 自分がフォローしている author + user の投稿のみ (新着順)
+-- Only posts from authors + users you follow (newest first)
 CREATE OR REPLACE FUNCTION public.fetch_following_feed(limit_count integer DEFAULT 50)
 RETURNS TABLE (
     kind                text,
@@ -321,9 +324,9 @@ REVOKE EXECUTE ON FUNCTION public.fetch_following_feed(integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_following_feed(integer) TO authenticated;
 
 -- ============================================
--- 9. fetch_tag_feed RPC (ハッシュタグタップ用)
+-- 9. fetch_tag_feed RPC (for hashtag taps)
 -- ============================================
--- 指定タグを含む quotes + user_posts を混在 (ランダム)
+-- quotes + user_posts that contain the given tag, mixed (random)
 CREATE OR REPLACE FUNCTION public.fetch_tag_feed(
     target_tag  text,
     limit_count integer DEFAULT 50

@@ -2,9 +2,10 @@
 //  AvatarImage.swift
 //  AppBlocker
 //
-//  ユーザーアバター表示用の共通コンポーネント。
-//  URLSession を直接使う独自実装 (AsyncImage は URL 変更時の挙動が不安定で
-//  「画像が反映されない」「クルクル状態が続く」問題が再現した — S15 で URLSession に置き換え)。
+//  Shared component for showing user avatars.
+//  A custom implementation that uses URLSession directly (AsyncImage behaved unstably when the URL
+//  changed, and the problems "the image is not updated" and "the spinner keeps going" were
+//  reproduced; replaced with URLSession in S15).
 //
 
 import SwiftUI
@@ -52,7 +53,7 @@ struct AvatarImage: View {
     }
 
     private func reload() {
-        // URL が変わっていないなら何もしない
+        // If the URL has not changed, do nothing
         if urlString == loadedFor, loadedImage != nil { return }
 
         loadTask?.cancel()
@@ -67,13 +68,14 @@ struct AvatarImage: View {
         }
 
         isLoading = true
-        // 前の画像はクルクル中も出し続けたいので loadedImage は消さない
-        // ただし loadedFor の URL とは別なので、表示判定 (loadedFor == urlString) で
-        // 古い画像は描画されない仕組み
+        // Keep showing the previous image while the spinner runs, so loadedImage is not cleared.
+        // However, it differs from the URL in loadedFor, so with the display check (loadedFor == urlString)
+        // the old image is not drawn
 
         let task = Task { @MainActor in
-            // L5: PostThumbnailLoader の NSCache を共用し、セル再出現ごとの URLSession 再取得 +
-            // フルデコードを回避する (アバター表示は最大 120pt @3x=360px 程度なので 400px サムネで画質は十分)
+            // L5: share the NSCache of PostThumbnailLoader, avoiding a URLSession re-fetch + full decode every time
+            // a cell reappears (avatars are shown at most about 120pt @3x=360px, so a 400px thumbnail has enough
+            // quality)
             if let img = await PostThumbnailLoader.shared.thumbnail(for: url) {
                 if Task.isCancelled { return }
                 self.loadedImage = img

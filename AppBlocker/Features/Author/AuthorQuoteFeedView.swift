@@ -2,8 +2,10 @@
 //  AuthorQuoteFeedView.swift
 //  AppBlocker
 //
-//  偉人 (著者) の名言だけのトピックフィード。「— 著者名」タップ / 著者プロフィールから遷移。
-//  2026-07-10 BeReal 風改修で全画面 TikTok スクロール → FeedCardListView (4:5 カードリスト) に。
+//  Topic feed with only the quotes of a historical figure (author). Opened by tapping the author name
+//  credit / from the author profile.
+//  In the 2026-07-10 BeReal-style redesign, full-screen TikTok scrolling → FeedCardListView (4:5
+//  card list).
 //
 
 import SwiftUI
@@ -23,11 +25,11 @@ struct AuthorQuoteFeedView: View {
         let items = self.items
         FeedCardListView(
             items: items,
-            recordsViews: false,  // 著者トピックフィード (名言のみ)、投稿詳細タップではない
+            recordsViews: false,  // Author topic feed (quotes only), not a tap into post details
             startItemKey: items.indices.contains(startIndex) ? items[startIndex].id : nil,
-            disableTopicTap: true,  // 既にこの著者の一覧を見ているためタップ遷移なし
+            disableTopicTap: true,  // Already viewing this author's list, so no tap navigation
             onLikeToggled: { item, nowLiked in
-                // いいね一覧グリッドとの同期 (旧 AuthorFeedCard の onLikeTap と同じ)
+                // Sync with the likes grid (same as onLikeTap in the old AuthorFeedCard)
                 guard let quote = quotes.first(where: { $0.id == item.itemId }) else { return }
                 if nowLiked {
                     likeService.addToLikedQuotes(quote)

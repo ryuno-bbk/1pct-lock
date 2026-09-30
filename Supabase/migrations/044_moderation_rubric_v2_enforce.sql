@@ -1,24 +1,30 @@
 -- ============================================================
 -- 044_moderation_rubric_v2_enforce.sql
--- ルーブリック v2 + ethos_enforce 本稼働 (2026-07-24 実弾テストFB)
+-- Rubric v2 + ethos_enforce goes live (2026-07-24 live test feedback)
 -- ============================================================
--- 背景 (ユーザー実機テスト 2026-07-24):
---   1. flagged 投稿がおすすめ欄に流れる → バグではなく ethos_enforce=false (shadow モード)
---      のままだったため。通知(039)+異議申し立て+制限オーバーレイが揃った今、本稼働に切替。
---      true にした瞬間、既存/今後の flagged は全フィードRPC (029/032/037/041) から消える。
---      本人はマイページ系でオーバーレイ付きで見え続ける (クライアント実装済み)。
---   2. 素通りした実例への対策:
---      - 女性写真 + 本文「エロい」 → 層1に「性的な文脈づけ」(画像×テキスト複合) を新設
---      - 車内男女4人 + 「ドライブ❤️」 → 層2に「遊び・レジャーのお出かけ」を新設
---      - 「パチンコで12万勝った」 → 層2に「ギャンブル」を新設
---   3. 守るべき境界 (ユーザー確定方針): フィットネス系の自撮り・進捗報告・ロールモデル引用は
---      露出を理由に弾かない。弾くのは性的アピールが主目的の極端な露出のみ (層1側で判定)。
+-- Background (user's real device test 2026-07-24):
+--   1. flagged posts flow into the recommended feed → not a bug; ethos_enforce was still false
+--      (shadow mode). Now that notifications (039) + appeals + the restriction overlay are all in
+--      place, switch it on for real.
+--      The moment it is true, existing/future flagged posts disappear from all feed RPCs
+--      (029/032/037/041). The author still sees them with an overlay in the My Page views (already
+--      implemented on the client).
+--   2. Fixes for real examples that slipped through:
+--      - Photo of a woman + body text "エロい" ("sexy") → new layer 1 item "sexual framing"
+--        (image × text combined)
+--      - 4 men and women in a car + "ドライブ❤️" ("Drive ❤️") → new layer 2 item "going out for
+--        play/leisure"
+--      - "パチンコで12万勝った" ("Won 120,000 yen at pachinko") → new layer 2 item "gambling"
+--   3. Boundary to protect (policy confirmed by the user): fitness selfies, progress reports and role
+--      model quotes are not rejected for exposure. Only extreme exposure whose main purpose is sexual
+--      appeal is rejected (judged on the layer 1 side).
 --
--- 適用: SQL Editor でこのファイルを実行するだけ。Edge Function の再デプロイは不要
---   (ルーブリックは moderate-post が判定のたびに DB から読む設計)。
--- ロールバック: ethos_enforce=false に戻せば表示は即 shadow モードに戻る。
+-- Apply: just run this file in SQL Editor. No Edge Function redeploy needed
+--   (by design, moderate-post reads the rubric from the DB on every review).
+-- Rollback: set ethos_enforce=false and display goes back to shadow mode immediately.
 --
--- 全文書き換え方式 (027 の初期文 + 043 の追記を含めて丸ごと置換) のため冪等。
+-- Full rewrite approach (replaces everything, including the initial text from 027 + the additions
+-- from 043), so it is idempotent.
 -- ============================================================
 
 UPDATE public.moderation_config

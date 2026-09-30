@@ -1,15 +1,15 @@
 -- ============================================================
 -- 050_comment_owner_like.sql
--- 「投稿者がいいねしました」バッジ用の is_liked_by_owner (2026-07-25 実機FB)
+-- is_liked_by_owner for the "投稿者がいいねしました" ("Liked by the author") badge (2026-07-25 real device feedback)
 -- ============================================================
--- fetch_comments_for_post の戻り値に「そのコメントを投稿の作者がいいねしているか」を追加。
--- TikTok の作成者ハートと同じ UI (返信ボタン横に投稿者アバター+赤ハート) の判定材料。
--- 名言コメント (fetch_comments_for_quote) は「投稿者」概念が無いため対象外。
+-- Add "whether the post's author liked that comment" to the return value of fetch_comments_for_post.
+-- Input for the same UI as TikTok's creator heart (author avatar + red heart next to the reply button).
+-- Quote comments (fetch_comments_for_quote) are excluded because there is no "author" concept.
 --
--- 注意: RETURNS TABLE の列追加は CREATE OR REPLACE では不可 → DROP してから再作成。
--- 本文は 037_moderation_visibility_fixes.sql の 3-1 が最新ベース (フィルタ条件は不変)。
--- クライアント (UserComment) は decodeIfPresent なので、この SQL 適用前後どちらの
--- ビルドでも壊れない。
+-- Note: adding columns to RETURNS TABLE is not possible with CREATE OR REPLACE → DROP, then recreate.
+-- The body is based on the latest version, 3-1 of 037_moderation_visibility_fixes.sql (filter
+-- conditions unchanged). The client (UserComment) uses decodeIfPresent, so builds do not break
+-- either before or after this SQL is applied.
 -- ============================================================
 
 DROP FUNCTION IF EXISTS public.fetch_comments_for_post(uuid, integer);
@@ -51,14 +51,14 @@ AS $$
             WHERE l.comment_id = c.id AND l.user_id = auth.uid()
         ) AS is_liked_by_me,
         c.created_at,
-        -- 返信先ユーザー名 (parent が存在すればその author の display_name)
+        -- Name of the user replied to (the display_name of the parent's author, if the parent exists)
         (
             SELECT pu.display_name
             FROM public.user_comments pc
             JOIN public.users pu ON pu.id = pc.author_user_id
             WHERE pc.id = c.parent_comment_id
         ) AS reply_to_name,
-        -- 投稿者 (user_posts.user_id) がこのコメントをいいねしているか (050)
+        -- Whether the author (user_posts.user_id) liked this comment (050)
         EXISTS (
             SELECT 1
             FROM public.user_comment_likes ol

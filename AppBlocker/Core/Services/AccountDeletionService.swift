@@ -2,7 +2,7 @@
 //  AccountDeletionService.swift
 //  AppBlocker
 //
-//  アカウント削除 (Supabase RPC delete_my_account)
+//  Account deletion (Supabase RPC delete_my_account)
 //
 
 import Foundation
@@ -19,11 +19,11 @@ final class AccountDeletionService {
         self.client = client
     }
 
-    /// delete-account Edge Function を実行 → 成功時にローカル状態クリア + サインアウト。
-    /// 旧 delete_my_account RPC は storage の SQL 直削除がプラットフォーム禁止
-    /// (storage.protect_delete) で必ず失敗していたため、Storage API + Auth Admin API を
-    /// 使う Edge Function に移行 (2026-07-25 M8 実弾テストで発覚、051 SQL で RPC 撤去)
-    /// 戻り値: 成功なら true
+    /// Runs the delete-account Edge Function → on success clears local state + signs out.
+    /// The old delete_my_account RPC always failed because the platform forbids direct SQL deletion from
+    /// storage (storage.protect_delete), so it moved to an Edge Function that uses the Storage API +
+    /// Auth Admin API (found in the 2026-07-25 M8 live test, RPC removed in 051 SQL)
+    /// Returns: true on success
     func deleteMyAccount() async -> Bool {
         guard UserAuthService.shared.userId != nil else {
             print("⚠️ deleteMyAccount ignored: not signed in")
@@ -33,13 +33,13 @@ final class AccountDeletionService {
         do {
             try await client.functions.invoke("delete-account")
 
-            // 削除ユーザー宛の未送信セッション行を破棄 (H3)。サーバー側の行が消えた後は
-            // 永久に insert できないため、保留しておく意味がない
+            // Discard unsent session rows for the deleted user (H3). After the server rows are gone they can
+            // never be inserted, so there is no point keeping them
             if let uid = UserAuthService.shared.userId {
                 BlockSessionTracker.purgeQueue(for: uid)
             }
 
-            // サインアウト (auth.users は既に消えてるが Keychain クリア用に呼ぶ)
+            // Sign out (auth.users is already gone, but call it to clear the Keychain)
             await UserAuthService.shared.signOut()
             print("✅ Account deleted")
             return true

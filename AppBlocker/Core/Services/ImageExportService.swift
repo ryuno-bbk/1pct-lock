@@ -2,8 +2,8 @@
 //  ImageExportService.swift
 //  AppBlocker
 //
-//  フィードカード (FeedItem) を ShareableQuoteCard 経由で 1080×1920 の UIImage にレンダリングし、
-//  Photos フレームワークでカメラロールに保存する。
+//  Render a feed card (FeedItem) into a 1080×1920 UIImage through ShareableQuoteCard, and
+//  save it to the camera roll with the Photos framework.
 //
 
 import Photos
@@ -14,7 +14,7 @@ enum ImageExportError: Error, Equatable {
     case permissionDenied
     case renderFailed
     case saveFailed
-    /// 投稿v2: 焼き込み済み画像 (Storage post-images) のダウンロードに失敗
+    /// Post v2: failed to download the baked image (Storage post-images)
     case downloadFailed
 }
 
@@ -24,9 +24,9 @@ final class ImageExportService {
     static let shared = ImageExportService()
     private init() {}
 
-    /// FeedItem を画像化してカメラロールに保存する。
-    /// 投稿v2 (imagePath 付き) は焼き込み済み画像をダウンロードし、
-    /// 右下にブランドウォーターマーク (AreteWatermark) を合成してから保存する。
+    /// Turn a FeedItem into an image and save it to the camera roll.
+    /// Post v2 (with imagePath) downloads the baked image,
+    /// composites the brand watermark (AreteWatermark) at the bottom right, then saves it.
     /// - Throws: `ImageExportError`
     func saveQuoteImage(item: FeedItem, lang: AppLanguage, showOriginal: Bool) async throws {
         try await ensureAddOnlyPermission()
@@ -42,8 +42,9 @@ final class ImageExportService {
         try await addImageToPhotoLibrary(uiImage)
     }
 
-    /// 焼き込み済み画像の右下に AreteWatermark を合成する (画像は 1080px 幅想定、
-    /// ShareableQuoteCard の 1080 キャンバスと同じ比率でマークが乗る)。失敗時は元画像を返す。
+    /// Composite AreteWatermark at the bottom right of the baked image (the image is assumed to be 1080px
+    /// wide, so the mark sits at the same ratio as ShareableQuoteCard's 1080 canvas). Returns the original
+    /// image on failure.
     private func compositeWatermark(on image: UIImage) -> UIImage {
         let pixelSize = CGSize(
             width: image.size.width * image.scale,
@@ -67,7 +68,7 @@ final class ImageExportService {
         return renderer.uiImage ?? image
     }
 
-    // MARK: - Download (投稿v2: 焼き込み済み画像)
+    // MARK: - Download (post v2: baked image)
 
     private func downloadImage(from url: URL) async throws -> UIImage {
         do {
@@ -109,7 +110,7 @@ final class ImageExportService {
         let view = ShareableQuoteCard(item: item, lang: lang, showOriginal: showOriginal)
 
         let renderer = ImageRenderer(content: view)
-        // ShareableQuoteCard 自体が renderSize で .frame されているので scale=1 でちょうど 1080×1920
+        // ShareableQuoteCard itself is .frame'd with renderSize, so scale=1 gives exactly 1080×1920
         renderer.scale = 1.0
 
         guard let uiImage = renderer.uiImage else {
@@ -121,7 +122,7 @@ final class ImageExportService {
     // MARK: - Save
 
     private func addImageToPhotoLibrary(_ uiImage: UIImage) async throws {
-        // performChanges の async 版は Sendable 要求が厳しいので continuation で包む
+        // The async version of performChanges has strict Sendable requirements, so wrap it in a continuation
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             PHPhotoLibrary.shared().performChanges {
                 PHAssetCreationRequest.creationRequestForAsset(from: uiImage)

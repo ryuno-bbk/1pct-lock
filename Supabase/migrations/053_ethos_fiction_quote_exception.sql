@@ -1,21 +1,21 @@
 -- ============================================================
 -- 053_ethos_fiction_quote_exception.sql
--- 層2改定: フィクション/引用画像のテキスト救済 (2026-07-30 ユーザー発案)
+-- Layer 2 revision: rescue text on fiction/quotation images (2026-07-30 user idea)
 -- ============================================================
--- 背景: 映画のワンシーン (カジノ等) を「かっこいい画像」として名言・啓発テキストと
--- 共に使う投稿は通したい。ただし「テキストが良ければ通す」を無条件にすると
--- パチンコ実写+意識高いキャプションが全部すり抜ける穴になるため、救済条件は
--- テキストの質ではなく画像の性質との組み合わせで縛る:
---   - フィクション/引用素材 + 規律・向上・名言の文脈テキスト → pass
---   - 本人の実行ドキュメント (現実の記録) → テキストが何であれ従来どおり fail
+-- Background: we want to let through posts that use a movie scene (a casino etc.) as a "cool image"
+-- together with a quote or self-improvement text. But making "pass if the text is good" unconditional
+-- would open a hole where every real pachinko photo + a high-minded caption slips through, so the
+-- rescue condition is tied to the combination with the nature of the image, not the quality of the text:
+--   - fiction/quotation material + text in a context of discipline, self-improvement or quotes → pass
+--   - a document of the person's own activity (a real-life record) → fail as before, whatever the text
 --
--- 方式: ethos_rubric の全文書き換え (049 の内容を内包、冪等)。
--- コスト: 文言変更のみで API 呼び出し構造は不変。rubric は system プロンプトの
---         キャッシュ対象なので追加コストは実質ゼロ。
--- 前提: 049 適用済み。safety_rubric には触れない (048 が最新)。
--- 適用: SQL Editor で実行するだけ、デプロイ不要 (moderate-post / review-appeal の
---       両方が毎回 moderation_config を読むため即反映)。
--- ロールバック: 049_ethos_scene_first.sql を再実行するだけ。
+-- Method: full rewrite of ethos_rubric (includes the content of 049, idempotent).
+-- Cost: only the wording changes, the API call structure is unchanged. The rubric is part of the system
+--         prompt that is cached, so the extra cost is practically zero.
+-- Assumes: 049 is applied. safety_rubric is not touched (048 is the latest).
+-- Apply: just run it in the SQL Editor, no deploy needed (both moderate-post / review-appeal
+--       read moderation_config every time, so it takes effect immediately).
+-- Rollback: just re-run 049_ethos_scene_first.sql.
 -- ============================================================
 
 UPDATE public.moderation_config

@@ -2,7 +2,7 @@
 //  ProfileCards.swift
 //  AppBlocker
 //
-//  マイページ用のリストカード（いいね名言・フォロー中偉人）
+//  List cards for My Page (liked quotes, followed great figures)
 //
 
 import SwiftUI
@@ -66,8 +66,8 @@ struct LikedQuoteCard: View {
     }
 }
 
-// MARK: - Liked Quote Grid Cell (TikTok 風 9:16 サムネイル、名言中央配置)
-// S15: FeedItemCard と同じレイアウトで中央配置、著者名は省略 (サムネ集中)
+// MARK: - Liked Quote Grid Cell (TikTok-style 9:16 thumbnail, quote centered)
+// S15: centered with the same layout as FeedItemCard, author name omitted (focus on the thumbnail)
 
 struct LikedQuoteGridCell: View {
     let quote: Quote
@@ -80,8 +80,9 @@ struct LikedQuoteGridCell: View {
     }
 
     var body: some View {
-        // 2026-07-30: 写真背景を全廃 → フィードと同じ紙×タイポのテンプレ描画
-        // (幅比サイズなのでサムネでも相似形に縮む)。サムネでは翻訳行は出さない
+        // 2026-07-30: photo backgrounds removed entirely → drawn with the same paper × typography template
+        // as the feed (sizes are relative to width, so it scales down proportionally even as a thumbnail).
+        // The translation line is not shown in thumbnails
         QuoteCardView(
             primary: quote.displayPrimary(lang: lang, showOriginal: showOriginal),
             secondary: nil,
@@ -95,25 +96,26 @@ struct LikedQuoteGridCell: View {
     }
 }
 
-// MARK: - User Post Grid Cell (TikTok 風 9:16 サムネイル、自分の投稿用)
-// S15: FeedItemCard と同じレイアウトで中央配置、タグは省略
+// MARK: - User Post Grid Cell (TikTok-style 9:16 thumbnail, for your own posts)
+// S15: centered with the same layout as FeedItemCard, tags omitted
 
 struct UserPostGridCell: View {
     let post: UserPost
     let onTap: () -> Void
-    /// 2026-07-22 実機FB: 自分のグリッドでは rejected/flagged を「セル暗転+アイコン+ラベル」で
-    /// 明示する (従来はサムネが素で並び、制限中かどうか分からなかった)。
-    /// 他人のプロフィールでは出さない (呼び出し側が isSelf の時だけ true を渡す)
+    /// 2026-07-22 real device feedback: in your own grid, rejected/flagged are shown explicitly with
+    /// "dimmed cell + icon + label" (previously the thumbnails were listed plain, and you could not tell
+    /// whether they were restricted).
+    /// Not shown on other people's profiles (the caller passes true only when isSelf)
     var showsModerationState: Bool = false
-    /// 審査中の異議申し立てがある投稿 (フィードのオーバーレイと同じく時計+「異議申し立て中」表示。
-    /// 2026-07-25 実機FB: グリッド欄にも申し立て状態を反映)
+    /// Post with an appeal under review (same clock + "異議申し立て中" ("Appeal under review") display as
+    /// the feed overlay. 2026-07-25 real device feedback: reflect the appeal state in the grid too)
     var isAppealPending: Bool = false
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
     @AppStorage("showOriginal") private var showOriginal = false
 
-    // M5: AsyncImage はサムネ表示でもフルデコードしてしまう (1080×1350 で1枚5.5MB前後)。
-    // PostThumbnailLoader 経由の 400px ダウンサンプル + キャッシュに差し替えるため、
-    // AsyncImagePhase と同じ 3 分岐 (loading/success/failure) を自前の @State で持つ
+    // M5: AsyncImage fully decodes even for thumbnails (around 5.5MB per image at 1080×1350).
+    // To replace it with a 400px downsample + cache via PostThumbnailLoader,
+    // the same 3 branches as AsyncImagePhase (loading/success/failure) are kept in our own @State
     private enum ThumbnailPhase {
         case loading
         case success(UIImage)
@@ -128,12 +130,13 @@ struct UserPostGridCell: View {
 
     var body: some View {
         ZStack {
-            // 投稿v2: 焼き込み画像があればサムネそのもの、なければ現行のテキストタイル
+            // Post v2: if there is a baked image, that is the thumbnail itself; otherwise the current text tile
             if let url = post.imageUrl {
-                // 器 (Color.clear) を先に確定させてから overlay + clipped。fill 画像を直接置くと
-                // レイアウトを押し広げてセルが崩れる上、clipped は描画しか切らないため
-                // はみ出した当たり判定が隣セルのタップを奪う (「どこを押しても左上が開く」実機事故)。
-                // タップは外側の contentShape に任せるので画像側の hitTest は切る。
+                // Fix the container (Color.clear) first, then overlay + clipped. Placing a fill image directly
+                // pushes the layout out and breaks the cell, and since clipped only clips the drawing,
+                // the overflowing hit area steals taps from neighboring cells (the real device incident "wherever
+                // you tap, the top-left one opens"). Taps are left to the outer contentShape, so hitTest is turned
+                // off on the image.
                 Color.clear
                     .overlay(
                         Group {
@@ -141,12 +144,12 @@ struct UserPostGridCell: View {
                             case .success(let image):
                                 Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
                             case .failure:
-                                // 実機FB#1 真因修正: 画像投稿 (imageUrl あり) のロード失敗を
-                                // 名言テンプレ (QuoteBackgroundView) にフォールバックすると、
-                                // 「画像投稿である」事実を偽って石背景に見えてしまう
-                                // (カメラ撮影+文字入れ投稿がテキスト投稿のような見た目になるバグ)。
-                                // 中立なプレースホルダに差し替える。imageUrl が nil の
-                                // 旧テキスト投稿側 (else 分岐) は QuoteBackgroundView のまま維持
+                                // Real device feedback #1 root cause fix: if a load failure of an image post (with imageUrl)
+                                // falls back to the quote template (QuoteBackgroundView),
+                                // it misrepresents the fact that "it is an image post" and looks like a stone background
+                                // (bug where camera photo + text posts looked like text posts).
+                                // Replace it with a neutral placeholder. The old text posts with a nil imageUrl
+                                // (else branch) keep QuoteBackgroundView
                                 ZStack {
                                     Color.black
                                     Image(systemName: "photo")
@@ -161,16 +164,16 @@ struct UserPostGridCell: View {
                     .clipped()
                     .allowsHitTesting(false)
                     .task(id: url) {
-                        // id: url なので post が差し替わって url が変わればキャンセルして再読込される
+                        // id: url, so if post is replaced and url changes, it is cancelled and reloaded
                         thumbnailPhase = .loading
                         let image = await PostThumbnailLoader.shared.thumbnail(for: url)
-                        // 実機FB#1 真因修正: このセルの再出現/プロフィール統計の非同期ロードに
-                        // よるレイアウト揺れで Task 自体がキャンセルされても、await 復帰後の
-                        // コードは (Swift の協調的キャンセルにより) 止まらず実行され続け、
-                        // 従来は nil を「本当の失敗」として書き込んで .failure に恒久固定
-                        // していた (次にこの .task が再実行されるまで石背景のまま)。
-                        // キャンセル済みならここで抜けて .loading のまま残し、
-                        // 自然な再実行 (再出現 / id 変化) でのリトライに任せる
+                        // Real device feedback #1 root cause fix: even when the Task itself is cancelled because this cell
+                        // reappears / the layout shifts from the async load of the profile stats, the code after await
+                        // resumes and keeps running (due to Swift's cooperative cancellation), and
+                        // previously it wrote nil as a "real failure" and permanently fixed it at .failure
+                        // (stone background until this .task ran again).
+                        // If cancelled, exit here and leave it as .loading, and
+                        // leave the retry to a natural re-run (reappearance / id change)
                         if Task.isCancelled { return }
                         if let image {
                             thumbnailPhase = .success(image)
@@ -206,9 +209,9 @@ struct UserPostGridCell: View {
         .aspectRatio(4.0/5.0, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .overlay {
-            // 2026-07-22 実機FB: 制限中 (rejected/flagged) のセルを暗転+アイコン+ラベルで明示。
-            // タップは従来どおり詳細を開く (詳細側に大きなオーバーレイ+異議申し立て導線があるため
-            // ここは純粋な視覚表示に留め、hitTesting は切る)
+            // 2026-07-22 real device feedback: show restricted (rejected/flagged) cells explicitly with
+            // dimming + icon + label. A tap opens the detail as before (the detail has a large overlay + the
+            // appeal path, so this stays purely visual and hitTesting is turned off)
             if showsModerationState,
                post.moderationStatus == "rejected" || post.moderationStatus == "flagged" {
                 ZStack {
@@ -220,10 +223,10 @@ struct UserPostGridCell: View {
                                  ? "eye.slash.fill" : "exclamationmark.triangle.fill"))
                             .font(.system(size: 18, weight: .semibold))
                         Text(isAppealPending
-                             ? (lang == .japanese ? "異議申し立て中" : "Appeal under review")  // 文言はユーザー添削待ち
+                             ? (lang == .japanese ? "異議申し立て中" : "Appeal under review")  // Wording awaiting user review
                              : post.moderationStatus == "rejected"
                              ? L.postsModerationRejectedBadge(lang)
-                             : (lang == .japanese ? "表示が制限されています" : "Visibility limited"))  // 文言はユーザー添削待ち
+                             : (lang == .japanese ? "表示が制限されています" : "Visibility limited"))  // Wording awaiting user review
                             .font(.system(size: 9, weight: .semibold))
                             .multilineTextAlignment(.center)
                     }
@@ -235,7 +238,7 @@ struct UserPostGridCell: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(alignment: .bottomTrailing) {
-            // タップ数 (028 SQL view_count、全員に見える)。BeReal のリアクション数の位置
+            // Tap count (028 SQL view_count, visible to everyone). In the position of BeReal's reaction count
             HStack(spacing: 3) {
                 Image(systemName: "eye.fill")
                     .font(.system(size: 9, weight: .semibold))

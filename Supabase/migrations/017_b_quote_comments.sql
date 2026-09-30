@@ -1,23 +1,24 @@
 -- ============================================================
 -- 017_b_quote_comments.sql
--- 公式名言 (quotes) へのコメント対応
+-- Support comments on official quotes (quotes)
 -- ============================================================
--- 設計判断 (2026-07-05 Fable5):
---   - S16 の「公式 quote コメントは足さない」方針をユーザー指示で正式に変更。
---     UGC が東京移行でリセットされた今、コメント導線の主役は公式名言になる
---   - user_comments を user_likes と同じ XOR パターンに拡張
---     (post_id / quote_id どちらか片方必須)
---   - 公式名言へのコメントでは「投稿者への comment 通知」は発生しない
---     (著者は users にいない偉人のため)。返信 (reply) 通知は従来通り機能する
---   - コメントの削除権限: 公式名言には「投稿者」がいないため、
---     自分のコメントのみ削除可 (既存 RLS の post owner 分岐が quote では
---     自然に空になるので変更不要)
+-- Design decisions (2026-07-05 Fable5):
+--   - The S16 policy "do not add comments on official quotes" is formally changed by user
+--     instruction. Now that UGC was reset by the Tokyo migration, official quotes become the main
+--     place for comments
+--   - Extend user_comments to the same XOR pattern as user_likes
+--     (exactly one of post_id / quote_id is required)
+--   - Comments on official quotes do not trigger a "comment notification to the poster"
+--     (the authors are historical figures who are not in users). Reply notifications work as before
+--   - Comment delete permission: official quotes have no "poster", so
+--     only your own comments can be deleted (the post owner branch of the existing RLS is
+--     naturally empty for quotes, so no change is needed)
 --
--- 実行順序: 016 完了後。何度実行しても安全
+-- Run order: after 016. Safe to run any number of times
 -- ============================================
 
 -- ============================================
--- 1. user_comments を quote 対応に拡張
+-- 1. Extend user_comments to support quotes
 -- ============================================
 ALTER TABLE public.user_comments
     ALTER COLUMN post_id DROP NOT NULL;
@@ -41,7 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_user_comments_quote_created
 COMMENT ON TABLE public.user_comments IS 'UGC投稿 (post_id) または公式名言 (quote_id) へのコメント。parent_comment_id で1階層返信';
 
 -- ============================================
--- 2. quotes.comment_count denormalize 列
+-- 2. quotes.comment_count denormalized column
 -- ============================================
 ALTER TABLE public.quotes
     ADD COLUMN IF NOT EXISTS comment_count integer NOT NULL DEFAULT 0;
@@ -49,7 +50,7 @@ ALTER TABLE public.quotes
 COMMENT ON COLUMN public.quotes.comment_count IS 'コメント数 (denormalize、trigger で同期)';
 
 -- ============================================
--- 3. comment_count 同期 trigger を quote 対応に拡張
+-- 3. Extend the comment_count sync trigger to support quotes
 -- ============================================
 CREATE OR REPLACE FUNCTION public.sync_post_comment_count()
 RETURNS trigger
@@ -86,7 +87,7 @@ END;
 $$;
 
 -- ============================================
--- 4. create_quote_comment RPC (公式名言へのコメント + 返信通知)
+-- 4. create_quote_comment RPC (comment on an official quote + reply notification)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.create_quote_comment(
     target_quote_id          uuid,
@@ -122,7 +123,7 @@ BEGIN
         RAISE EXCEPTION 'Quote not found: %', target_quote_id;
     END IF;
 
-    -- 返信の場合は parent の整合性チェック (create_comment と同じ規則)
+    -- For a reply, check the parent's consistency (same rules as create_comment)
     IF parent_comment_id_param IS NOT NULL THEN
         SELECT author_user_id, quote_id, parent_comment_id
             INTO parent_author_id, parent_quote_id, parent_grandparent
@@ -137,7 +138,7 @@ BEGIN
             RAISE EXCEPTION 'Parent comment belongs to different quote';
         END IF;
 
-        -- ネスト1階層のみ: parent が既に子なら parent の parent に付け替え
+        -- Only 1 level of nesting: if the parent is already a child, attach to the parent's parent instead
         IF parent_grandparent IS NOT NULL THEN
             parent_comment_id_param := parent_grandparent;
             SELECT author_user_id INTO parent_author_id
@@ -151,7 +152,7 @@ BEGIN
 
     preview := left(comment_text, 80);
 
-    -- 通知は返信のみ (公式偉人は users にいないので comment 通知は発生しない)
+    -- Notify only for replies (official historical figures are not in users, so no comment notification)
     IF parent_comment_id_param IS NOT NULL THEN
         PERFORM public.create_notification(
             p_recipient_user_id => parent_author_id,
@@ -234,7 +235,7 @@ REVOKE EXECUTE ON FUNCTION public.fetch_comments_for_quote(uuid, integer) FROM P
 GRANT  EXECUTE ON FUNCTION public.fetch_comments_for_quote(uuid, integer) TO authenticated;
 
 -- ============================================
--- 6. 3 フィード RPC: quote 側の comment_count を実値に (従来は 0 固定)
+-- 6. 3 feed RPCs: use the real comment_count on the quote side (was fixed at 0 before)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.fetch_mixed_feed_random(limit_count integer DEFAULT 50)
 RETURNS TABLE (
@@ -463,11 +464,11 @@ REVOKE EXECUTE ON FUNCTION public.fetch_tag_feed(text, integer) FROM PUBLIC, ano
 GRANT  EXECUTE ON FUNCTION public.fetch_tag_feed(text, integer) TO authenticated;
 
 -- ============================================
--- 7. 動作確認用クエリ (実行不要、コメント)
+-- 7. Queries for checking behavior (no need to run, comments)
 -- ============================================
--- コメント作成:
---   SELECT create_quote_comment('<quote_id>'::uuid, 'テストコメント');
--- コメント取得:
+-- Create a comment:
+--   SELECT create_quote_comment('<quote_id>'::uuid, 'test comment');
+-- Fetch comments:
 --   SELECT * FROM fetch_comments_for_quote('<quote_id>'::uuid);
--- comment_count 反映確認:
+-- Check that comment_count is updated:
 --   SELECT id, comment_count FROM quotes WHERE comment_count > 0;

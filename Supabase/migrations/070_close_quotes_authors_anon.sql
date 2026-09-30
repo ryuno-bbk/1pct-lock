@@ -1,79 +1,74 @@
 -- ============================================================================
--- 070: quotes / authors への未認証(anon)アクセスを塞ぐ (065 の積み残し)
+-- 070: close unauthenticated (anon) access to quotes / authors (left over from 065)
 --
--- 背景: 065_close_anon_access.sql は「未認証からユーザーデータ系テーブルが読める」
---       問題を塞いだが、quotes と authors の2テーブルは意図的に対象外にした。
---       065 のヘッダーコメント原文:
---         「⚠️ quotes / authors は意図的に対象外。
---           AppBlockerApp.swift:182 の起動処理がサインイン前に読むため、
---           ここで止めると新規ユーザーの名言が空になる。別途コード側で対応する。」
---       実際に AppBlockerApp.swift の起動 .task 内では、restoreSession() の
---       成否に関わらず QuoteService.shared.loadQuotes() を呼んでおり、
---       サインイン前 (オンボ中) の端末でも anon キーで quotes/authors に
---       アクセスしている。
+-- Background: 065_close_anon_access.sql closed the problem "user data tables are readable without
+--       authentication", but intentionally left out 2 tables, quotes and authors.
+--       Original text of the 065 header comment:
+--         "⚠️ quotes / authors are intentionally out of scope.
+--           The launch code at AppBlockerApp.swift:182 reads them before sign-in, so
+--           blocking them here would leave new users with no quotes. To be handled separately in code."
+--       In fact, inside the launch .task of AppBlockerApp.swift, QuoteService.shared.loadQuotes() is
+--       called whether restoreSession() succeeds or not, so devices before sign-in (during
+--       onboarding) also access quotes/authors with the anon key.
 --
---       とはいえ「未認証の publishable キーだけで quotes/authors の全件が
---       読める」状態は本質的に 065 が塞いだのと同じ種類の穴であり、放置して
---       よい理由にはならない。065 が対象外にしたのは「今すぐ塞ぐとアプリが
---       壊れるから」であって「問題ではないから」ではなかった。本ファイルで
---       積み残しを閉じる。
+--       Still, "all rows of quotes/authors can be read with only the unauthenticated publishable
+--       key" is essentially the same kind of hole that 065 closed, and that is no reason to leave it
+--       open. 065 left it out "because closing it right away would break the app", not "because it
+--       is not a problem". This file closes the leftover.
 --
--- 原因: 065 と同じ。マイグレーション全体にテーブルレベルの GRANT/REVOKE が
---       元々1行も無く、Supabase 既定 (anon/authenticated/service_role に
---       SELECT〜DELETE 付与) のままだった。
+-- Cause: same as 065. The migrations never had a single table-level GRANT/REVOKE, so the Supabase
+--       default (SELECT to DELETE granted to anon/authenticated/service_role) was still in place.
 --
--- やること:
---   1. quotes / authors のテーブル権限から anon (と PUBLIC) を REVOKE
---   2. 2層目として RLS ポリシーも "authors_select_all" / "quotes_select_all"
---      (003_a_rls_rpc.sql:84, :95 で FOR SELECT USING (true) = ロール無指定
---      だった) を FOR SELECT TO authenticated USING (true) に差し替える
+-- What this does:
+--   1. REVOKE anon (and PUBLIC) from the table privileges of quotes / authors
+--   2. As a second layer, replace the RLS policies "authors_select_all" / "quotes_select_all"
+--      (which were FOR SELECT USING (true) = no role specified, at 003_a_rls_rpc.sql:84, :95)
+--      with FOR SELECT TO authenticated USING (true)
 --
--- ⚠️ 失敗の出方: 上の §1 (テーブル権限の REVOKE) と §2 (RLS ポリシー) は
---   エラーの出方が違う。REVOKE の方が先に効くため、未認証アクセスは
---   「RLS が空集合を返す」のではなく **PostgREST が権限エラー (401/403) を返す**。
---   RLS 単独 (GRANT が残っている状態) なら 200 + 空配列になるが、本ファイルは
---   両方を入れるのでエラー側になる。将来ここを調査する人が
---   「0件で返る」と誤診しないよう明記しておく。
+-- ⚠️ How it fails: §1 above (REVOKE of table privileges) and §2 (RLS policies) fail
+--   differently. The REVOKE takes effect first, so an unauthenticated request does not get
+--   "an empty set from RLS" but **a permission error (401/403) from PostgREST**.
+--   RLS alone (with the GRANT still there) would give 200 + an empty array, but this file
+--   adds both, so you get the error. Written down so that anyone investigating this later does not
+--   misdiagnose it as "returns 0 rows".
 --
--- ⚠️ クライアント側の対応 (同時に入れる。適用順序はどちらが先でもよい):
---   1. AppBlockerApp.swift の起動 .task は、サインイン済みのときだけ
---      QuoteService.enableSupabase() へ切り替える。未サインイン時は
---      LocalQuoteProvider (バンドルの Quotes.json 68件 = 060 適用後の本番 quotes と
---      同一内容) から読むため、名言が空になることはない。
---   2. .onChange(of: userAuth.isSignedIn) でサインイン直後に quotes/authors を
---      読み直す (これが無いと、サインアップ直後のユーザーは再起動するまで
---      authors が空 = is_official バッジが付かない。070 とは独立した既存バグ)。
---   なお SupabaseQuoteProvider.swift:86-89 は fetch 失敗時に LocalQuoteProvider へ
---   フォールバックする実装なので、仮にこのマイグレーションだけ先に適用しても
---   名言が空になることはない (権限エラー → ローカル68件で表示が続く)。
+-- ⚠️ Client-side changes (shipped together. Either can be applied first):
+--   1. The launch .task in AppBlockerApp.swift switches to QuoteService.enableSupabase() only when
+--      signed in. When not signed in it reads from LocalQuoteProvider (68 quotes in the bundled
+--      Quotes.json = same content as the production quotes after 060), so quotes are never empty.
+--   2. .onChange(of: userAuth.isSignedIn) reloads quotes/authors right after sign-in
+--      (without it, a user who just signed up has empty authors until restart = no is_official
+--      badge. An existing bug independent of 070).
+--   Also, SupabaseQuoteProvider.swift:86-89 falls back to LocalQuoteProvider when the fetch fails,
+--   so even if only this migration were applied first, quotes would never be empty
+--   (permission error → the 68 local quotes keep showing).
 -- ============================================================================
 
 BEGIN;
 
 -- ----------------------------------------------------------------------------
--- 1. テーブル権限: quotes / authors から anon を剥奪
+-- 1. Table privileges: remove anon from quotes / authors
 -- ----------------------------------------------------------------------------
--- テーブルは関数と違い、CREATE TABLE 時に PUBLIC への暗黙の権限付与は無い
--- (Supabase の既定権限は anon/authenticated/service_role という具体ロールに
--- 直接 GRANT する運用のため)。したがって実際に効くのは anon 名指しの REVOKE の方。
--- それでも 065 の教訓 (「ロール名指しの REVOKE だけでは剥がれない権限経路が
--- あった」= 050/063 の関数 EXECUTE 権限の件) を踏まえ、065 との一貫性と
--- 防御的な意図で PUBLIC からも REVOKE しておく (万一 将来誰かが
--- `GRANT ALL ON quotes TO PUBLIC` のような操作をしても、この REVOKE 以降に
--- 再度 GRANT されない限り無害なままにするための保険)。
+-- Unlike functions, tables get no implicit grant to PUBLIC at CREATE TABLE
+-- (Supabase default privileges GRANT directly to the concrete roles anon/authenticated/service_role).
+-- So the REVOKE that actually has an effect is the one naming anon.
+-- Still, given the lesson from 065 ("there was a privilege path that a REVOKE naming the role did
+-- not remove" = the EXECUTE privilege on functions in 050/063), also REVOKE from PUBLIC for
+-- consistency with 065 and as a defensive measure (a safety net so that even if someone later runs
+-- something like `GRANT ALL ON quotes TO PUBLIC`, it stays harmless unless it is granted again after
+-- this REVOKE).
 REVOKE ALL ON TABLE public.quotes  FROM PUBLIC;
 REVOKE ALL ON TABLE public.quotes  FROM anon;
 REVOKE ALL ON TABLE public.authors FROM PUBLIC;
 REVOKE ALL ON TABLE public.authors FROM anon;
 
 -- ----------------------------------------------------------------------------
--- 2. RLS ポリシー: SELECT を authenticated ロール限定に差し替え (2層目の防御)
+-- 2. RLS policies: restrict SELECT to the authenticated role (second layer of defense)
 -- ----------------------------------------------------------------------------
--- 003_a_rls_rpc.sql:84 (authors_select_all) / :95 (quotes_select_all) は
--- どちらも USING (true) のみでロール指定が無く、既定の PUBLIC (= anon を含む
--- 全ロール) に適用されていた。上の REVOKE とは独立したレイヤーとして、
--- ポリシー自体を authenticated 限定に絞る (万一テーブル権限だけ何らかの理由で
--- 元に戻っても、RLS 側で未認証アクセスが止まるようにするため)。
+-- 003_a_rls_rpc.sql:84 (authors_select_all) / :95 (quotes_select_all) both had only USING (true)
+-- with no role, so they applied to the default PUBLIC (= all roles, including anon). As a layer
+-- independent of the REVOKE above, narrow the policies themselves to authenticated (so that even if
+-- only the table privileges were somehow restored, RLS still stops unauthenticated access).
 DROP POLICY IF EXISTS "authors_select_all" ON public.authors;
 CREATE POLICY "authors_select_all"
     ON public.authors FOR SELECT
@@ -89,12 +84,12 @@ CREATE POLICY "quotes_select_all"
 COMMIT;
 
 -- ============================================================================
--- 検証クエリ (適用後にこれを流して結果を確認する)
+-- Verification queries (run these after applying and check the results)
 -- ============================================================================
 
--- (A) anon がまだ触れるテーブル一覧 (065 の検証クエリ (A) と同じ形)。
---     quotes / authors がここに出てこなければ正常。065 適用済みなら他のテーブルも
---     全て0件のはずなので、本ファイル適用後はこのクエリ自体が0件になる。
+-- (A) List of tables anon can still touch (same form as verification query (A) in 065).
+--     Correct if quotes / authors do not appear here. If 065 is applied, all other tables should
+--     also be 0 rows, so after applying this file the query itself returns 0 rows.
 SELECT table_name,
        string_agg(DISTINCT privilege_type, ', ' ORDER BY privilege_type) AS anon_privs
 FROM information_schema.role_table_grants
@@ -103,13 +98,13 @@ WHERE table_schema = 'public'
   AND table_name IN ('quotes', 'authors')
 GROUP BY table_name
 ORDER BY table_name;
--- 期待結果: 0 rows
+-- Expected result: 0 rows
 
--- (B) quotes / authors の RLS ポリシー一覧。roles 列が {authenticated} に
---     なっていることを確認する (差し替え前は {public} だった)。
+-- (B) List of RLS policies on quotes / authors. Check that the roles column is {authenticated}
+--     (before the replacement it was {public}).
 SELECT schemaname, tablename, policyname, cmd, roles, qual
 FROM pg_policies
 WHERE schemaname = 'public'
   AND tablename IN ('quotes', 'authors')
 ORDER BY tablename, policyname;
--- 期待結果: authors_select_all / quotes_select_all の2行、どちらも roles = {authenticated}
+-- Expected result: 2 rows, authors_select_all / quotes_select_all, both with roles = {authenticated}

@@ -183,7 +183,7 @@ Migrations 001 to 083 were written and applied one at a time on the production p
 
 ## Notes
 
-- Code comments are mostly in Japanese. The UI is in English and Japanese.
+- Code comments are in English, translated from the original Japanese. The UI is in English and Japanese.
 - The Xcode project is called `AppBlocker`, and some files use `Arete`, an earlier name of the app.
 - Some images in the App Store build cannot be redistributed, so this repository has placeholder images with the same file names. See `THIRD_PARTY_NOTICES.md`.
 - Internal operator tools are not included: the web console for reviewing moderation appeals and the scripts for managing the app's own accounts and content. The app does not need them to run.

@@ -2,16 +2,16 @@
 //  CommentService.swift
 //  AppBlocker
 //
-//  user_posts / quotes (公式名言) へのコメント取得 / 投稿 / いいね / 削除
-//  post と quote は同じ user_comments テーブル (post_id / quote_id の XOR) を共有するため
-//  CommentTarget で対象を切り替えて同じロジックを再利用する
+//  Fetching / posting / liking / deleting comments on user_posts / quotes (official quotes)
+//  post and quote share the same user_comments table (XOR of post_id / quote_id), so
+//  CommentTarget switches the target and the same logic is reused
 //
 
 import Foundation
 import Combine
 import Supabase
 
-/// コメント機能の対象 (UGC 投稿 or 公式名言)
+/// Target of the comment feature (UGC post or official quote)
 enum CommentTarget: Hashable {
     case post(UUID)
     case quote(UUID)
@@ -28,19 +28,22 @@ final class CommentService: ObservableObject {
 
     static let shared = CommentService()
 
-    /// target → コメント配列 (fetch_comments_for_post / fetch_comments_for_quote の結果。親 + 返信を平坦化済み)
+    /// target → comment array (result of fetch_comments_for_post / fetch_comments_for_quote. Parents +
+    /// replies already flattened)
     @Published private(set) var commentsByTarget: [CommentTarget: [UserComment]] = [:]
     @Published private(set) var loadingTargets: Set<CommentTarget> = []
 
-    /// quote の comment_count は Quote 配列がローカル定数 (@Published でない画面) で保持されているため、
-    /// FilteredQuoteFeedView / AuthorQuoteFeedView 側でその場 +1/-1 表示するための差分オーバーレイ
+    /// For quotes, comment_count is held in a Quote array that is a local constant (on screens where it is
+    /// not @Published), so this is a delta overlay to show +1/-1 on the spot in
+    /// FilteredQuoteFeedView / AuthorQuoteFeedView
     @Published private(set) var quoteCommentCountDeltas: [UUID: Int] = [:]
 
-    /// post 版の差分オーバーレイ (quoteCommentCountDeltas と同じ役割)。
-    /// 現状 post は FeedService.recommendedFeed/followingFeed と UserPostService.myPosts/viewingPostsByUser
-    /// 経由でしか表示されておらず、両方とも bumpLocalCommentCount が直接 patch する @Published 配列なので
-    /// 実質 0 のまま推移するはずだが、将来 quote 同様の静的スナップショット経由の post 一覧が増えた時に
-    /// 備えて対称に用意しておく (FeedListCard 側は baseline 差分でどちらの経路でも二重加算しない設計)
+    /// Delta overlay for posts (same role as quoteCommentCountDeltas).
+    /// Currently posts are only shown through FeedService.recommendedFeed/followingFeed and
+    /// UserPostService.myPosts/viewingPostsByUser, both of which are @Published arrays patched directly by
+    /// bumpLocalCommentCount, so this should stay at 0 in practice. It is provided symmetrically in case
+    /// post lists fed by static snapshots, like quotes, are added in the future (FeedListCard is designed
+    /// with a baseline delta so it never double counts on either path)
     @Published private(set) var postCommentCountDeltas: [UUID: Int] = [:]
 
     private let client: SupabaseClient
@@ -51,7 +54,7 @@ final class CommentService: ObservableObject {
 
     // MARK: - Fetch
 
-    /// コメント一覧取得 (親 + 返信を平坦化、parent_comment_id でグループ化済み)
+    /// Fetch the comment list (parents + replies flattened, grouped by parent_comment_id)
     func loadComments(target: CommentTarget, limit: Int = 200) async {
         loadingTargets.insert(target)
         defer { loadingTargets.remove(target) }
@@ -90,22 +93,24 @@ final class CommentService: ObservableObject {
         loadingTargets.contains(target)
     }
 
-    /// quote の comment_count に対するローカル差分 (FilteredQuoteFeedView 等が参照)
+    /// Local delta for a quote's comment_count (used by FilteredQuoteFeedView etc.)
     func commentCountDelta(forQuote quoteId: UUID) -> Int {
         quoteCommentCountDeltas[quoteId] ?? 0
     }
 
-    /// post の comment_count に対するローカル差分 (quoteCommentCountDeltas の post 版)
+    /// Local delta for a post's comment_count (post version of quoteCommentCountDeltas)
     func commentCountDelta(forPost postId: UUID) -> Int {
         postCommentCountDeltas[postId] ?? 0
     }
 
     // MARK: - Create
 
-    /// コメント / 返信を作成 (create_comment / create_quote_comment RPC)
-    /// parentCommentId 指定で返信。RPC 側で投稿者 + 親著者へ通知作成
-    /// 戻り値: 失敗時 false
-    /// 直近の createComment 失敗が 046 レート制限 (50件/24h) だったか (文言出し分け用)
+    /// Create a comment / reply (create_comment / create_quote_comment RPC)
+    /// A reply if parentCommentId is given. The RPC creates notifications for the post author + the parent
+    /// author
+    /// Return value: false on failure
+    /// Whether the most recent createComment failure was the 046 rate limit (50 per 24h) (to choose the
+    /// message)
     private(set) var lastCreateWasRateLimited = false
 
     func createComment(target: CommentTarget, text: String, parentCommentId: UUID? = nil) async -> Bool {
@@ -137,14 +142,14 @@ final class CommentService: ObservableObject {
                 try await client.rpc("create_quote_comment", params: params).execute()
             }
 
-            // 再 fetch (最新の状態を取得、UI 反映が確実)
+            // Fetch again (get the latest state, so the UI update is reliable)
             await loadComments(target: target)
-            // 該当 post/quote の comment_count をローカルでもインクリメント
+            // Also increment the comment_count of the post/quote locally
             bumpLocalCommentCount(target: target, by: 1)
             return true
         } catch {
             print("⚠️ Failed to create comment: \(error)")
-            // 046 レート制限。RAISE EXCEPTION の文言判定 (AppealService と同じパターン)
+            // 046 rate limit. Checks the RAISE EXCEPTION message (same pattern as AppealService)
             if let pgError = error as? PostgrestError, pgError.message.contains("daily comment limit") {
                 lastCreateWasRateLimited = true
             }
@@ -154,14 +159,14 @@ final class CommentService: ObservableObject {
 
     // MARK: - Like
 
-    /// コメントいいね/解除 (toggle_comment_like RPC)
-    /// 楽観 UI 更新 + RPC 結果で確定
-    /// viewerIsPostOwner: 呼び出し画面の閲覧者が投稿の作者なら true。
-    /// その場合「投稿者がいいね」バッジ (isLikedByOwner) も自分のいいねに追従して即時反映する
+    /// Like/unlike a comment (toggle_comment_like RPC)
+    /// Optimistic UI update + finalized by the RPC result
+    /// viewerIsPostOwner: true if the viewer on the calling screen is the author of the post.
+    /// In that case the "liked by author" badge (isLikedByOwner) also follows your own like immediately
     func toggleLike(commentId: UUID, target: CommentTarget, viewerIsPostOwner: Bool = false) async {
         guard UserAuthService.shared.userId != nil else { return }
 
-        // 楽観 UI
+        // Optimistic UI
         if var comments = commentsByTarget[target],
            let idx = comments.firstIndex(where: { $0.id == commentId }) {
             let current = comments[idx]
@@ -189,7 +194,7 @@ final class CommentService: ObservableObject {
                 .rpc("toggle_comment_like", params: ["target_comment_id": commentId.uuidString])
                 .execute()
                 .value
-            // RPC 結果で確定値を反映
+            // Apply the final value from the RPC result
             if var comments = commentsByTarget[target],
                let idx = comments.firstIndex(where: { $0.id == commentId }) {
                 let current = comments[idx]
@@ -202,22 +207,22 @@ final class CommentService: ObservableObject {
                 commentsByTarget[target] = comments
             }
         } catch {
-            // ロールバック: 再 fetch
+            // Rollback: fetch again
             print("⚠️ toggleCommentLike failed: \(error)")
             await loadComments(target: target)
         }
     }
 
-    // MARK: - Delete (個別)
+    // MARK: - Delete (single)
 
-    /// 個別コメント削除 (自分のコメント or 投稿者なら可能、RLS で弾く)
-    /// 親削除時は子返信も DB の ON DELETE CASCADE で消えるので、loadComments 後の
-    /// 実際の差分でフィードカードのカウントを更新する
+    /// Delete a single comment (allowed for your own comment or for the post author, enforced by RLS)
+    /// When a parent is deleted, its replies are also removed by ON DELETE CASCADE in the DB, so the feed
+    /// card count is updated with the actual difference after loadComments
     func deleteComment(_ commentId: UUID, target: CommentTarget) async {
         let backup = commentsByTarget[target]
         let beforeCount = (commentsByTarget[target] ?? []).count
 
-        // 楽観 UI
+        // Optimistic UI
         if var comments = commentsByTarget[target] {
             comments.removeAll { $0.id == commentId || $0.parentCommentId == commentId }
             commentsByTarget[target] = comments
@@ -229,10 +234,10 @@ final class CommentService: ObservableObject {
                 .delete()
                 .eq("id", value: commentId.uuidString)
                 .execute()
-            // 再 fetch して確定
+            // Fetch again to finalize
             await loadComments(target: target)
             let afterCount = (commentsByTarget[target] ?? []).count
-            let delta = afterCount - beforeCount  // 負の数 (削除)
+            let delta = afterCount - beforeCount  // negative number (deletion)
             if delta != 0 {
                 bumpLocalCommentCount(target: target, by: delta)
             }
@@ -242,7 +247,8 @@ final class CommentService: ObservableObject {
         }
     }
 
-    /// 投稿者専用: 自分の投稿のコメント全消去 (post のみ。公式名言には「投稿者」がいないため対象外)
+    /// Post author only: delete all comments on your own post (posts only. Official quotes have no "post
+    /// author", so they are excluded)
     @discardableResult
     func deleteAllComments(postId: UUID) async -> Int {
         let params: [String: AnyJSON] = [
@@ -271,7 +277,7 @@ final class CommentService: ObservableObject {
         commentsByTarget[target] = nil
     }
 
-    /// 投稿削除に伴うキャッシュクリア
+    /// Clear the cache when a post is deleted
     func purgePost(_ postId: UUID) {
         commentsByTarget.removeValue(forKey: .post(postId))
     }

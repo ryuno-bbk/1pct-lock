@@ -2,12 +2,12 @@
 //  Author.swift
 //  AppBlocker
 //
-//  偉人（SNSアカウント）モデル
+//  Great figure (SNS account) model
 //
 
 import Foundation
 
-/// 偉人を表すモデル（偉人 = SNSアカウント）
+/// Model that represents a great figure (great figure = SNS account)
 struct Author: Identifiable, Codable, Equatable {
     let id: UUID
     let name: String
@@ -41,7 +41,7 @@ struct Author: Identifiable, Codable, Equatable {
         self.createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
     }
 
-    /// 言語に応じたバイオを返す
+    /// Returns the bio for the language
     func displayBio(lang: AppLanguage) -> String {
         switch lang {
         case .english:

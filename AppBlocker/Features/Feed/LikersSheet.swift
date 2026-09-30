@@ -2,10 +2,10 @@
 //  LikersSheet.swift
 //  AppBlocker
 //
-//  いいねした人の一覧シート (2026-07-10 ユーザー指定)。
-//  フィードカード左下のいいねアバタースタックをタップで開く。
-//  030 fetch_likers RPC をオンデマンドで 1 回だけ叩く軽い実装。
-//  行タップでそのユーザーのプロフィールへ (シート内 push)。
+//  Sheet listing the people who liked (2026-07-10 user spec).
+//  Opened by tapping the like avatar stack at the bottom left of a feed card.
+//  A light implementation that calls the 030 fetch_likers RPC once, on demand.
+//  Tapping a row goes to that user's profile (push inside the sheet).
 //
 
 import SwiftUI

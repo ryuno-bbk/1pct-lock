@@ -2,27 +2,27 @@
 //  WeeklyReport.swift
 //  AppBlocker
 //
-//  週次レポート (080_weekly_report.sql の get_weekly_report / get_weekly_report_list 戻り値)
+//  Weekly report (return values of get_weekly_report / get_weekly_report_list in 080_weekly_report.sql)
 //
-//  🔴 サーバー側はレポートを保存していない。block_sessions から毎回再計算している。
-//     過去のレポートも weekOffset を変えて同じ RPC を呼ぶだけで出る。
+//  🔴 The server does not store reports. They are recalculated from block_sessions every time.
+//     Past reports are also produced just by calling the same RPC with a different weekOffset.
 //
 
 import Foundation
 
-// MARK: - 日付 (date 型) のデコード
+// MARK: - Decoding dates (date type)
 
-/// RPC は Postgres の `date` を "2026-08-24" の文字列で返す (時刻もタイムゾーンも付かない)。
-/// Supabase の既定デコーダは ISO8601 の日時を期待するのでそのままでは落ちる。
-/// ここでは文字列のまま受けて、表示のときにカレンダー日付として解釈する。
+/// The RPC returns Postgres `date` as a string like "2026-08-24" (no time and no time zone).
+/// Supabase's default decoder expects an ISO8601 date-time, so it fails as is.
+/// Here we receive it as a string and interpret it as a calendar date when displaying it.
 enum WeekDay {
     static let parser: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.calendar = Calendar(identifier: .gregorian)
         f.locale = Locale(identifier: "en_US_POSIX")
-        // 週の境界はサーバー側で端末のタイムゾーンを使って切ってあるので、
-        // ここも端末ローカルとして解釈する (UTC で解釈すると1日ずれる)
+        // The week boundaries are cut on the server side using the device's time zone, so
+        // interpret it as device local here too (interpreting it as UTC shifts it by one day)
         f.timeZone = TimeZone.current
         return f
     }()
@@ -33,49 +33,52 @@ enum WeekDay {
     }
 }
 
-// MARK: - レポート本体
+// MARK: - The report itself
 
 struct WeeklyReport: Decodable, Equatable {
 
-    /// 過去に一度でもロックしたか。false ならレポートは全項目ゼロで画面が成立しない
+    /// Whether the user has ever locked. If false, every item in the report is zero and the screen does
+    /// not work
     let hasHistory: Bool
 
-    /// "2026-08-24" 形式。月曜始まり
+    /// "2026-08-24" format. Weeks start on Monday
     let weekStartRaw: String
-    /// "2026-08-30" 形式。日曜
+    /// "2026-08-30" format. Sunday
     let weekEndRaw: String
 
-    /// 進行中の週かどうか。true のときは「途中経過」であることを画面に出す
+    /// Whether the week is in progress. When true, the screen shows that it is an "interim result"
     let isCurrentWeek: Bool
 
-    /// その週のロック秒数
+    /// Lock seconds for that week
     let seconds: Int
-    /// その週のセッション数
+    /// Number of sessions for that week
     let sessions: Int
-    /// 前の週のロック秒数
+    /// Lock seconds for the previous week
     let prevSeconds: Int
-    /// 先週比 (%)。前の週が 0 秒だと定義できないので nil
+    /// Change vs last week (%). It cannot be defined if the previous week is 0 seconds, so nil
     let deltaPercent: Double?
 
-    /// その週の順位。母数が閾値未満の週は nil (サーバー側で伏せている)
+    /// Rank for that week. nil for weeks where the population is below the threshold (hidden on the
+    /// server side)
     let rank: Int?
-    /// その週の上位%。同上
+    /// Top percentile for that week. Same as above
     let topPercent: Double?
-    /// その週に1秒でもロックした人数
+    /// Number of people who locked for at least 1 second that week
     let activeUsers: Int
 
-    /// その週末時点の累計ロック秒数
+    /// Total lock seconds as of the end of that week
     let totalSeconds: Int
-    /// 直近4週 (初回セッションより前の週は除く) の平均
+    /// Average of the last 4 weeks (weeks before the first session are excluded)
     let avg4Seconds: Int
-    /// 上記ペースが1年続いた場合の秒数
+    /// Seconds if the pace above continued for 1 year
     let projectionYearSeconds: Int
 
-    /// モード別内訳 ("timer" / "schedule" / "location")。
-    /// ❌ アプリ別の内訳は作れない (Screen Time API が実測値をアプリ本体に渡さない)
+    /// Breakdown by mode ("timer" / "schedule" / "location").
+    /// ❌ A per-app breakdown cannot be made (the Screen Time API does not give measured values to the app
+    /// itself)
     let byMode: [String: Int]
 
-    /// 曜日別の秒数。必ず7要素 (月=0 〜 日=6)
+    /// Seconds per weekday. Always 7 elements (Mon=0 to Sun=6)
     let days: [Int]
 
     var weekStart: Date? { WeekDay.date(from: weekStartRaw) }
@@ -115,32 +118,33 @@ struct WeeklyReport: Decodable, Equatable {
         projectionYearSeconds = try c.decodeIfPresent(Int.self, forKey: .projectionYearSeconds) ?? 0
         byMode                = try c.decodeIfPresent([String: Int].self, forKey: .byMode) ?? [:]
         let rawDays           = try c.decodeIfPresent([Int].self, forKey: .days) ?? []
-        // 表示側が index 0..6 を無条件に触るので、ここで必ず7要素に整える
+        // The display side touches index 0..6 unconditionally, so always shape it into 7 elements here
         days = rawDays.count == 7 ? rawDays : Array(repeating: 0, count: 7)
     }
 
-    // MARK: - 表示ルール
+    // MARK: - Display rules
 
-    /// 🔴 先週比を % で出してよいか。
+    /// 🔴 Whether the change vs last week may be shown as %.
     ///
-    /// 本番実データで **+6603.1%** を返すケースが実在する (先週2時間 → 今週133時間)。
-    /// 数値としては正しいが画面に出すと壊れて見えるので、次の両方を満たすときだけ % を出す:
-    ///   - 前の週が10分以上ある (母数が小さすぎる比較をしない)
-    ///   - 変化率が ±1000% 未満
-    /// 満たさないときは実数の比較 (「先週 2時間 → 今週 133時間」) にフォールバックする。
+    /// Production data really does have a case that returns **+6603.1%** (last week 2 hours → this week
+    /// 133 hours). The number is correct, but it looks broken on screen, so show % only when both of these
+    /// hold:
+    ///   - The previous week has 10 minutes or more (no comparisons with too small a base)
+    ///   - The change rate is under ±1000%
+    /// Otherwise, fall back to comparing actual values ("last week 2 hours → this week 133 hours").
     var showsDeltaPercent: Bool {
         guard let d = deltaPercent else { return false }
         return prevSeconds >= 600 && abs(d) < 1000
     }
 
-    /// 前の週にも実績があり、比較そのものが意味を持つか
+    /// Whether the previous week also has activity, so that the comparison itself is meaningful
     var hasComparison: Bool { prevSeconds > 0 }
 }
 
-// MARK: - 履歴一覧の1行
+// MARK: - One row of the history list
 
 struct WeeklyReportSummary: Decodable, Equatable, Identifiable {
-    /// 今週から何週前か。レポートを開き直すときにそのまま RPC に渡す
+    /// How many weeks before this week. Passed to the RPC as is when reopening the report
     let weekOffset: Int
     let weekStartRaw: String
     let weekEndRaw: String

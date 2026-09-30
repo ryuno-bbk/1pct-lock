@@ -2,19 +2,19 @@
 //  PrimaryButton.swift
 //  AppBlocker
 //
-//  プライマリボタンコンポーネント
+//  Primary button component
 //
 
 import SwiftUI
 
-/// プライマリボタンのスタイル
+/// Primary button style
 enum PrimaryButtonStyle {
     case filled
     case outlined
     case text
 }
 
-/// プライマリボタンのサイズ
+/// Primary button size
 enum PrimaryButtonSize {
     case large
     case medium
@@ -45,7 +45,7 @@ enum PrimaryButtonSize {
     }
 }
 
-/// プライマリボタン
+/// Primary button
 struct PrimaryButton: View {
     let title: String
     let icon: String?
@@ -107,7 +107,7 @@ struct PrimaryButton: View {
     private var textColor: Color {
         switch style {
         case .filled:
-            // 反転CTA: 塗り (AppGradients.primary) がオフホワイトになったため文字は墨色
+            // Inverted CTA: the fill (AppGradients.primary) became off-white, so the text is ink-colored
             return AppColors.background
         case .outlined, .text:
             return AppColors.primaryFallback
@@ -135,7 +135,7 @@ struct PrimaryButton: View {
     }
 }
 
-/// セカンダリボタン（テキストボタン）
+/// Secondary button (text button)
 struct SecondaryButton: View {
     let title: String
     let action: () -> Void

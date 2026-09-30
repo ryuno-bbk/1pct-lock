@@ -2,14 +2,16 @@
 //  StoryTextEditorView.swift
 //  AppBlocker
 //
-//  UGC 投稿 v2 Step2: IG ストーリー準拠のテキストオーバーレイエディタ。
-//  背景 (photo/template/black/white) の上に最大3個のテキストをドラッグ/ピンチ/回転で
-//  自由配置できる。中央スナップ・回転スナップ・ゴミ箱ドロップ削除に対応。
-//  「次へ」タップで PostBakeRenderer に焼き込みを依頼し、Step3 (PostConfirmView) へ進む。
+//  UGC post v2 Step2: text overlay editor modeled on IG Stories.
+//  Up to 3 texts can be placed freely on the background (photo/template/black/white) with
+//  drag/pinch/rotate. Supports center snap, rotation snap and delete by dropping on the trash can.
+//  Tapping "次へ" ("Next") asks PostBakeRenderer to bake the image, then goes to Step3
+//  (PostConfirmView).
 //
-//  パフォーマンス注意: このファイルの TextField は OverlayTextFieldPreview という
-//  小さな子View に局所化している (巨大Viewへの scaleEffect / 直下 TextField 禁止のルールに準拠)。
-//  scaleEffect はピンチ操作中のライブフィードバックのみに限定し、焼き込みは実 fontSize で描画する。
+//  Performance note: the TextField in this file is localized to a small child view called
+//  OverlayTextFieldPreview (follows the rule that bans scaleEffect on a huge view and a TextField
+//  directly under it). scaleEffect is limited to live feedback during a pinch; the bake draws with
+//  the real fontSize.
 //
 
 import SwiftUI
@@ -17,14 +19,14 @@ import UIKit
 
 struct StoryTextEditorView: View {
     @ObservedObject var draft: PostDraft
-    /// 焼き込み完了後、Step3 へ push するためのコールバック
+    /// Callback to push to Step3 after baking finishes
     let onNext: () -> Void
 
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
 
     @State private var canvasSize: CGSize = .zero
 
-    // 入力モード state
+    // Input mode state
     @State private var isEditingOverlay = false
     @State private var editingOverlayId: UUID?
     @State private var editingText: String = ""
@@ -35,7 +37,7 @@ struct StoryTextEditorView: View {
     @State private var editingAlignment: OverlayAlignment = .center
     @State private var editingFontSize: Double = 32
 
-    // 配置モード中の視覚フィードバック
+    // Visual feedback during placement mode
     @State private var isAnyOverlayDragging = false
     @State private var isAnyOverlayNearTrash = false
     @State private var showSnapGuideX = false
@@ -43,8 +45,9 @@ struct StoryTextEditorView: View {
 
     @State private var isBaking = false
 
-    // 「戻る」でのキャンセル用スナップショット。次へ (焼き込み) を押さずに離れた場合、
-    // overlays だけが書き換わって既存の焼き込み画像と食い違うのを防ぐため、入場時の状態へ戻す。
+    // Snapshot for canceling with Back. If the user leaves without pressing Next (bake), restore the
+    // state at entry. This prevents only overlays being rewritten and no longer matching the existing
+    // baked image.
     @State private var overlaysSnapshot: [EditableOverlay] = []
     @State private var didBake = false
 
@@ -52,7 +55,7 @@ struct StoryTextEditorView: View {
         AppLanguage(rawValue: mainLanguageRaw) ?? .english
     }
 
-    /// draft.images[draft.editingIndex] のオーバーレイ数 (境界外なら 0 扱い)
+    /// Number of overlays in draft.images[draft.editingIndex] (0 if out of bounds)
     private var currentOverlayCount: Int {
         guard draft.images.indices.contains(draft.editingIndex) else { return 0 }
         return draft.images[draft.editingIndex].overlays.count
@@ -60,8 +63,8 @@ struct StoryTextEditorView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // 編集キャンバスは 4:5 固定 (画面幅 × 1.25)。これが焼き込み比率になる。
-            // フィード/コメント/プロフィールと同じ 4:5 なので、カメラ写真はフィルで余白ゼロに焼ける。
+            // The editing canvas is fixed at 4:5 (screen width × 1.25). This becomes the bake ratio.
+            // It is the same 4:5 as feed/comments/profile, so camera photos are baked with fill and zero margin.
             let canvasW = geo.size.width
             let canvasH = canvasW * 5.0 / 4.0
             let cSize = CGSize(width: canvasW, height: canvasH)
@@ -69,11 +72,11 @@ struct StoryTextEditorView: View {
             ZStack(alignment: .top) {
                 Color.black.ignoresSafeArea()
 
-                // 4:5 編集キャンバス。上端 = 入力モードの上部バー (時計/ゴミ箱/完了) の直下。
-                // 8pt は上げすぎ・中央は黒帯がダサい (2026-07-11 実機FB×2)。
-                // 入力オーバーレイのスポイト canvasRect も同じ 56pt に合わせる
-                // 注意: overlay (Aa/時計) は padding より前に付ける。padding の後だと
-                // 「余白込みの枠」の右上に整列して Aa が画像の外にはみ出す (実機で発生済み)
+                // 4:5 editing canvas. Top edge = right below the top bar of input mode (clock/trash/done).
+                // 8pt was too high, and centering gives an ugly black band (2026-07-11 real device feedback ×2).
+                // The eyedropper canvasRect of the input overlay also uses the same 56pt
+                // Note: attach overlay (Aa/clock) before padding. After padding, it aligns to the top right of
+                // "the frame including the margin" and Aa sticks out of the image (already happened on a real device)
                 editingCanvas(size: cSize)
                     .frame(width: canvasW, height: canvasH)
                     .clipped()
@@ -91,8 +94,8 @@ struct StoryTextEditorView: View {
                                         .background(Circle().fill(Color.black.opacity(0.35)))
                                 }
 
-                                // 現在時刻をワンタップ挿入 (2026-07-11 ユーザー指定: 入力モードを
-                                // 開かなくても押せるよう常設)
+                                // One-tap insert of the current time (2026-07-11 user request: always shown so it can be pressed
+                                // without opening input mode)
                                 Button {
                                     insertTimeOverlay()
                                 } label: {
@@ -111,7 +114,7 @@ struct StoryTextEditorView: View {
                     }
                     .padding(.top, 56)
 
-                // テキスト入力モードは全画面 (キャンバス外)
+                // Text input mode is full screen (outside the canvas)
                 if isEditingOverlay {
                     OverlayInputOverlay(
                         text: $editingText,
@@ -131,7 +134,7 @@ struct StoryTextEditorView: View {
             }
             .onAppear {
                 canvasSize = cSize
-                didBake = false  // 出現ごとに1編集セッション (確定画面から戻ってきた再訪も含む)
+                didBake = false  // One edit session per appearance (including coming back from the confirm screen)
                 if draft.images.indices.contains(draft.editingIndex) {
                     overlaysSnapshot = draft.images[draft.editingIndex].overlays
                 }
@@ -140,11 +143,11 @@ struct StoryTextEditorView: View {
                 canvasSize = CGSize(width: newSize.width, height: newSize.width * 5.0 / 4.0)
             }
         }
-        // キャンバスはキーボードで縮めない。縮むと入力直後の「次へ」で
-        // 縮んだ比率のまま焼き込まれ、壊れた投稿になる (実機で発生済み)
+        // Do not shrink the canvas for the keyboard. If it shrinks, pressing "次へ" ("Next") right after
+        // typing bakes with the shrunk ratio and produces a broken post (already happened on a real device)
         .ignoresSafeArea(.keyboard)
         .onDisappear {
-            // 焼き込みせずに離れた = キャンセル。編集内容を入場時の状態へ戻す
+            // Leaving without baking = cancel. Restore the edits to the state at entry
             if !didBake, draft.images.indices.contains(draft.editingIndex) {
                 draft.images[draft.editingIndex].overlays = overlaysSnapshot
             }
@@ -163,8 +166,8 @@ struct StoryTextEditorView: View {
                     }
                     .font(.system(size: 16, weight: .bold))
                     .foregroundColor(.white)
-                    // 入力モード中に押すと未確定テキストが焼き込まれずに消えるため無効化
-                    // (先に「完了」か暗転タップで確定させる)
+                    // Disabled because pressing it in input mode drops the unconfirmed text without baking it
+                    // (confirm first with "完了" ("Done") or by tapping the dimmed area)
                     .disabled(isEditingOverlay)
                     .opacity(isEditingOverlay ? 0.4 : 1)
                 }
@@ -174,8 +177,8 @@ struct StoryTextEditorView: View {
 
     // MARK: - Editing Canvas (4:5)
 
-    /// 4:5 キャンバス内の中身 (背景 + オーバーレイ + スナップガイド + ヒント + ゴミ箱)。
-    /// canvasSize は 4:5 の実サイズ。オーバーレイ座標もこの 4:5 基準で正規化される。
+    /// Contents of the 4:5 canvas (background + overlays + snap guides + hint + trash).
+    /// canvasSize is the real 4:5 size. Overlay coordinates are also normalized against this 4:5 basis.
     @ViewBuilder
     private func editingCanvas(size: CGSize) -> some View {
         ZStack {
@@ -236,29 +239,29 @@ struct StoryTextEditorView: View {
 
     // MARK: - Background
 
-    /// 編集中の DraftImage の背景 (境界外なら黒にフォールバック)
+    /// Background of the DraftImage being edited (falls back to black if out of bounds)
     private var currentBackground: PostBackground {
         guard draft.images.indices.contains(draft.editingIndex) else { return .black }
         return draft.images[draft.editingIndex].background
     }
 
-    // 実機FB#8 真因修正: .scaledToFill() は提案サイズを超えて自身のレイアウトサイズを
-    // 押し広げる (ProfileCards.swift の UserPostGridCell に同じ教訓コメントあり。
-    // FeedListCard.imageFitBlur のコメントにも「fill レイヤーが ZStack を押し広げる」
-    // 既知バグとして記録されている)。frame/clipped が無いと、この ZStack (背景) が
-    // editingCanvas の cSize より大きくなり、外側 .frame(canvasW,canvasH).clipped() で
-    // 中央寄せクロップされる際に ZStack 自体の座標原点が可視キャンバスとズレる。
-    // PlacedOverlayView は .position(overlay.x*canvasSize.width, ...) で「ZStack の
-    // 座標系」に直接置くため、そのズレがそのまま「中央に置いたのに見た目がズレる」に
-    // 直結していた (焼き込み側の BakeCompositionView.backgroundLayer は既にこの
-    // frame+clipped を持っていたため焼き込み結果は正しかった)。
-    // size を明示で受け取り、常に cSize ちょうどに固定することで座標系のズレを断つ。
+    // Real device feedback #8 root cause fix: .scaledToFill() pushes its own layout size beyond the
+    // proposed size (UserPostGridCell in ProfileCards.swift has a comment with the same lesson.
+    // The FeedListCard.imageFitBlur comment also records it as a known bug: "the fill layer pushes the
+    // ZStack wider"). Without frame/clipped, this ZStack (background) becomes larger than
+    // editingCanvas's cSize, and when the outer .frame(canvasW,canvasH).clipped() crops it centered,
+    // the coordinate origin of the ZStack itself shifts away from the visible canvas.
+    // PlacedOverlayView is placed directly in "the ZStack's coordinate system" with
+    // .position(overlay.x*canvasSize.width, ...), so that shift led directly to "placed in the center
+    // but it looks off" (the bake side's BakeCompositionView.backgroundLayer already had this
+    // frame+clipped, so the baked result was correct).
+    // Take size explicitly and always fix it to exactly cSize to remove the coordinate shift.
     @ViewBuilder
     private func backgroundLayer(size: CGSize) -> some View {
         switch currentBackground {
         case .photo(let image):
-            // 4:5 キャンバスをフィル (aspectFill + クロップ)。カメラ写真は余白なく埋まり、
-            // 極端な比率の画像だけ上下 or 左右が少し切れる (ユーザー確定: 余白ゼロ優先)
+            // Fill the 4:5 canvas (aspectFill + crop). Camera photos fill it with no margin, and only images
+            // with extreme ratios lose a little at the top/bottom or left/right (user decision: zero margin first)
             ZStack {
                 Color.black
                 Image(uiImage: image)
@@ -288,7 +291,7 @@ struct StoryTextEditorView: View {
             .animation(.easeOut(duration: 0.15), value: isAnyOverlayNearTrash)
     }
 
-    // MARK: - 入力モード
+    // MARK: - Input mode
 
     private var defaultOverlayColor: OverlayColor {
         if case .white = currentBackground { return .ink }
@@ -308,19 +311,20 @@ struct StoryTextEditorView: View {
         withAnimation(.easeOut(duration: 0.18)) { isEditingOverlay = true }
     }
 
-    /// 現在時刻をワンタップで配置 (入力モード不要)。
-    /// 白背景では ink になる (defaultOverlayColor) ので「時刻が見えない」問題も解消
+    /// Place the current time with one tap (no input mode needed).
+    /// On a white background it becomes ink (defaultOverlayColor), which also fixes the
+    /// "time is invisible" problem
     private func insertTimeOverlay() {
         guard draft.images.indices.contains(draft.editingIndex),
               currentOverlayCount < 3 else { return }
         let new = EditableOverlay(
             id: UUID(),
             text: OverlayFontProvider.currentTimeString(),
-            font: .serif,   // 初期フォントは一番左 (明朝)。時刻も同じ (2026-07-11 ユーザー指定)
+            font: .serif,   // The initial font is the leftmost one (Mincho). Same for the time (2026-07-11 user request)
             color: defaultOverlayColor,
             plate: false,
             x: 0.5,
-            y: 0.3,   // 中央だと本文と被りやすいので少し上に置く
+            y: 0.3,   // Place it a bit higher, since the center tends to overlap the body text
             fontSize: 44,
             rotationDegrees: 0,
             alignment: .center
@@ -341,7 +345,7 @@ struct StoryTextEditorView: View {
         withAnimation(.easeOut(duration: 0.18)) { isEditingOverlay = true }
     }
 
-    /// 入力モードのゴミ箱: 編集中のテキストを削除して閉じる (新規なら破棄のみ)
+    /// Trash in input mode: deletes the text being edited and closes (only discards if it is new)
     private func deleteEditingOverlay() {
         if let id = editingOverlayId, draft.images.indices.contains(draft.editingIndex) {
             draft.images[draft.editingIndex].overlays.removeAll { $0.id == id }
@@ -374,7 +378,7 @@ struct StoryTextEditorView: View {
             draft.images[draft.editingIndex].overlays[idx].plateColor = editingPlateColor
             draft.images[draft.editingIndex].overlays[idx].alignment = editingAlignment
             draft.images[draft.editingIndex].overlays[idx].fontSize = editingFontSize
-            // x / y / rotationDegrees は維持 (再編集時は位置を動かさない)
+            // Keep x / y / rotationDegrees (do not move the position when re-editing)
         } else {
             guard currentOverlayCount < 3 else { return }
             let new = EditableOverlay(
@@ -394,7 +398,7 @@ struct StoryTextEditorView: View {
         }
     }
 
-    // MARK: - 次へ (焼き込み: 編集中の DraftImage 1枚分)
+    // MARK: - Next (bake: one DraftImage being edited)
 
     @MainActor
     private func proceedNext() async {
@@ -424,17 +428,17 @@ struct StoryTextEditorView: View {
     }
 }
 
-// MARK: - OverlayGlyphView (共通描画パーツ、PostBakeRenderer からも参照される)
+// MARK: - OverlayGlyphView (shared drawing part, also used by PostBakeRenderer)
 
-/// 1つのテキストオーバーレイの見た目 (フォント + 色 + プレート + シャドウ)。
-/// ライブエディタと焼き込みレンダラーの両方から呼ばれる。
+/// Appearance of one text overlay (font + color + plate + shadow).
+/// Called from both the live editor and the bake renderer.
 struct OverlayGlyphView: View {
     let overlay: EditableOverlay
-    /// 実際に描画する pt 値 (呼び出し側で正規化 fontSize から算出済み)
+    /// The pt value actually drawn (computed by the caller from the normalized fontSize)
     let resolvedFontSize: CGFloat
-    /// プレート余白 / 角丸 / シャドウ半径に掛ける倍率。エディタ表示は 1 (等倍)、
-    /// 焼き込み (BakeCompositionView) は fontSize と同じ k (renderWidth/canvasWidth) を渡す。
-    /// これを揃えないとプレート/シャドウだけがエディタよりきつく焼き込まれる (2026-07-11 発覚)
+    /// Multiplier for plate padding / corner radius / shadow radius. The editor display uses 1 (actual
+    /// size), and the bake (BakeCompositionView) passes the same k as fontSize (renderWidth/canvasWidth).
+    /// If these do not match, only the plate/shadow is baked stronger than in the editor (found 2026-07-11)
     var scale: CGFloat = 1
 
     private var font: Font {
@@ -442,10 +446,10 @@ struct OverlayGlyphView: View {
     }
 
     var body: some View {
-        // 文字色 = color、プレート背景 = plateColor (未指定なら自動コントラスト)。
-        // 「文字/背景」を独立に選べる (2026-07-11 直感性FBで分離)。
-        // 折り返しは一切しない (IG準拠): 改行は手動のみ。
-        // 大きくすればキャンバス端からはみ出し、見切れ表現ができる (焼き込みでクロップされる)
+        // Text color = color, plate background = plateColor (auto contrast if not set).
+        // "Text/background" can be chosen independently (split after the 2026-07-11 intuitiveness feedback).
+        // No wrapping at all (IG style): line breaks are manual only.
+        // If made large, it goes past the canvas edge and can be cut off on purpose (cropped in the bake)
         Text(overlay.text.isEmpty ? " " : overlay.text)
             .font(font)
             .foregroundColor(overlay.color.swiftUIColor)
@@ -461,11 +465,11 @@ struct OverlayGlyphView: View {
                     }
                 }
             )
-            // 影は可読性用。120pt 超の巨大文字では影のラスタライズが極端に重く
-            // フリーズの原因になるため無効化する (2026-07-11)。
-            // ここの 120 判定は overlay.fontSize (エディタ座標系の正規化前 pt) を使い、
-            // resolvedFontSize (焼き込み時は k 倍済み) を使わないことで
-            // プレビューと焼き込みで影の on/off が食い違わないようにする
+            // The shadow is for readability. For huge text over 120pt, rasterizing the shadow is extremely heavy
+            // and causes freezes, so it is disabled (2026-07-11).
+            // This 120 check uses overlay.fontSize (pt in the editor coordinate system, before normalization)
+            // and not resolvedFontSize (already multiplied by k during the bake), so that
+            // the preview and the bake do not disagree on whether the shadow is on or off
             .shadow(
                 color: (overlay.plate || overlay.fontSize > 120) ? .clear : .black.opacity(0.35),
                 radius: (overlay.plate || overlay.fontSize > 120) ? 0 : 8 * scale
@@ -473,7 +477,7 @@ struct OverlayGlyphView: View {
     }
 }
 
-// MARK: - PlacedOverlayView (配置モード: ドラッグ/ピンチ/回転 + スナップ + ゴミ箱削除)
+// MARK: - PlacedOverlayView (placement mode: drag/pinch/rotate + snap + delete by trash)
 
 private struct OverlayDragSignal {
     var isDragging: Bool
@@ -497,8 +501,8 @@ private struct PlacedOverlayView: View {
     @State private var snappedXLocal = false
     @State private var snappedYLocal = false
 
-    // 判定圏はアイコンにほぼ重なる距離だけ (旧50は広すぎて画面下部にテキストを
-    // 置けなかった。2026-07-11 実機FB)
+    // The hit area is only about the distance that overlaps the icon (the old 50 was too wide, and text
+    // could not be placed at the bottom of the screen. 2026-07-11 real device feedback)
     private let trashRadius: CGFloat = 32
     private let centerSnapThreshold: CGFloat = 8
     private let rotationSnapThreshold: Double = 4
@@ -508,12 +512,12 @@ private struct PlacedOverlayView: View {
     }
 
     private var trashCenter: CGPoint {
-        // 描画側 (trashButton: bottom padding 40 + アイコン 34pt の半分 ≈ 17) と一致させる。
-        // ズレると「ゴミ箱の見た目の位置」と「実際に消える判定圏」が食い違う
+        // Match the drawing side (trashButton: bottom padding 40 + half of the 34pt icon ≈ 17).
+        // If they differ, "where the trash looks" and "the actual delete hit area" disagree
         CGPoint(x: canvasSize.width / 2, y: canvasSize.height - 57)
     }
 
-    /// ライブ表示用のオフセット (中央スナップの軽い吸着込み)
+    /// Offset for live display (includes light magnetic snapping to the center)
     private var liveOffset: CGSize {
         guard dragTranslation != .zero else { return .zero }
         var dx = dragTranslation.width
@@ -531,10 +535,13 @@ private struct PlacedOverlayView: View {
         return CGSize(width: dx, height: dy)
     }
 
-    /// ライブピンチ表示用のスケール。ピンチはほぼ無制限 (4〜300pt)。左のスライダーは 16〜64 のまま。
-    /// 上限 300: 数百pt超の影付きテキストはラスタライズが重く、状態変更のたびに
-    /// メインスレッドが固まる (実機フリーズ 2026-07-11)。300 でも画面幅を余裕で超える。
-    /// clamp を先取りして「指を離した瞬間に縮む/伸びる」ジャンプを防ぐ
+    /// Scale for the live pinch display. Pinch is almost unlimited (4-300pt). The left slider stays at
+    /// 16-64.
+    /// Upper limit 300: text with a shadow over several hundred pt is heavy to rasterize, and the
+    /// main thread freezes on every state change (real device freeze 2026-07-11). Even 300 easily exceeds
+    /// the screen width.
+    /// Apply the clamp in advance to prevent the jump where it "shrinks/grows the moment the finger is
+    /// lifted"
     private var clampedMagnify: CGFloat {
         guard overlay.fontSize > 0 else { return magnifyDelta }
         let minScale = 4.0 / overlay.fontSize
@@ -662,29 +669,30 @@ private struct PlacedOverlayView: View {
     }
 }
 
-// MARK: - OverlayInputOverlay (入力モード: IG 準拠の 4 ボタンツールバー + 横スクロール行)
+// MARK: - OverlayInputOverlay (input mode: IG-style 4-button toolbar + horizontal scroll row)
 //
-// 構成 (2026-07-11 ユーザー確定、IG のテキストエディタを踏襲):
-//   - 上部: 時刻挿入 / ゴミ箱 / 完了
-//   - 中央: テキスト + 左に縦サイズスライダー
-//   - 下部: アクティブ行 (フォントピル or カラースウォッチ、どちらも横スクロール)
-//           + 4 ボタンバー [Aa フォント] [カラーホイール] [整列] [A プレート]
-//   - スポイト: カラー行の左端。ドラッグでルーペが動き、背景画像から色を拾う
+// Layout (confirmed by the user 2026-07-11, follows the IG text editor):
+//   - Top: insert time / trash / done
+//   - Center: text + vertical size slider on the left
+//   - Bottom: active row (font pills or color swatches, both scroll horizontally)
+//           + 4-button bar [Aa font] [color wheel] [alignment] [A plate]
+//   - Eyedropper: left end of the color row. Dragging moves the loupe and picks a color from the
+//     background image
 
 private struct OverlayInputOverlay: View {
     @Binding var text: String
     @Binding var font: OverlayFont
     @Binding var color: OverlayColor
     @Binding var plate: Bool
-    /// プレート背景色 (nil = 文字色から自動コントラスト)
+    /// Plate background color (nil = auto contrast from the text color)
     @Binding var plateColor: OverlayColor?
     @Binding var alignment: OverlayAlignment
     @Binding var fontSize: Double
-    /// スポイトのサンプリング元 (編集中の背景)
+    /// Sampling source for the eyedropper (the background being edited)
     let background: PostBackground
     let lang: AppLanguage
     let onDone: () -> Void
-    /// 編集中のテキストを削除して閉じる (topBar のゴミ箱)
+    /// Delete the text being edited and close (trash in topBar)
     let onDelete: () -> Void
 
     private enum ActiveTool {
@@ -693,10 +701,10 @@ private struct OverlayInputOverlay: View {
     }
 
     @State private var activeTool: ActiveTool = .font
-    /// フォント行のスライド選択位置 (中央に来たピル = 選択)
+    /// Slide selection position of the font row (the pill that comes to the center = selected)
     @State private var fontScrollID: OverlayFont?
 
-    // スポイト
+    // Eyedropper
     @State private var isEyedropperActive = false
     @State private var dropperPoint: CGPoint = .zero
     @State private var dropperColor: OverlayColor = .offwhite
@@ -704,10 +712,11 @@ private struct OverlayInputOverlay: View {
 
     var body: some View {
         GeometryReader { geo in
-            // レイアウト基準 (キーボード非依存の固定分率)
+            // Layout reference (fixed fractions that do not depend on the keyboard)
             let textCenterY = geo.size.height * 0.29
             let toolsCenterY = geo.size.height * 0.50
-            // 4:5 キャンバスの実領域 (スポイトの可動域)。エディタ本体の上寄せ (top 56pt) と一致させる
+            // Actual area of the 4:5 canvas (the eyedropper's movable range). Match the editor's top alignment
+            // (top 56pt)
             let canvasHeight = geo.size.width * 5.0 / 4.0
             let canvasRect = CGRect(
                 x: 0,
@@ -717,7 +726,7 @@ private struct OverlayInputOverlay: View {
             )
 
             ZStack {
-                // 暗転レイヤー。タップで確定 (onDone)
+                // Dimming layer. Tap to confirm (onDone)
                 Color.black.opacity(0.5)
                     .ignoresSafeArea()
                     .contentShape(Rectangle())
@@ -738,16 +747,16 @@ private struct OverlayInputOverlay: View {
                         alignment: alignment,
                         fontSize: fontSize
                     )
-                    // SwiftUI の TextField はフォーカス中の文字色/フォント変更を次のキー入力まで
-                    // 反映しない既知の癖がある。スタイルが変わったら id を変えてフィールドを
-                    // 作り直し、即時反映させる (onAppear で再フォーカスされる。2026-07-11 実機FB)
+                    // SwiftUI's TextField has a known quirk: color/font changes while focused are not shown until the
+                    // next key press. When the style changes, change the id to rebuild the field
+                    // so it applies immediately (it is refocused in onAppear. 2026-07-11 real device feedback)
                     .id("preview-\(color.token)-\(plate)-\(plateColor?.token ?? "auto")-\(font.rawValue)-\(alignment.rawValue)")
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
-                    .onTapGesture { /* 帯内タップは閉じない */ }
+                    .onTapGesture { /* a tap inside the band does not close it */ }
                     .position(x: geo.size.width / 2, y: textCenterY)
 
-                    // 下部: アクティブ行 + 4ボタンバー
+                    // Bottom: active row + 4-button bar
                     VStack(spacing: 12) {
                         Group {
                             switch activeTool {
@@ -761,7 +770,8 @@ private struct OverlayInputOverlay: View {
                     }
                     .position(x: geo.size.width / 2, y: toolsCenterY)
 
-                    // スライダーは短め (下端がカラー行のスポイトに重ならないように。2026-07-11 FB)
+                    // The slider is kept short (so its bottom end does not overlap the eyedropper in the color row.
+                    // 2026-07-11 feedback)
                     VerticalSizeSlider(value: $fontSize)
                         .frame(width: 32, height: geo.size.height * 0.22)
                         .position(x: 32, y: textCenterY)
@@ -776,11 +786,11 @@ private struct OverlayInputOverlay: View {
         }
     }
 
-    // MARK: - Top Bar (時刻 / ゴミ箱 / 完了。全ボタン 44pt 判定)
+    // MARK: - Top Bar (time / trash / done. All buttons have 44pt hit areas)
 
     private var topBar: some View {
         HStack(spacing: 8) {
-            // 現在時刻を挿入 (フォントは現在の選択のまま = 初期は一番左の明朝)
+            // Insert the current time (the font stays the current selection = initially the leftmost, Mincho)
             Button {
                 text = OverlayFontProvider.currentTimeString()
                 QuizHaptics.light()
@@ -792,7 +802,7 @@ private struct OverlayInputOverlay: View {
                     .contentShape(Rectangle())
             }
 
-            // このテキストを削除
+            // Delete this text
             Button {
                 onDelete()
             } label: {
@@ -819,11 +829,11 @@ private struct OverlayInputOverlay: View {
         .padding(.top, 6)
     }
 
-    // MARK: - 4 ボタンバー [Aa] [カラー] [整列] [プレート]
+    // MARK: - 4-button bar [Aa] [color] [alignment] [plate]
 
     private var toolBar: some View {
         HStack(spacing: 8) {
-            // Aa (フォント行へ)
+            // Aa (go to the font row)
             Button {
                 activeTool = .font
             } label: {
@@ -838,7 +848,7 @@ private struct OverlayInputOverlay: View {
                     .contentShape(Rectangle())
             }
 
-            // カラーホイール (スウォッチ行へ)
+            // Color wheel (go to the swatch row)
             Button {
                 activeTool = .color
             } label: {
@@ -859,8 +869,8 @@ private struct OverlayInputOverlay: View {
                     .contentShape(Rectangle())
             }
 
-            // プレート背景サイクル: OFF → グレー → 黒 → 白 → OFF (2026-07-11 ユーザー指定。
-            // スウォッチは常に文字色。トグル式より単純でバグりにくい)
+            // Plate background cycle: OFF → gray → black → white → OFF (2026-07-11 user request.
+            // Swatches are always the text color. Simpler than toggles and less likely to be buggy)
             Button {
                 cyclePlateBackground()
             } label: {
@@ -885,7 +895,7 @@ private struct OverlayInputOverlay: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(Color.black.opacity(0.35)))
     }
 
-    // MARK: - フォント行 (横スクロール + スライド選択。IG 準拠)
+    // MARK: - Font row (horizontal scroll + slide to select. IG style)
 
     private func fontScrollRow(width: CGFloat) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -897,7 +907,7 @@ private struct OverlayInputOverlay: View {
             }
             .scrollTargetLayout()
         }
-        // 中央スナップ: 左右に余白を作り、中央に来たピルが選択される
+        // Center snap: add margins on both sides so the pill that comes to the center is selected
         .contentMargins(.horizontal, (width - 70) / 2, for: .scrollContent)
         .scrollTargetBehavior(.viewAligned)
         .scrollPosition(id: $fontScrollID, anchor: .center)
@@ -923,21 +933,21 @@ private struct OverlayInputOverlay: View {
         }
     }
 
-    /// ピル上の "Aa" を各フォントで表示 (見た目で選べるように)
+    /// Show "Aa" on each pill in its own font (so it can be chosen by look)
     private func pillFont(_ kind: OverlayFont) -> Font {
-        // didot だけ 1pt 大きくしていた微調整は解決口の一本化で落とした
-        // (ピッカーに出ない case なので実害なし)
+        // The tweak that made only didot 1pt larger was dropped when font resolution was unified into one
+        // entry point (it is a case not shown in the picker, so no real harm)
         OverlayFontProvider.font(kind, size: 15)
     }
 
-    // MARK: - カラー行 (左端スポイト + 細分パレット。横スクロール 1 列)
+    // MARK: - Color row (eyedropper at the left end + fine palette. One horizontally scrolling row)
 
     private var plateButtonForeground: Color {
         guard plate else { return .white }
         return (plateColor ?? .offwhite).contrastText.swiftUIColor
     }
 
-    /// プレート背景サイクル: OFF → グレー → 黒 → 白 → OFF
+    /// Plate background cycle: OFF → gray → black → white → OFF
     private func cyclePlateBackground() {
         if !plate {
             plate = true
@@ -956,7 +966,7 @@ private struct OverlayInputOverlay: View {
     private var colorScrollRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 9) {
-                // スポイト (文字色を背景画像から拾う)
+                // Eyedropper (picks the text color from the background image)
                 Button {
                     startEyedropper()
                 } label: {
@@ -989,12 +999,12 @@ private struct OverlayInputOverlay: View {
         }
     }
 
-    // MARK: - スポイト (ドラッグでルーペ、背景画像から色を拾う)
+    // MARK: - Eyedropper (drag for a loupe, picks a color from the background image)
 
     private func startEyedropper() {
         sampler = EyedropperSampler(background: background)
-        // 初期位置 = 画面中央 (キャンバス中央付近)
-        dropperPoint = .zero  // eyedropperLayer 側で canvasRect 中央に初期化
+        // Initial position = center of the screen (near the center of the canvas)
+        dropperPoint = .zero  // Initialized to the center of canvasRect on the eyedropperLayer side
         isEyedropperActive = true
         QuizHaptics.light()
     }
@@ -1031,7 +1041,7 @@ private struct OverlayInputOverlay: View {
                         }
                 )
 
-            // ルーペ (指の上に表示。IG のスポイトと同じティアドロップ風)
+            // Loupe (shown above the finger. Teardrop-like, same as the IG eyedropper)
             VStack(spacing: 2) {
                 Circle()
                     .fill(dropperColor.swiftUIColor)
@@ -1046,7 +1056,7 @@ private struct OverlayInputOverlay: View {
             .position(x: point.x, y: point.y - 48)
             .allowsHitTesting(false)
 
-            // 指位置の小さな点
+            // Small dot at the finger position
             Circle()
                 .stroke(Color.white, lineWidth: 2)
                 .frame(width: 10, height: 10)
@@ -1059,7 +1069,7 @@ private struct OverlayInputOverlay: View {
 
 }
 
-/// スポイト用の三角ポインタ
+/// Triangle pointer for the eyedropper
 private struct Triangle: Shape {
     func path(in rect: CGRect) -> Path {
         var p = Path()
@@ -1071,11 +1081,11 @@ private struct Triangle: Shape {
     }
 }
 
-// MARK: - EyedropperSampler (背景を小さなビットマップに1回だけ描いて色を引く)
+// MARK: - EyedropperSampler (draws the background once into a small bitmap and reads colors from it)
 
-/// スポイトのサンプリング。背景 (写真/テンプレ/単色) をキャンバス比率 (4:5) の
-/// 小ビットマップへ aspectFill で1回だけ描画し、以降の指の移動ごとに O(1) で色を返す
-/// (毎フレーム 12MP 画像をデコードしないための前処理)
+/// Eyedropper sampling. Draws the background (photo/template/solid color) once with aspectFill into a
+/// small bitmap with the canvas ratio (4:5), then returns a color in O(1) for each finger move after that
+/// (preprocessing so a 12MP image is not decoded every frame)
 private struct EyedropperSampler {
     private let width = 96
     private let height = 120
@@ -1133,7 +1143,7 @@ private struct EyedropperSampler {
         )
     }
 
-    /// aspectFill (中央クロップ) で描く。エディタの表示と同じ見え方の範囲から色を拾う
+    /// Draw with aspectFill (center crop). Picks colors from the same visible range as the editor display
     private static func drawFill(_ image: UIImage, in size: CGSize) {
         guard image.size.width > 0, image.size.height > 0 else { return }
         let scale = max(size.width / image.size.width, size.height / image.size.height)
@@ -1143,7 +1153,7 @@ private struct EyedropperSampler {
     }
 }
 
-/// 入力モード中のテキスト表示専用の小さな子View (パフォーマンス対策で局所化)。
+/// Small child view only for showing the text during input mode (localized for performance).
 private struct OverlayTextFieldPreview: View {
     @Binding var text: String
     let font: OverlayFont
@@ -1181,8 +1191,9 @@ private struct OverlayTextFieldPreview: View {
     }
 }
 
-/// フォントサイズ (16〜64pt) を縦ドラッグで調整するカスタムスライダー。
-/// SwiftUI 標準 Slider に縦向きが無いため、GeometryReader + DragGesture で自作。
+/// Custom slider that adjusts the font size (16-64pt) by dragging vertically.
+/// SwiftUI's standard Slider has no vertical orientation, so it is built with GeometryReader +
+/// DragGesture.
 private struct VerticalSizeSlider: View {
     @Binding var value: Double
     private let range: ClosedRange<Double> = 16...64
@@ -1190,7 +1201,7 @@ private struct VerticalSizeSlider: View {
     var body: some View {
         GeometryReader { geo in
             let h = geo.size.height
-            // ピンチで範囲外 (4〜600) になり得るため 0...1 にクランプしてつまみを端に留める
+            // Pinch can take it out of range (4-600), so clamp to 0...1 and keep the knob at the end
             let t = min(max((value - range.lowerBound) / (range.upperBound - range.lowerBound), 0), 1)
             let thumbY = h * (1 - t)
 

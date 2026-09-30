@@ -1,25 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  プライバシーマニフェスト (2026-07-31 追加)。
+  Privacy manifest (added 2026-07-31).
 
-  ⚠️ これが無いと App Store Connect へのアップロード時に ITMS-91053
-  (Missing API declaration) が返り、配信が止まる。本アプリは UserDefaults を
-  Required Reason API として使用しているため申告が必須。
+  ⚠️ Without this file, uploading to App Store Connect returns ITMS-91053
+  (Missing API declaration) and distribution stops. The app uses UserDefaults,
+  which is a Required Reason API, so it has to be declared.
 
-  理由コードの使い分け (Apple 公式定義):
-    CA92.1 = アプリ自身からのみアクセスできる UserDefaults の読み書き
-             (UserDefaults.standard: mainLanguage / hasCompletedOnboarding 等)
-    1C8F.1 = 同一 App Group に属するアプリ/App Extension/App Clip からのみ
-             アクセスできる UserDefaults の読み書き
-             (AppGroupStorage: Shield 用の名言・夢、遮断設定ミラー、
-              ロックセッションのキュー等を Extension と共有している)
-  本アプリは両方を使うため両方を宣言する。
+  Which reason code covers what (Apple's official definitions):
+    CA92.1 = reading/writing UserDefaults that only the app itself can access
+             (UserDefaults.standard: mainLanguage / hasCompletedOnboarding etc.)
+    1C8F.1 = reading/writing UserDefaults that only apps/App Extensions/App Clips
+             in the same App Group can access
+             (AppGroupStorage: the quote and dream for the Shield, the mirror of the blocking settings,
+              the lock session queue etc. are shared with the extensions)
+  The app uses both, so both are declared.
 
-  NSPrivacyCollectedDataTypes は App Store Connect の「App のプライバシー」
-  申告と一致させること。片方だけ更新すると不整合になる。
-  AdMob / RevenueCat / Supabase が収集する分は各 SDK 同梱のマニフェストが
-  申告するため、ここには重複して書かない。
+  NSPrivacyCollectedDataTypes must match the "App Privacy" answers in
+  App Store Connect. Updating only one of them makes them inconsistent.
+  Data collected by AdMob / RevenueCat / Supabase is declared by the manifest
+  bundled with each SDK, so it is not repeated here.
 -->
 <plist version="1.0">
 <dict>
@@ -41,7 +41,7 @@
 	</array>
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array>
-		<!-- Sign in with Apple で取得し Supabase Auth に保管される (中継アドレス含む) -->
+		<!-- Obtained through Sign in with Apple and stored in Supabase Auth (including relay addresses) -->
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeEmailAddress</string>
@@ -54,7 +54,7 @@
 				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
 			</array>
 		</dict>
-		<!-- users.display_name (ユーザーが自分で入力する表示名。Apple の fullName は要求していない) -->
+		<!-- users.display_name (a display name the user types in. Apple's fullName is not requested) -->
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeName</string>
@@ -67,7 +67,7 @@
 				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
 			</array>
 		</dict>
-		<!-- アプリ発行のユーザーID (users.id)。RevenueCat の appUserID にも使用 -->
+		<!-- User ID issued by the app (users.id). Also used as the RevenueCat appUserID -->
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeUserID</string>
@@ -80,7 +80,7 @@
 				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
 			</array>
 		</dict>
-		<!-- 投稿画像 (post-images) / アバター (avatars) -->
+		<!-- Post images (post-images) / avatars (avatars) -->
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypePhotosorVideos</string>
@@ -93,7 +93,7 @@
 				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
 			</array>
 		</dict>
-		<!-- 投稿本文・コメント・夢/目標の宣言文・自己紹介・ハンドル -->
+		<!-- Post text, comments, dream/goal statements, bio, handle -->
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeOtherUserContent</string>
@@ -106,7 +106,7 @@
 				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
 			</array>
 		</dict>
-		<!-- RevenueCat 経由の購入・更新・解約状態 -->
+		<!-- Purchase, renewal and cancellation status through RevenueCat -->
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypePurchaseHistory</string>
@@ -119,12 +119,12 @@
 				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
 			</array>
 		</dict>
-		<!-- いいね/フォロー/投稿の閲覧記録 (post_views) / ロックセッション記録 (block_sessions)。
-		     ProductPersonalization を含めるのは、おすすめフィード (029 のスコアリング) が
-		     各ユーザーの post_views を w_seen ペナルティの信号として並び順を変えているため
-		     = Apple の定義「ユーザに表示される内容をカスタマイズ」に該当する。
-		     ⚠️ ASC の App Privacy 側では、これに加えて AdMob が同種のデータを収集するぶんの
-		     「サードパーティ広告」も選ぶこと (そちらは GoogleMobileAds のマニフェストが宣言) -->
+		<!-- Likes/follows/post view records (post_views) / lock session records (block_sessions).
+		     ProductPersonalization is included because the recommended feed (the scoring in 029)
+		     uses each user's post_views as the w_seen penalty signal to change the order
+		     = this matches Apple's definition "customize what the user sees".
+		     ⚠️ In the App Privacy answers in ASC, also select "Third-Party Advertising" for the same
+		     kind of data that AdMob collects (that part is declared by the GoogleMobileAds manifest) -->
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeProductInteraction</string>
@@ -139,11 +139,11 @@
 				<string>NSPrivacyCollectedDataTypePurposeProductPersonalization</string>
 			</array>
 		</dict>
-		<!-- オンボーディング診断の回答 (生年月日/性別/自己申告の使用時間/依存年数/流入元)
-		     = user_onboarding_profiles。⚠️ProductPersonalization は入れない —
-		     OnboardingProfileService には push (upsert) しか無く select が存在しないため、
-		     このデータをアプリが読み戻して表示を出し分けている経路は無い (2026-07-31 コードで確認)。
-		     用途は 13歳要件の裏付けとコホート分析に限られる -->
+		<!-- Onboarding quiz answers (date of birth/gender/self-reported usage time/years of dependence/referral source)
+		     = user_onboarding_profiles. ⚠️ ProductPersonalization is NOT included:
+		     OnboardingProfileService only has push (upsert) and no select,
+		     so there is no path where the app reads this data back to change what it shows (checked in the code 2026-07-31).
+		     It is used only to support the age-13 requirement and for cohort analysis -->
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeOtherDataTypes</string>

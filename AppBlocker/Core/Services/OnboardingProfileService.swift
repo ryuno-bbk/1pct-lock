@@ -2,9 +2,10 @@
 //  OnboardingProfileService.swift
 //  AppBlocker
 //
-//  診断オンボーディングの回答を user_onboarding_profiles (026 SQL) へ upsert する。
-//  サインイン前の回答は @AppStorage に保持し、サインイン成功後にここへ push。
-//  失敗時は pending を消費しない (5ee7905 で確立した「成功時のみ消費」パターン)。
+//  Upsert the answers from the diagnosis onboarding into user_onboarding_profiles (026 SQL).
+//  Answers before sign-in are kept in @AppStorage and pushed here after a successful sign-in.
+//  On failure, pending is not consumed (the "consume only on success" pattern established in
+//  5ee7905).
 //
 
 import Foundation
@@ -12,7 +13,8 @@ import Supabase
 
 enum OnboardingProfileService {
 
-    /// 全回答が空なら何もせず true (既存アカウント導線でクイズを踏んでいないケース)
+    /// If all answers are empty, do nothing and return true (the case where the quiz was not taken on the
+    /// existing account path)
     @discardableResult
     static func push(
         userId: UUID,
@@ -29,7 +31,7 @@ enum OnboardingProfileService {
             .allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty }
         if allEmpty { return true }
 
-        // AnyJSON で明示的に null を送る (Encodable struct の nil キー省略を避ける)
+        // Send null explicitly with AnyJSON (avoids an Encodable struct omitting nil keys)
         func textOrNull(_ raw: String) -> AnyJSON {
             let t = raw.trimmingCharacters(in: .whitespaces)
             return t.isEmpty ? .null : .string(t)
@@ -39,7 +41,7 @@ enum OnboardingProfileService {
 
         let payload: [String: AnyJSON] = [
             "user_id":         .string(userId.uuidString),
-            "birth_date":      textOrNull(birthDateRaw),   // "yyyy-MM-dd" (date 列は ISO 文字列で受かる)
+            "birth_date":      textOrNull(birthDateRaw),   // "yyyy-MM-dd" (the date column accepts an ISO string)
             "gender":          textOrNull(genderRaw),      // male / female / nonbinary / prefer_not (035 SQL)
             "occupation":      textOrNull(occupationRaw),
             "daily_hours":     textOrNull(dailyHoursRaw),

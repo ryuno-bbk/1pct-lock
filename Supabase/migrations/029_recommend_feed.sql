@@ -1,57 +1,57 @@
 -- ============================================================
 -- 029_recommend_feed.sql
--- おすすめフィード: fetch_mixed_feed_random のヒューリスティックスコアリング化
--- + 3 フィード RPC 共通の comment_count 返却リグレッション修復
+-- Recommended feed: switch fetch_mixed_feed_random to heuristic scoring
+-- + fix the regression in the comment_count return value shared by the 3 feed RPCs
 -- ============================================================
--- 設計: Fable 5 / 実装: Sonnet 5
+-- Design: Fable 5 / Implementation: Sonnet 5
 --
--- 目的:
---   1. fetch_mixed_feed_random は現在 ORDER BY random() の純粋ランダム。
---      これを「新しさ / 人気 / フォロー / 既読ペナルティ / 探索性ジッター」の
---      加重和スコアで並べ替えるヒューリスティック方式に置換する。ML・新テーブルは
---      一切追加しない (021/027 と同じフィード RPC 3 本の形をそのまま拡張するのみ)。
---   2. 021_post_carousel.sql の DROP → CREATE で戻り値の列を作り直した際、
---      017_b_quote_comments.sql で追加した comment_count 返却列が誤って欠落した
---      (リグレッション)。Swift 側 FeedItem は decodeIfPresent ?? 0 なのでクラッシュ
---      はしないが、フィードカードの「N件のコメントをすべて表示」が常に0件になって
---      いた。本ファイルで fetch_mixed_feed_random / fetch_following_feed /
---      fetch_tag_feed の 3 本とも comment_count 返却を復活させる。
+-- Purpose:
+--   1. fetch_mixed_feed_random is currently pure random with ORDER BY random().
+--      Replace it with a heuristic approach that sorts by a weighted sum score of "recency /
+--      popularity / follow / already-seen penalty / exploration jitter". No ML and no new tables
+--      at all (it only extends the existing shape of the 3 feed RPCs, same as 021/027).
+--   2. When 021_post_carousel.sql rebuilt the return columns with DROP → CREATE, the comment_count
+--      return column added in 017_b_quote_comments.sql was dropped by mistake
+--      (regression). The Swift side FeedItem uses decodeIfPresent ?? 0, so it did not crash,
+--      but the feed card's "view all N comments" always showed 0. This file restores the
+--      comment_count return value in all 3: fetch_mixed_feed_random / fetch_following_feed /
+--      fetch_tag_feed.
 --
--- 設計判断:
---   - スコア式は「新しさ + 人気 (いいね/コメント) + フォローボーナス - 既読ペナルティ
---     + 探索ジッター」の単純な加重和。学習は行わず、全項の重みは params CTE に
---     ハードコードした定数。運用中にチューニングしたくなったら本関数を
---     CREATE OR REPLACE で書き換えて params の数値を変えるだけで良い
---     (027 の moderation_config ルーブリック方式と同じ「SQL Editor で完結」思想)。
---   - 名言 (quote) は created_at が実際の投稿タイミングではなく一括投入日なので、
---     「新しさ」に意味がない。新しさ減衰の代わりに固定ベース点 quote_base を与え、
---     いいね/コメントの人気項だけで UGC 投稿と競争させる。
---   - 既読ペナルティは post_views (028_bereal_ui.sql) の自分の閲覧回数
---     (viewer_id = auth.uid() の view_count) を ln 減点として使う。post_views は
---     投稿詳細をタップして開いた回数のログなので、「一度タップして見た投稿は
---     徐々にフィードで沈んでいく」という効果になる (フィード上でスクロールして
---     通り過ぎただけの投稿は対象外、タップ詳細のみが信号)。
---   - ジッター (w_jitter * random()) は毎回まったく同じ順序にならないようにする
---     ための探索性項。スコアが僅差の投稿同士の順位を撹拌し、同じフィードを
---     再読み込みしても代わり映えしない体験を避ける。
---   - 重みは全て params CTE (CROSS JOIN) に集約。ユーザー (運営) が SQL Editor で
---     本関数を CREATE OR REPLACE し直すだけでチューニング可能な設計にしてある。
---   - 戻り値の列数が増える (comment_count 追加) ため CREATE OR REPLACE は使えず、
---     021 と同じ流儀で DROP FUNCTION IF EXISTS → CREATE FUNCTION とする。
---     DROP すると既存の GRANT/REVOKE も消えるため、3 本とも末尾で再設定する。
---   - fetch_following_feed (created_at DESC) と fetch_tag_feed (random()) は
---     並び順を変更しない。今回はどちらも comment_count 復活のみが変更点。
---   - quote 枝・post 枝の SELECT 列・JOIN・WHERE (moderation フィルタ / ブロック
---     フィルタ / フォロー判定) は 027_ai_moderation.sql の定義を一言一句踏襲する。
---     021 をベースにしていない (021 には moderation フィルタが無く、それをベース
---     にすると層1/層2フィルタが退行してしまうため)。
+-- Design decisions:
+--   - The score formula is a simple weighted sum: "recency + popularity (likes/comments) + follow
+--     bonus - already-seen penalty + exploration jitter". There is no learning, and all weights are
+--     constants hardcoded in the params CTE. If we want to tune it in operation, just rewrite this
+--     function with CREATE OR REPLACE and change the numbers in params
+--     (the same "done entirely in the SQL Editor" idea as the moderation_config rubric in 027).
+--   - For quotes, created_at is the bulk import date, not the actual posting time, so
+--     "recency" has no meaning. Instead of recency decay they get a fixed base score quote_base,
+--     and compete with UGC posts only on the popularity terms (likes/comments).
+--   - The already-seen penalty uses your own view count in post_views (028_bereal_ui.sql)
+--     (view_count where viewer_id = auth.uid()) as an ln deduction. post_views is a log of how
+--     many times the post detail was opened by tapping, so the effect is that "posts you tapped
+--     and viewed once gradually sink in the feed" (posts you only scrolled past in the feed are
+--     not included, only tapped details are a signal).
+--   - The jitter (w_jitter * random()) is an exploration term so the order is never exactly the same
+--     every time. It shuffles the ranks of posts with close scores, to avoid an experience where
+--     reloading the same feed shows nothing new.
+--   - All weights are gathered in the params CTE (CROSS JOIN). The design lets the user (operator)
+--     tune it just by running CREATE OR REPLACE on this function again in the SQL Editor.
+--   - The number of return columns grows (comment_count added), so CREATE OR REPLACE cannot be used,
+--     and it is DROP FUNCTION IF EXISTS → CREATE FUNCTION, the same way as 021.
+--     DROP also removes existing GRANT/REVOKE, so they are set again at the end for all 3.
+--   - fetch_following_feed (created_at DESC) and fetch_tag_feed (random()) keep their order.
+--     This time, for both, the only change is restoring comment_count.
+--   - The SELECT columns, JOINs and WHERE (moderation filter / block filter / follow check) of the
+--     quote branch and post branch follow the definition in 027_ai_moderation.sql word for word.
+--     They are not based on 021 (021 has no moderation filter, and basing on it would regress the
+--     layer 1/layer 2 filters).
 --
--- 実行順序: 028 完了後。何度実行しても安全 (DROP FUNCTION IF EXISTS → CREATE の
--- 冪等パターン)。新テーブル・新列は追加しない。
+-- Run order: after 028 is done. Safe to run any number of times (idempotent pattern of
+-- DROP FUNCTION IF EXISTS → CREATE). No new tables or columns are added.
 -- ============================================================
 
 -- ============================================================
--- 1. fetch_mixed_feed_random (ヒューリスティックスコアリング版)
+-- 1. fetch_mixed_feed_random (heuristic scoring version)
 -- ============================================================
 DROP FUNCTION IF EXISTS public.fetch_mixed_feed_random(integer);
 
@@ -79,16 +79,16 @@ LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = public
 AS $$
     WITH params AS (
-        -- ============ チューニング用重み (ここだけ書き換えて CREATE OR REPLACE すれば調整可) ============
+        -- ============ Tuning weights (to adjust, rewrite only this part and run CREATE OR REPLACE) ============
         SELECT
-            3.0  ::double precision AS w_recency,          -- 投稿の新しさの最大点 (投稿直後)
-            24.0 ::double precision AS recency_half_hours, -- この時間経過で新しさ点が半減
-            0.5  ::double precision AS w_like,             -- ln(1+like_count) の係数
-            0.7  ::double precision AS w_comment,          -- ln(1+comment_count) の係数 (コメントはいいねより強い関心)
-            1.2  ::double precision AS w_follow,           -- フォロー中の投稿者へのボーナス
-            1.0  ::double precision AS w_seen,             -- ln(1+自分の閲覧回数) の既読ペナルティ係数 (減点)
-            1.5  ::double precision AS w_jitter,           -- ランダムジッターの最大値 (探索性)
-            0.8  ::double precision AS quote_base          -- 名言の固定ベース点 (新しさ減衰の代替)
+            3.0  ::double precision AS w_recency,          -- max recency score (right after posting)
+            24.0 ::double precision AS recency_half_hours, -- the recency score halves after this much time
+            0.5  ::double precision AS w_like,             -- coefficient of ln(1+like_count)
+            0.7  ::double precision AS w_comment,          -- coefficient of ln(1+comment_count) (a comment shows stronger interest than a like)
+            1.2  ::double precision AS w_follow,           -- bonus for authors you follow
+            1.0  ::double precision AS w_seen,             -- coefficient of the already-seen penalty on ln(1+your view count) (deduction)
+            1.5  ::double precision AS w_jitter,           -- max value of the random jitter (exploration)
+            0.8  ::double precision AS quote_base          -- fixed base score for quotes (in place of recency decay)
     ),
     scored AS (
         SELECT
@@ -186,7 +186,7 @@ REVOKE EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer) TO authenticated;
 
 -- ============================================================
--- 2. fetch_following_feed (comment_count 復活のみ、created_at DESC は維持)
+-- 2. fetch_following_feed (only restores comment_count, keeps created_at DESC)
 -- ============================================================
 DROP FUNCTION IF EXISTS public.fetch_following_feed(integer);
 
@@ -234,7 +234,8 @@ AS $$
             NULL::integer AS image_count
         FROM public.quotes q
         JOIN public.authors a ON a.id = q.author_id
-        -- 「著者をフォロー」ではなく「1% 公式アカウントをフォロー」していれば全公式名言が対象 (020 と同じ)
+        -- If the user follows "the 1% official account" rather than "the author", all official quotes are
+        -- included (same as 020)
         WHERE EXISTS (
             SELECT 1 FROM public.user_follows
             WHERE follower_id = auth.uid()
@@ -287,7 +288,7 @@ REVOKE EXECUTE ON FUNCTION public.fetch_following_feed(integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_following_feed(integer) TO authenticated;
 
 -- ============================================================
--- 3. fetch_tag_feed (comment_count 復活のみ、random() は維持)
+-- 3. fetch_tag_feed (only restores comment_count, keeps random())
 -- ============================================================
 DROP FUNCTION IF EXISTS public.fetch_tag_feed(text, integer);
 
@@ -383,7 +384,7 @@ REVOKE EXECUTE ON FUNCTION public.fetch_tag_feed(text, integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_tag_feed(text, integer) TO authenticated;
 
 -- ============================================================
--- 4. 動作確認用クエリ (実行不要、コメント)
+-- 4. Queries for checking behavior (no need to run, comments only)
 -- ============================================================
 -- SELECT kind, item_id, like_count, comment_count, created_at FROM fetch_mixed_feed_random(20);
--- 同じクエリを2回叩いて順序が変わること (ジッター) を確認
+-- Run the same query twice and check that the order changes (jitter)

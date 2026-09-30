@@ -9,27 +9,28 @@ import SwiftUI
 import UIKit
 import FamilyControls
 
-/// B-1: バックグラウンド再起動時に CLLocationManager を即座に再構築するための AppDelegate。
-/// iOS がジオフェンスイベント（region entry/exit）でアプリをバックグラウンド再起動した場合、
-/// LocationManager.shared を明示的に生成して CLLocationManager を再構築しないと、
-/// システムが配送しようとしていた region イベントが受信されずに破棄されてしまう（機能の根幹）。
+/// B-1: AppDelegate to rebuild CLLocationManager right away on a background relaunch.
+/// When iOS relaunches the app in the background for a geofence event (region entry/exit),
+/// if we do not explicitly create LocationManager.shared and rebuild CLLocationManager,
+/// the region event the system was trying to deliver is not received and gets discarded (core of the
+/// feature).
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        // didFinishLaunching は main スレッドで呼ばれるため、
-        // @MainActor な LocationManager.shared への同期アクセスが安全であることをコンパイラに伝える
+        // didFinishLaunching is called on the main thread, so
+        // tell the compiler that synchronous access to the @MainActor LocationManager.shared is safe
         MainActor.assumeIsolated {
             _ = LocationManager.shared
         }
         return true
     }
 
-    // MARK: - プッシュ通知 (APNs)
+    // MARK: - Push notifications (APNs)
     //
-    // 端末トークンは起動のたびに変わりうるので、受け取ったら毎回サーバーへ入れ直す。
-    // 🔴 ここで許可ダイアログは出さない (PushNotificationService の設計コメント参照)
+    // The device token can change on every launch, so send it to the server again every time we receive it.
+    // 🔴 Do not show the permission dialog here (see the design comment in PushNotificationService)
 
     func application(
         _ application: UIApplication,
@@ -58,26 +59,29 @@ struct AppBlockerApp: App {
     @StateObject private var authService = AuthorizationService.shared
     @StateObject private var userAuth = UserAuthService.shared
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
-    /// 073: 設定の言語 Picker も同じキーの @AppStorage に書き込むため、App 側に持たせておけば
-    /// どこが書き換えても .onChange(of: mainLanguageRaw) が飛ぶ (users.lang の追随に使う)
+    /// 073: The language Picker in settings also writes to @AppStorage with the same key, so if the App
+    /// holds it, .onChange(of: mainLanguageRaw) fires no matter who changes it (used to keep users.lang in
+    /// sync)
     @AppStorage("mainLanguage") private var mainLanguageRaw: String = AppLanguage.deviceDefault.rawValue
-    /// M8 (2026-07-22 監査): 再サインインの瞬間に (hasCompletedOnboarding=true のまま)
-    /// ルートを即 MainTabView へ切り替えてしまうと、返却フロー (paywall/appSelect/rating) が
-    /// 実行されないままオンボが完了扱いになる。OnboardingView が滞在中は true にして
-    /// MainTabView への切り替えを止める。
+    /// M8 (2026-07-22 audit): If, at the moment of signing in again (with hasCompletedOnboarding=true),
+    /// the root switches to MainTabView right away, onboarding is treated as finished without running
+    /// the return flow (paywall/appSelect/rating). Set this to true while OnboardingView is shown to stop
+    /// the switch to MainTabView.
     @State private var onboardingActive = false
-    /// 起動直後のブートゲート (2026-07-30 実機FB: オンボの「始める」画面が一瞬見える)。
-    /// isSignedIn は毎起動 false から始まり restoreSession() で復元されるため、復元が終わる
-    /// までルート判定は必ず「オンボ側」に倒れる。旧スプラッシュ廃止 (2026-07-29) でこの
-    /// 空白を覆うものが無くなった → オンボ完了済み端末では復元が終わるまで背景色だけを出す
-    /// (ローンチ画面の延長に見える)。安全弁: 3秒で必ず開く (復元が固まっても黒画面で詰まない)
+    /// Boot gate right after launch (2026-07-30 real device feedback: the onboarding "始める" ("Start") screen
+    /// flashes briefly). isSignedIn starts as false on every launch and is restored by restoreSession(), so
+    /// until the restore finishes the root decision always falls to the "onboarding side". Since the old
+    /// splash was removed (2026-07-29), nothing covered this gap → on devices that finished onboarding,
+    /// show only the background color until the restore finishes (looks like a continuation of the launch
+    /// screen). Safety valve: always open within 3 seconds (no stuck black screen even if the restore
+    /// hangs)
     @State private var bootGateActive = true
-    /// スプラッシュを閉じる条件の2つ (両方揃ってから閉じる)
+    /// The 2 conditions for closing the splash (close only when both are met)
     @State private var sessionRestored = false
     @State private var splashMinElapsed = false
     @Environment(\.scenePhase) private var scenePhase
 
-    /// 復元完了 + 最短表示時間の両方が揃ったらスプラッシュを畳む
+    /// Fold the splash once both are met: restore finished + minimum display time
     private func closeBootGateIfReady() {
         guard sessionRestored, splashMinElapsed else { return }
         closeBootGate()
@@ -89,74 +93,77 @@ struct AppBlockerApp: App {
     }
 
     init() {
-        // 言語設定の一回きり移行 (2026-07-25 実機FB: 端末言語を変えてもUIが日本語のまま)。
-        // 過去ビルドの設定Pickerが書き込んだ mainLanguage が残っていると、以後は端末言語に
-        // 一切追従しなくなる。既定を「端末に従う (キー無し)」へ戻すため保存値を一度だけ破棄する。
-        // 以後にユーザーが設定Pickerで明示選択した値 (=このフラグより後の書き込み) は尊重される
+        // One-time migration of the language setting (2026-07-25 real device feedback: changing the device
+        // language left the UI in Japanese). If a mainLanguage written by the settings Picker of a past build
+        // remains, the app never follows the device language again. To bring the default back to "follow the
+        // device (no key)", discard the saved value once. Values the user explicitly picks in the settings
+        // Picker after that (= writes after this flag) are respected
         let langMigrationKey = "langFollowSystemMigration_2026_07_25"
         if !UserDefaults.standard.bool(forKey: langMigrationKey) {
             UserDefaults.standard.removeObject(forKey: "mainLanguage")
             UserDefaults.standard.set(true, forKey: langMigrationKey)
         }
 
-        // M18a: フィード画像のスクロール往復での再ダウンロード (Storage egress浪費) を減らすため、
-        // 既定容量から拡張 (最初のネットワークリクエストより前に設定する必要がある)
+        // M18a: Raise the capacity from the default to reduce re-downloads of feed images when scrolling back
+        // and forth (wasted Storage egress) (must be set before the first network request)
         URLCache.shared = URLCache(memoryCapacity: 64 * 1024 * 1024, diskCapacity: 256 * 1024 * 1024)
 
-        // 初回起動時: 端末言語からメイン言語の初期値を決定
+        // On first launch: decide the initial main language from the device language
         let defaults = UserDefaults.standard
         if defaults.string(forKey: "mainLanguage") == nil {
             let lang = AppLanguage.deviceDefault
             defaults.set(lang.rawValue, forKey: "mainLanguage")
         }
 
-        // 原文併記は既定OFF (2026-08-01 ユーザー決定 / 実機FBで発覚)。
-        // 旧実装はここで「日本語端末なら showOriginal=true」を書いていたが、この分岐は
-        // mainLanguage が未設定のとき = 新規インストール時にしか通らない。結果、
-        // 開発者の端末 (キーが既にある) では一度も再現せず、App Store から入れた
-        // 新規ユーザーだけが「英語を主役・日本語訳を下に小さく」の表示になっていた。
-        // 設定トグルは 2026-07-19 に撤去済みでユーザーが自力でOFFにする手段が無いため、
-        // 既に true が書き込まれている端末も一度だけ false へ戻す。
+        // Showing the original text alongside is OFF by default (user decision 2026-08-01 / found through real
+        // device feedback). The old implementation wrote "showOriginal=true if the device is Japanese" here,
+        // but this branch only runs when mainLanguage is unset = on a fresh install. As a result,
+        // it never reproduced on the developer's device (the key already exists), and only new users who
+        // installed from the App Store got the "English as the main text, small Japanese translation below"
+        // display. The settings toggle was removed on 2026-07-19 and users have no way to turn it OFF
+        // themselves, so devices where true was already written are also set back to false once.
         let showOriginalResetKey = "showOriginalDefaultOff_2026_08_01"
         if !defaults.bool(forKey: showOriginalResetKey) {
             defaults.set(false, forKey: "showOriginal")
             defaults.set(true, forKey: showOriginalResetKey)
         }
 
-        // RevenueCat SDK 初期化 (多重呼び出しは PurchaseService.configure() 内でガード済み)。
-        // App.init() は main スレッドで呼ばれることが保証されているため、@MainActor への同期アクセスは安全
+        // Initialize the RevenueCat SDK (repeated calls are guarded inside PurchaseService.configure()).
+        // App.init() is guaranteed to be called on the main thread, so synchronous access to @MainActor is safe
         MainActor.assumeIsolated {
             PurchaseService.configure()
         }
     }
 
-    /// 累計ロック時間 + 統計: pending キューを Supabase へ同期 → 統計取得
-    /// (033 で loadTotal は loadStats に統合。累計/上位%/連続日数/完遂率をまとめて取得)
-    /// flushQueue (キュー反映) → loadStats (統計取得) の順を必ず守る。
-    /// 逆にするとキュー未反映分を含まない統計を読んでしまう
+    /// Total lock time + stats: sync the pending queue to Supabase → fetch stats
+    /// (in 033 loadTotal was merged into loadStats. Fetches total/top percentile/streak days/completion
+    /// rate together) Always keep the order flushQueue (apply queue) → loadStats (fetch stats).
+    /// If reversed, you read stats that do not include what is still in the queue
     private func flushQueueThenLoadStats() async {
         await BlockSessionTracker.shared.flushQueue()
         await BlockSessionTracker.shared.loadStats()
     }
 
-    /// 073: 現在の mainLanguage (UserDefaults) を AppLanguage として読む。
-    /// 起動 .task 内 (223行目付近) の Shield 用ミラー処理と同じ「未設定なら端末既定言語」の
-    /// 読み方 + 不正値フォールバック (.japanese) に揃える
+    /// 073: Read the current mainLanguage (UserDefaults) as AppLanguage.
+    /// Matches the Shield mirror logic in the launch .task (around line 223): the same "device default
+    /// language if unset" reading + fallback for invalid values (.japanese)
     private func currentMainLanguage() -> AppLanguage {
         let raw = UserDefaults.standard.string(forKey: "mainLanguage") ?? AppLanguage.deviceDefault.rawValue
         return AppLanguage(rawValue: raw) ?? .japanese
     }
 
-    /// サインイン直後は未読通知数取得 + RevenueCat ログイン、サインアウト時は通知クリア + ログアウト。
-    /// (他の並列タスクとは独立なので、呼び出し側では async let の1本としてまとめて扱う)
+    /// Right after sign-in: fetch the unread notification count + RevenueCat login. On sign-out: clear
+    /// notifications + logout. (Independent from the other parallel tasks, so the caller handles it as one
+    /// of the async lets)
     private func syncSignInState(signedIn: Bool) async {
         if signedIn {
             await NotificationService.shared.refreshUnreadCount()
             if let uid = userAuth.userId {
                 await PurchaseService.shared.logIn(userId: uid)
             }
-            // 073: サインイン時に閲覧者の端末言語 (users.lang) をサーバーへ同期する
-            // (フィードの同一言語優先スコアリングの判定材料)。失敗は userAuth.syncLanguage 内で握りつぶす
+            // 073: On sign-in, sync the viewer's device language (users.lang) to the server
+            // (input for the same-language priority scoring of the feed). Failures are swallowed inside
+            // userAuth.syncLanguage
             await userAuth.syncLanguage(currentMainLanguage())
         } else {
             NotificationService.shared.clear()
@@ -164,9 +171,9 @@ struct AppBlockerApp: App {
         }
     }
 
-    /// M20 (2026-07-22 監査): サインイン時のみフィードを再ロードする。サインアウト時は
-    /// 何もしない (クリアは .onChange 側で同じ Task 内の先頭にて同期的に行う)。
-    /// syncSignInState と同じ「async let 群に無条件で1本追加し、内部で signedIn 分岐する」形。
+    /// M20 (2026-07-22 audit): Reload the feed only on sign-in. On sign-out,
+    /// do nothing (clearing is done synchronously at the start of the same Task on the .onChange side).
+    /// Same shape as syncSignInState: "always add one to the async let group, branch on signedIn inside".
     private func syncFeedState(signedIn: Bool) async {
         guard signedIn else { return }
         async let recommendedTask: Void = FeedService.shared.loadRecommended()
@@ -175,37 +182,37 @@ struct AppBlockerApp: App {
         await followingTask
     }
 
-    /// 070 (anon から public.quotes/public.authors を読めなくする SQL) 適用後、
-    /// 未サインインのまま QuoteService.shared.loadQuotes() を叩くと必ず 401 になる無駄な
-    /// リクエストになるため、サインイン時のみ Supabase プロバイダへ切り替えて読み込む。
-    /// flushQueueThenLoadStats と同じく、起動時 .task と .onChange(of: userAuth.isSignedIn)
-    /// の両方から呼ばれる private helper。
-    /// LikeService.loadLikedQuotes → loadLikedQuoteObjects は QuoteService.shared.quotes
-    /// (メモリキャッシュ) を同期的に見にいく実装なので、呼び出し側は本関数を await し終えてから
-    /// loadLikedQuotes を含む async let 群を開始すること
+    /// After 070 (the SQL that stops anon from reading public.quotes/public.authors) is applied,
+    /// calling QuoteService.shared.loadQuotes() while signed out is a wasted request that always
+    /// returns 401, so switch to the Supabase provider and load only when signed in.
+    /// Like flushQueueThenLoadStats, this is a private helper called from both the launch .task and
+    /// .onChange(of: userAuth.isSignedIn).
+    /// LikeService.loadLikedQuotes → loadLikedQuoteObjects reads QuoteService.shared.quotes
+    /// (in-memory cache) synchronously, so the caller must finish awaiting this function before
+    /// starting the async let group that includes loadLikedQuotes
     private func loadQuotesIfSignedIn(signedIn: Bool) async {
         guard signedIn else { return }
         QuoteService.shared.enableSupabase()
         await QuoteService.shared.loadQuotes()
     }
 
-    /// 起動 .task 専用。サインイン済みなら Supabase へ切り替えて読み、
-    /// 未サインインなら LocalQuoteProvider (バンドルの Quotes.json 68件 = 060 適用後の
-    /// 本番 quotes と同一内容) のまま読む。
-    /// ⚠️ 未サインインでも「読むこと自体」を省略しないこと。省略すると
-    /// QuoteService.shared.quotes が空配列のままになり、この .task 末尾の
+    /// Only for the launch .task. If signed in, switch to Supabase and load;
+    /// if signed out, load with LocalQuoteProvider as is (the bundled Quotes.json, 68 items = same content as
+    /// the production quotes after 060 is applied).
+    /// ⚠️ Even when signed out, do not skip "the loading itself". If skipped,
+    /// QuoteService.shared.quotes stays an empty array, and at the end of this .task
     /// WidgetCacheService.refreshAll() → writeRandomPool() (WidgetCacheService.swift:57)
-    /// が空のプールを App Group に書き出してしまう = 一度もサインインしていない端末で
-    /// ウィジェットが無表示になる。070 適用前は anon 読みが通っていたため気付けない退行。
-    /// (サインアウト時の再読み込みは不要なので .onChange 側は loadQuotesIfSignedIn のまま)
+    /// writes an empty pool to the App Group = on a device that has never signed in,
+    /// the widget shows nothing. Before 070 was applied, anon reads worked, so this regression is easy to miss.
+    /// (No reload is needed on sign-out, so the .onChange side keeps using loadQuotesIfSignedIn)
     private func loadQuotesForLaunch(signedIn: Bool) async {
         if signedIn { QuoteService.shared.enableSupabase() }
         await QuoteService.shared.loadQuotes()
     }
 
-    /// 070 適用後、未サインインで loadAuthors() を叩くと 401 になるだけなのでガードする。
-    /// syncSignInState / syncFeedState と同じ「async let は無条件に1本、内部で signedIn 分岐」
-    /// の形にすることで、呼び出し側の async let 群の本数 (構造) を変えずに済ませる
+    /// After 070 is applied, calling loadAuthors() while signed out only returns 401, so guard it.
+    /// By using the same shape as syncSignInState / syncFeedState ("always one async let, branch on
+    /// signedIn inside"), the number of async lets (the structure) on the caller side does not have to change
     private func loadAuthorsIfSignedIn(signedIn: Bool) async {
         guard signedIn else { return }
         await QuoteService.shared.loadAuthors()
@@ -214,16 +221,16 @@ struct AppBlockerApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                // M8: onboardingActive が true の間は OnboardingView 側が返却フロー
-                // (paywall/appSelect/rating 等) を実行中なので、条件が揃っていても
-                // MainTabView へ切り替えない
+                // M8: While onboardingActive is true, OnboardingView is running the return flow
+                // (paywall/appSelect/rating etc.), so even if the conditions are met,
+                // do not switch to MainTabView
                 if hasCompletedOnboarding && authService.isAuthorized && userAuth.isSignedIn && !onboardingActive {
                     MainTabView()
                 } else if bootGateActive && hasCompletedOnboarding {
-                    // セッション復元待ち = スプラッシュ (2026-07-31 ユーザー要望で復活)。
-                    // 新規インストール (hasCompletedOnboarding=false) では出さない —
-                    // 待つものが無いうえ、直後のオンボ冒頭が同じ「1%」の大型ワードマークで
-                    // ブランド提示が二重になるため
+                    // Waiting for session restore = splash (brought back on 2026-07-31 at the user's request).
+                    // Not shown on a fresh install (hasCompletedOnboarding=false):
+                    // there is nothing to wait for, and the start of the onboarding right after uses the same large "1%"
+                    // wordmark, so the brand would be shown twice
                     SplashView()
                         .transition(.opacity)
                 } else {
@@ -231,61 +238,65 @@ struct AppBlockerApp: App {
                 }
             }
             .preferredColorScheme(.dark)
-            // アプリ全域: テキスト入力以外をタップしたらキーボードを閉じる (2026-07-25 実機FB)
+            // App-wide: tapping anything other than a text input closes the keyboard (2026-07-25 real device feedback)
             .onAppear { KeyboardDismissTap.installIfNeeded() }
-            // ブートゲートの安全弁: restoreSession が異常に長引いてもスプラッシュで詰まない
+            // Safety valve for the boot gate: do not get stuck on the splash even if restoreSession takes
+            // abnormally long
             .task {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 closeBootGate()
             }
-            // スプラッシュの最短表示時間。復元が一瞬で終わってもロゴが点滅して見えないようにする
+            // Minimum display time of the splash. So the logo does not look like it blinks even if the restore
+            // finishes instantly
             .task {
                 try? await Task.sleep(nanoseconds: 750_000_000)
                 splashMinElapsed = true
                 closeBootGateIfReady()
             }
             .task {
-                // 起動時に認証状態を確認
+                // Check the auth status at launch
                 authService.checkCurrentStatus()
                 await userAuth.restoreSession()
-                // 復元完了 = ルート判定の材料が揃った (isAuthorized は上で同期更新済み)
+                // Restore finished = we have everything for the root decision (isAuthorized was updated synchronously
+                // above)
                 sessionRestored = true
                 closeBootGateIfReady()
                 if let uid = userAuth.userId {
                     await PurchaseService.shared.logIn(userId: uid)
                 }
 
-                // Shield (案A) が表示言語を読めるよう、現在の mainLanguage を App Group へミラー
-                // (設定画面での変更はここを経由しない限り Extension 側には反映されない既知の制約)
+                // Mirror the current mainLanguage to the App Group so the Shield (option A) can read the display language
+                // (known limitation: changes in the settings screen are not reflected on the Extension side unless
+                // they go through here)
                 let currentLangRaw = UserDefaults.standard.string(forKey: "mainLanguage") ?? AppLanguage.deviceDefault.rawValue
                 AppGroupStorage.shared.syncCurrentLanguage(isJapanese: (AppLanguage(rawValue: currentLangRaw) ?? .japanese) == .japanese)
 
-                // Supabase初期化 + データロード。
-                // 070 (anon から public.quotes/public.authors を読めなくする SQL) 適用後は、
-                // 未サインインで Supabase を叩いても必ず権限エラーになるため、Supabase への
-                // 切り替えはサインイン済みのときだけ行う。未サインイン時は LocalQuoteProvider
-                // (バンドル 68件) から読む — 読むこと自体は省略しない (理由は
-                // loadQuotesForLaunch のコメント: ウィジェットのプールが空になる)。
-                // サインイン後の読み直しは .onChange(of: userAuth.isSignedIn) 側が担当する。
+                // Supabase init + data loading.
+                // After 070 (the SQL that stops anon from reading public.quotes/public.authors) is applied,
+                // hitting Supabase while signed out always gives a permission error, so the switch to
+                // Supabase happens only when signed in. When signed out, read from LocalQuoteProvider
+                // (68 bundled items). Do not skip the loading itself (the reason is in the
+                // loadQuotesForLaunch comment: the widget pool would become empty).
+                // Reloading after sign-in is handled by .onChange(of: userAuth.isSignedIn).
                 //
-                // LikeService.loadLikedQuotes → loadLikedQuoteObjects が QuoteService.shared.quotes
-                // (メモリキャッシュ) に依存するため、quotes だけは単独で await してから残りを並列化する
+                // LikeService.loadLikedQuotes → loadLikedQuoteObjects depends on QuoteService.shared.quotes
+                // (in-memory cache), so await quotes alone first, then run the rest in parallel
                 await loadQuotesForLaunch(signedIn: userAuth.isSignedIn)
 
-                // 以下は quotes 読了後なら互いに独立 (順序自由) なので async let で同時開始し、まとめて合流する
-                // (直列だと初回データ到達が RTT × 本数ぶん積み上がるため)。
-                // C1: 課金失効リコンサイル — 新鮮なフェッチで非 Pro が確定した場合のみ
-                // スケジュール/位置遮断の実行ゲート (App Group ミラー) を閉じる
+                // Once quotes are loaded, the following are independent of each other (any order), so start them
+                // together with async let and join them (done serially, the time to first data piles up as RTT ×
+                // number of calls). C1: purchase expiry reconcile. Only when a fresh fetch confirms non-Pro,
+                // close the execution gate for schedule/location blocking (App Group mirror)
                 async let reconcileTask: Void = ProAccess.shared.reconcileEntitlementMirror()
-                // authorsTask も quotes と同じ理由 (070) でガードする。他の async let は無条件のまま
+                // authorsTask is guarded for the same reason as quotes (070). The other async lets stay unconditional
                 async let authorsTask: Void = loadAuthorsIfSignedIn(signedIn: userAuth.isSignedIn)
                 async let likedQuotesTask: Void = LikeService.shared.loadLikedQuotes()
                 async let followedAuthorsTask: Void = FollowService.shared.loadFollowedAuthors()
                 async let myBlocksTask: Void = BlockService.shared.loadMyBlocks()
                 async let unreadCountTask: Void = NotificationService.shared.refreshUnreadCount()
                 async let statsTask: Void = flushQueueThenLoadStats()
-                // 許可済みの端末だけ黙って再登録する (ここでダイアログは出さない)。
-                // サインインより先にトークンが届いていた場合の取りこぼしもここで拾う
+                // Silently re-register only devices that already granted permission (no dialog here).
+                // This also catches the case where the token arrived before sign-in and was missed
                 async let pushTask: Void = PushNotificationService.shared.refreshOnLaunch()
                 await reconcileTask
                 await authorsTask
@@ -297,43 +308,45 @@ struct AppBlockerApp: App {
                 await pushTask
                 await PushNotificationService.shared.syncTokenToServer()
 
-                // Shield用に名言を保存（タブ切り替え前でも確実に保存）
+                // Save the quote for the Shield (reliably saved even before a tab switch)
                 if let quote = QuoteService.shared.currentQuote {
                     BlockingService.shared.saveQuoteForShield(quote)
                 }
-                // Shield ローテーション用プールも起動時に用意（スケジュール/位置ブロックや
-                // フレッシュインストール直後の初回ブロックでも Extension が重い JSON パースを
-                // せずに済むよう、事前に App Group へ書き出しておく）
+                // Also prepare the pool for Shield rotation at launch (write it to the App Group in advance so the
+                // Extension does not have to do heavy JSON parsing, even for schedule/location blocks or the first
+                // block right after a fresh install)
                 BlockingService.shared.saveQuotePoolForShield()
 
-                // ウィジェット用キャッシュを App Group に書き出し
+                // Write the widget cache to the App Group
                 WidgetCacheService.shared.refreshAll()
             }
             .onChange(of: userAuth.isSignedIn) { _, signedIn in
-                // サインイン直後 (初回) / サインアウト時に quotes/authors/like/follow/block/notif を再ロード
-                // (互いに独立なので async let で並列化。flushQueue→loadStats のペアのみ順序維持)
+                // Right after sign-in (first time) / on sign-out, reload quotes/authors/like/follow/block/notif
+                // (they are independent, so parallelized with async let. Only the flushQueue→loadStats pair keeps its
+                // order)
                 Task {
-                    // M20/L11: サインアウトの瞬間にフィード/自分の投稿一覧をクリアする。
-                    // 後続の再ロード (syncFeedState) より前に、Task の先頭で同期的に行うことで
-                    // 「クリアより前に別アカウントの再ロードが割り込む」順序崩れを避ける。
+                    // M20/L11: Clear the feed / my post list at the moment of sign-out.
+                    // Doing it synchronously at the start of the Task, before the later reload (syncFeedState),
+                    // avoids the ordering bug where "another account's reload cuts in before the clear".
                     if !signedIn {
                         FeedService.shared.clear()
                         UserPostService.shared.clearAllForSignOut()
                     }
-                    // サインアップ/サインイン直後は QuoteService.shared.authors が空のまま
-                    // (再起動するまで is_official バッジが付かない) だったバグの修正。
-                    // LikeService.loadLikedQuotes → loadLikedQuoteObjects が QuoteService.shared.quotes
-                    // (メモリキャッシュ) を同期的に見にいく実装のため、起動時 .task と同じ順序で
-                    // quotes だけ単独で await してから、下の async let 群 (loadLikedQuotes 含む) を開始する
+                    // Fix for the bug where QuoteService.shared.authors stayed empty right after sign-up/sign-in
+                    // (no is_official badge until restart).
+                    // LikeService.loadLikedQuotes → loadLikedQuoteObjects reads QuoteService.shared.quotes
+                    // (in-memory cache) synchronously, so in the same order as the launch .task,
+                    // await quotes alone first, then start the async let group below (including loadLikedQuotes)
                     await loadQuotesIfSignedIn(signedIn: signedIn)
                     async let likedQuotesTask: Void = LikeService.shared.loadLikedQuotes()
                     async let followedAuthorsTask: Void = FollowService.shared.loadFollowedAuthors()
                     async let myBlocksTask: Void = BlockService.shared.loadMyBlocks()
                     async let statsTask: Void = flushQueueThenLoadStats()
                     async let signInStateTask: Void = syncSignInState(signedIn: signedIn)
-                    // M20: サインイン時はフィードも無条件で再ロード (新ユーザー視点のフィードにする)
+                    // M20: On sign-in, also reload the feed unconditionally (make it the feed from the new user's point of
+                    // view)
                     async let feedStateTask: Void = syncFeedState(signedIn: signedIn)
-                    // quotes 読了後なので authors は他の async let と同じく並列でよい
+                    // Quotes are already loaded, so authors can run in parallel like the other async lets
                     async let authorsTask: Void = loadAuthorsIfSignedIn(signedIn: signedIn)
                     await likedQuotesTask
                     await followedAuthorsTask
@@ -345,31 +358,31 @@ struct AppBlockerApp: App {
                     WidgetCacheService.shared.refreshAll()
                 }
             }
-            // 073: 設定の言語 Picker は @AppStorage("mainLanguage") へ直接書き込むため、
-            // App 側の同じキーの @AppStorage を監視して users.lang を追随させる。
-            // ⚠️ UserDefaults.didChangeNotification の購読で代用しないこと —
-            // あの通知は App Group スイートを含む全 UserDefaults の全書き込みで発火するので、
-            // 言語と無関係な書き込み (ブロックセッション同期 / ウィジェットキャッシュ更新など) の
-            // たびに Task を1個生成することになる。syncLanguage 側の重複ガードは
-            // 通信を止めるだけで、Task 生成自体は止められない
+            // 073: The language Picker in settings writes directly to @AppStorage("mainLanguage"), so
+            // we watch @AppStorage with the same key on the App side and keep users.lang in sync.
+            // ⚠️ Do not substitute a subscription to UserDefaults.didChangeNotification:
+            // that notification fires on every write to every UserDefaults, including the App Group suite, so
+            // it would create one Task for every write unrelated to language (block session sync / widget cache
+            // update etc.). The duplicate guard in syncLanguage only stops the network call,
+            // it cannot stop the Task creation itself
             .onChange(of: mainLanguageRaw) { _, _ in
                 let lang = currentMainLanguage()
-                // 2026-08-04: Shield / UsageReport 拡張が読む App Group ミラーもここで更新する。
-                // これまで syncCurrentLanguage は起動 .task (238行目) からしか呼ばれておらず、
-                // 設定の言語 Picker で切り替えても次のコールドスタートまで拡張側は旧言語のままだった
-                // (=「アプリは英語なのに Shield が日本語」)。
-                // ⚠️ 遮断はサインアウト状態でも動くので、下の isSignedIn ガードより必ず前に置く
+                // 2026-08-04: Also update the App Group mirror read by the Shield / UsageReport extensions here.
+                // Until now syncCurrentLanguage was only called from the launch .task (line 238), so
+                // switching with the language Picker in settings left the extensions on the old language until the
+                // next cold start (= "the app is in English but the Shield is in Japanese").
+                // ⚠️ Blocking works even while signed out, so always put this before the isSignedIn guard below
                 AppGroupStorage.shared.syncCurrentLanguage(isJapanese: lang == .japanese)
                 guard userAuth.isSignedIn else { return }
                 Task { await userAuth.syncLanguage(lang) }
             }
             .onChange(of: scenePhase) { _, phase in
-                // C1: フォアグラウンド復帰時にも失効リコンサイル (1時間スロットルは ProAccess 側)
+                // C1: Also reconcile expiry when returning to the foreground (the 1-hour throttle is in ProAccess)
                 guard phase == .active else { return }
                 Task { await ProAccess.shared.reconcileEntitlementMirror() }
-                // H6: オフライン起動等でサーバー未検証のままローカル信頼サインインしている場合、
-                // フォアグラウンド復帰のたびに再検証を試みる (成功すれば refreshProfile まで走る)。
-                // restoreSession() 側に多重実行ガードがあるので、ここでの Task 生成が重なっても安全。
+                // H6: If we are signed in with local trust and no server verification (e.g. launched offline),
+                // try to re-verify every time we return to the foreground (on success it runs through refreshProfile).
+                // restoreSession() has a guard against concurrent runs, so overlapping Task creation here is safe.
                 if userAuth.isSignedIn && !userAuth.isSessionServerVerified {
                     Task { await userAuth.restoreSession() }
                 }

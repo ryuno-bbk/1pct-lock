@@ -1,46 +1,52 @@
 -- ============================================================
 -- 014_b_comments_notifications.sql
--- S16 コメント機能 + 通知機能 (アプリ内)
+-- S16 comments feature + notifications feature (in-app)
 -- ============================================================
--- 目的:
---   1. user_comments テーブル + コメントいいね + 返信 (ネスト 1 階層)
---   2. user_posts.comment_count denormalize 列
---   3. user_notifications テーブル + 関連 RPC
---   4. like / follow / comment / reply / comment_like の各イベントで通知 INSERT
---   5. 3 フィード RPC (mixed / following / tag) を comment_count 返却に拡張
---   6. comments を取得する fetch_comments_for_post RPC
+-- Purpose:
+--   1. user_comments table + comment likes + replies (1 level of nesting)
+--   2. user_posts.comment_count denormalized column
+--   3. user_notifications table + related RPCs
+--   4. Notification INSERT on each like / follow / comment / reply / comment_like event
+--   5. Extend the 3 feed RPCs (mixed / following / tag) to return comment_count
+--   6. fetch_comments_for_post RPC that fetches comments
 --
--- 設計判断 (S16 確定):
---   - コメント: text 1〜500 文字、status カラム不採用 (削除のみ、論理削除なし)
---   - 返信: parent_comment_id (ネスト 1 階層、ON DELETE CASCADE で親削除時に返信も消える)
---   - コメント通報: 不採用 (投稿者が削除権限を持つのでカバー、user_reports.target_comment_id 列なし)
---   - 通知集約: なし、個別。自分発のアクションは通知しない (recipient_user_id != actor_user_id チェック)
---   - 通知の対象:
---       like      = 投稿/quote にいいね → 投稿者へ
---       follow    = 自分をフォロー
---       comment   = 自分の投稿にコメント
---       reply     = 自分のコメントに返信
---       comment_like = 自分のコメントにいいね (best-effort)
+-- Design decisions (S16 final):
+--   - Comments: text 1-500 characters, no status column (delete only, no soft delete)
+--   - Replies: parent_comment_id (1 level of nesting, ON DELETE CASCADE also deletes replies when the
+--     parent is deleted)
+--   - Comment reports: not adopted (covered because the post author can delete them; no
+--     user_reports.target_comment_id column)
+--   - Notification grouping: none, one by one. Your own actions are not notified
+--     (recipient_user_id != actor_user_id check)
+--   - Notification targets:
+--       like      = like on a post/quote → to the author
+--       follow    = someone follows you
+--       comment   = comment on your post
+--       reply     = reply to your comment
+--       comment_like = like on your comment (best-effort)
 --
--- 既存トグル RPC の影響:
---   - toggle_quote_like / toggle_post_like / toggle_comment_like は SECURITY DEFINER 内で
---     対応する通知 INSERT を行う (ON CONFLICT DO NOTHING で再 like 時の重複防止)
---   - user_follows の INSERT は SECURITY INVOKER (クライアント直接 INSERT)。trigger で通知作成
+-- Impact on existing toggle RPCs:
+--   - toggle_quote_like / toggle_post_like / toggle_comment_like do the matching notification INSERT
+--     inside SECURITY DEFINER (ON CONFLICT DO NOTHING prevents duplicates on re-like)
+--   - The INSERT into user_follows is SECURITY INVOKER (direct client INSERT). A trigger creates the
+--     notification
 --
--- 実行順序:
---   013 (avatar storage) 完了後。何度実行しても安全 (IF NOT EXISTS + DROP IF EXISTS パターン)
+-- Execution order:
+--   After 013 (avatar storage) is done. Safe to run any number of times (IF NOT EXISTS + DROP IF
+--   EXISTS pattern)
 -- ============================================================
 
 -- ============================================
--- 0. 既存 protect_user_posts_like_count の修正 (S16 で発覚した致命バグ)
+-- 0. Fix the existing protect_user_posts_like_count (critical bug found in S16)
 -- ============================================
--- 005 で定義した `current_setting('role') = 'service_role'` のチェックは間違っていた:
---   SECURITY DEFINER RPC でも `role` GUC は呼び出し元の 'authenticated' のままで
---   切り替わらない → toggle_post_like の UPDATE で常に RAISE EXCEPTION → 全 like
---   トランザクションが rollback されて反映されない問題。
--- 正しい判定: pg_roles.rolbypassrls (postgres / supabase_admin が true) を使う。
---   SECURITY DEFINER の function 所有者は postgres (bypass) なので通る。
---   一般ユーザー直 UPDATE は authenticated (bypass=false) なので like_count 改ざんは拒否。
+-- The `current_setting('role') = 'service_role'` check defined in 005 was wrong:
+--   even in a SECURITY DEFINER RPC, the `role` GUC stays as the caller's 'authenticated' and
+--   does not switch → the UPDATE in toggle_post_like always hits RAISE EXCEPTION → every like
+--   transaction is rolled back and nothing is saved.
+-- Correct check: use pg_roles.rolbypassrls (true for postgres / supabase_admin).
+--   The owner of a SECURITY DEFINER function is postgres (bypass), so it passes.
+--   A direct UPDATE by a normal user is authenticated (bypass=false), so tampering with like_count
+--   is rejected.
 CREATE OR REPLACE FUNCTION public.protect_user_posts_like_count()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -60,7 +66,7 @@ END;
 $$;
 
 -- ============================================
--- 1. user_posts.comment_count denormalize 列
+-- 1. user_posts.comment_count denormalized column
 -- ============================================
 ALTER TABLE public.user_posts
     ADD COLUMN IF NOT EXISTS comment_count integer NOT NULL DEFAULT 0;
@@ -68,7 +74,7 @@ ALTER TABLE public.user_posts
 COMMENT ON COLUMN public.user_posts.comment_count IS 'コメント数 (denormalize、trigger で同期)';
 
 -- ============================================
--- 2. user_comments テーブル
+-- 2. user_comments table
 -- ============================================
 CREATE TABLE IF NOT EXISTS public.user_comments (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -83,7 +89,7 @@ CREATE TABLE IF NOT EXISTS public.user_comments (
 
 COMMENT ON TABLE public.user_comments IS 'UGC: 投稿へのコメント。parent_comment_id で 1 階層返信';
 
--- インデックス
+-- Indexes
 CREATE INDEX IF NOT EXISTS idx_user_comments_post_created
     ON public.user_comments (post_id, created_at ASC);
 
@@ -94,7 +100,7 @@ CREATE INDEX IF NOT EXISTS idx_user_comments_parent
 CREATE INDEX IF NOT EXISTS idx_user_comments_author
     ON public.user_comments (author_user_id, created_at DESC);
 
--- updated_at 自動更新
+-- Auto-update updated_at
 DROP TRIGGER IF EXISTS user_comments_set_updated_at ON public.user_comments;
 CREATE TRIGGER user_comments_set_updated_at
     BEFORE UPDATE ON public.user_comments
@@ -110,18 +116,18 @@ DROP POLICY IF EXISTS "user_comments_select_all"          ON public.user_comment
 DROP POLICY IF EXISTS "user_comments_insert_own"          ON public.user_comments;
 DROP POLICY IF EXISTS "user_comments_delete_own_or_owner" ON public.user_comments;
 
--- SELECT: 全員可 (ブロック相手のコメントはアプリ側でフィルタ、もしくはこの後の RPC でフィルタ)
+-- SELECT: everyone (comments by blocked users are filtered in the app, or in the RPC below)
 CREATE POLICY "user_comments_select_all"
     ON public.user_comments FOR SELECT
     USING (true);
 
--- INSERT: 自分の author_user_id のみ
+-- INSERT: only your own author_user_id
 CREATE POLICY "user_comments_insert_own"
     ON public.user_comments FOR INSERT
     WITH CHECK (auth.uid() = author_user_id);
 
--- UPDATE: 不可 (編集禁止、like_count は trigger 経由のみ)
--- DELETE: 自分のコメント OR 該当投稿の投稿者
+-- UPDATE: not allowed (no editing. like_count only through the trigger)
+-- DELETE: your own comment OR the author of the post it is on
 CREATE POLICY "user_comments_delete_own_or_owner"
     ON public.user_comments FOR DELETE
     USING (
@@ -132,7 +138,7 @@ CREATE POLICY "user_comments_delete_own_or_owner"
     );
 
 -- ============================================
--- 4. comment_count 同期 trigger (user_posts.comment_count)
+-- 4. comment_count sync trigger (user_posts.comment_count)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.sync_post_comment_count()
 RETURNS trigger
@@ -169,10 +175,10 @@ CREATE TRIGGER user_comments_sync_count_del
     EXECUTE FUNCTION public.sync_post_comment_count();
 
 -- ============================================
--- 5. like_count 改ざん防止 trigger
+-- 5. Trigger that prevents tampering with like_count
 -- ============================================
--- rolbypassrls 判定: SECURITY DEFINER RPC 内 (current_user=postgres) は通す、
--- 一般ユーザー直 UPDATE (current_user=authenticated) は like_count 改変を拒否
+-- rolbypassrls check: allow inside a SECURITY DEFINER RPC (current_user=postgres),
+-- reject like_count changes by a direct UPDATE from a normal user (current_user=authenticated)
 CREATE OR REPLACE FUNCTION public.protect_user_comments_like_count()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -198,7 +204,7 @@ CREATE TRIGGER user_comments_protect_like_count
     EXECUTE FUNCTION public.protect_user_comments_like_count();
 
 -- ============================================
--- 6. user_comment_likes テーブル (コメントいいね)
+-- 6. user_comment_likes table (comment likes)
 -- ============================================
 CREATE TABLE IF NOT EXISTS public.user_comment_likes (
     user_id    uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
@@ -216,12 +222,12 @@ DROP POLICY IF EXISTS "user_comment_likes_select_own" ON public.user_comment_lik
 DROP POLICY IF EXISTS "user_comment_likes_insert_own" ON public.user_comment_likes;
 DROP POLICY IF EXISTS "user_comment_likes_delete_own" ON public.user_comment_likes;
 
--- SELECT: 自分の like 関係のみ閲覧可 (fetch_comments_for_post で is_liked_by_me 計算するため)
+-- SELECT: can only see your own like relations (to compute is_liked_by_me in fetch_comments_for_post)
 CREATE POLICY "user_comment_likes_select_own"
     ON public.user_comment_likes FOR SELECT
     USING (auth.uid() = user_id);
 
--- INSERT / DELETE: 自分のみ (RPC 経由が推奨)
+-- INSERT / DELETE: only yourself (going through the RPC is recommended)
 CREATE POLICY "user_comment_likes_insert_own"
     ON public.user_comment_likes FOR INSERT
     WITH CHECK (auth.uid() = user_id);
@@ -231,7 +237,7 @@ CREATE POLICY "user_comment_likes_delete_own"
     USING (auth.uid() = user_id);
 
 -- ============================================
--- 7. user_notifications テーブル
+-- 7. user_notifications table
 -- ============================================
 CREATE TABLE IF NOT EXISTS public.user_notifications (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -245,9 +251,10 @@ CREATE TABLE IF NOT EXISTS public.user_notifications (
     preview_text      text,
     read_at           timestamptz,
     created_at        timestamptz NOT NULL DEFAULT now(),
-    -- 自分発のアクションを通知しない (recipient と actor が同じなら INSERT 禁止)
+    -- Do not notify your own actions (INSERT forbidden if recipient and actor are the same)
     CONSTRAINT user_notifications_no_self CHECK (recipient_user_id <> actor_user_id),
-    -- like / comment_like の重複防止用ユニーク制約 (kind + actor + target が同じなら 1 件のみ)
+    -- Unique constraint to prevent duplicate like / comment_like (only 1 row if kind + actor + target are
+    -- the same)
     CONSTRAINT user_notifications_unique_like
         UNIQUE NULLS NOT DISTINCT (
             recipient_user_id, actor_user_id, kind, target_post_id, target_quote_id, target_comment_id
@@ -269,29 +276,29 @@ DROP POLICY IF EXISTS "user_notifications_select_own" ON public.user_notificatio
 DROP POLICY IF EXISTS "user_notifications_update_own" ON public.user_notifications;
 DROP POLICY IF EXISTS "user_notifications_delete_own" ON public.user_notifications;
 
--- SELECT: 自分宛のみ
+-- SELECT: only notifications addressed to you
 CREATE POLICY "user_notifications_select_own"
     ON public.user_notifications FOR SELECT
     USING (auth.uid() = recipient_user_id);
 
--- INSERT: クライアント直接禁止 (SECURITY DEFINER RPC / trigger 経由のみ)
--- ポリシー無 = DENY
+-- INSERT: direct client insert is forbidden (only through SECURITY DEFINER RPC / trigger)
+-- No policy = DENY
 
--- UPDATE: 自分の read_at のみ更新可 (RPC 経由が推奨だがフォールバック用)
+-- UPDATE: can only update your own read_at (going through the RPC is recommended, this is a fallback)
 CREATE POLICY "user_notifications_update_own"
     ON public.user_notifications FOR UPDATE
     USING (auth.uid() = recipient_user_id)
     WITH CHECK (auth.uid() = recipient_user_id);
 
--- DELETE: 自分宛通知の削除可
+-- DELETE: can delete notifications addressed to you
 CREATE POLICY "user_notifications_delete_own"
     ON public.user_notifications FOR DELETE
     USING (auth.uid() = recipient_user_id);
 
 -- ============================================
--- 8. 通知作成ヘルパー関数 (内部用、SECURITY DEFINER)
+-- 8. Helper function that creates notifications (internal, SECURITY DEFINER)
 -- ============================================
--- self-action 弾き + ON CONFLICT DO NOTHING で重複防止
+-- Rejects self-actions + ON CONFLICT DO NOTHING prevents duplicates
 CREATE OR REPLACE FUNCTION public.create_notification(
     p_recipient_user_id uuid,
     p_actor_user_id     uuid,
@@ -311,7 +318,7 @@ BEGIN
         RETURN;
     END IF;
     IF p_recipient_user_id = p_actor_user_id THEN
-        RETURN;  -- 自分発は通知しない
+        RETURN;  -- Do not notify your own actions
     END IF;
     INSERT INTO public.user_notifications (
         recipient_user_id, actor_user_id, kind,
@@ -327,7 +334,7 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.create_notification(uuid, uuid, text, uuid, uuid, uuid, text) FROM PUBLIC;
 
 -- ============================================
--- 9. toggle_quote_like RPC を上書き (通知付き)
+-- 9. Override the toggle_quote_like RPC (with notifications)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.toggle_quote_like(target_quote_id uuid)
 RETURNS jsonb
@@ -368,8 +375,9 @@ BEGIN
             WHERE id = target_quote_id
             RETURNING like_count INTO new_count;
         result_is_liked := true;
-        -- quote の author は authors テーブル (= 公式偉人) で users にいないので通知しない
-        -- → quote like は通知発生しない仕様 (公式偉人 = 故人/偉人)
+        -- A quote's author is in the authors table (= official historical figures), not in users, so no
+        -- notification → by design, quote likes do not create notifications (official historical figures =
+        -- deceased/great figures)
     END IF;
 
     RETURN jsonb_build_object(
@@ -383,7 +391,7 @@ REVOKE EXECUTE ON FUNCTION public.toggle_quote_like(uuid) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.toggle_quote_like(uuid) TO authenticated;
 
 -- ============================================
--- 10. toggle_post_like RPC を上書き (通知付き)
+-- 10. Override the toggle_post_like RPC (with notifications)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.toggle_post_like(target_post_id uuid)
 RETURNS jsonb
@@ -429,7 +437,7 @@ BEGIN
             WHERE id = target_post_id
             RETURNING like_count INTO new_count;
         result_is_liked := true;
-        -- 通知作成 (投稿者 != 自分のときのみ)
+        -- Create a notification (only when the post author != yourself)
         PERFORM public.create_notification(
             p_recipient_user_id => post_owner_id,
             p_actor_user_id     => current_user_id,
@@ -449,9 +457,10 @@ REVOKE EXECUTE ON FUNCTION public.toggle_post_like(uuid) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.toggle_post_like(uuid) TO authenticated;
 
 -- ============================================
--- 11. user_follows INSERT trigger で follow 通知作成
+-- 11. Create a follow notification in the user_follows INSERT trigger
 -- ============================================
--- 偉人フォロー (author_id) は通知不要、ユーザーフォロー (followed_user_id) のみ
+-- Following a historical figure (author_id) needs no notification. Only user follows
+-- (followed_user_id)
 CREATE OR REPLACE FUNCTION public.notify_on_follow()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -477,9 +486,10 @@ CREATE TRIGGER user_follows_notify
     EXECUTE FUNCTION public.notify_on_follow();
 
 -- ============================================
--- 12. create_comment RPC (コメント投稿 + 通知)
+-- 12. create_comment RPC (post a comment + notification)
 -- ============================================
--- parent_comment_id 指定で返信 (1 階層のみ、parent の parent_comment_id が NULL でないと拒否)
+-- Reply by passing parent_comment_id (1 level only; rejected if the parent's parent_comment_id is not
+-- NULL)
 CREATE OR REPLACE FUNCTION public.create_comment(
     target_post_id           uuid,
     comment_text             text,
@@ -519,7 +529,7 @@ BEGIN
         RAISE EXCEPTION 'Post not found: %', target_post_id;
     END IF;
 
-    -- 返信の場合は parent の整合性チェック
+    -- For a reply, check the parent's consistency
     IF parent_comment_id_param IS NOT NULL THEN
         SELECT author_user_id, post_id, parent_comment_id
             INTO parent_author_id, parent_post_id, parent_grandparent
@@ -534,7 +544,7 @@ BEGIN
             RAISE EXCEPTION 'Parent comment belongs to different post';
         END IF;
 
-        -- ネスト 1 階層のみ: parent が既に子の場合は parent の parent を使う (Twitter 方式)
+        -- 1 level of nesting only: if the parent is already a child, use the parent's parent (Twitter style)
         IF parent_grandparent IS NOT NULL THEN
             parent_comment_id_param := parent_grandparent;
             SELECT author_user_id INTO parent_author_id
@@ -546,10 +556,10 @@ BEGIN
         VALUES (target_post_id, current_user_id, parent_comment_id_param, comment_text)
         RETURNING * INTO new_row;
 
-    -- プレビューは最初の 80 文字
+    -- The preview is the first 80 characters
     preview := left(comment_text, 80);
 
-    -- 通知 1: 返信の場合 → 親コメント著者に reply 通知
+    -- Notification 1: for a reply → reply notification to the parent comment's author
     IF parent_comment_id_param IS NOT NULL THEN
         PERFORM public.create_notification(
             p_recipient_user_id => parent_author_id,
@@ -561,10 +571,12 @@ BEGIN
         );
     END IF;
 
-    -- 通知 2: 投稿者にコメント通知 (返信であっても投稿者には通知。ただし
-    --        返信の親コメント著者 == 投稿者なら create_notification 重複制約で自動的に
-    --        スキップしないが、kind が違う (reply vs comment) ので両方入る可能性あり。
-    --        ここでは返信の場合は投稿者通知をスキップする → reply の親が投稿者ならその通知で十分)
+    -- Notification 2: comment notification to the post author (the post author is notified even for a
+    --        reply. However, if the reply's parent comment author == the post author, the
+    --        create_notification duplicate constraint does not skip it automatically, and since the kind
+    --        differs (reply vs comment), both may be inserted.
+    --        Here, for a reply, the post author notification is skipped → if the reply's parent is the post
+    --        author, that notification is enough)
     IF parent_comment_id_param IS NULL OR parent_author_id <> post_owner_id THEN
         PERFORM public.create_notification(
             p_recipient_user_id => post_owner_id,
@@ -632,7 +644,7 @@ BEGIN
             WHERE id = target_comment_id
             RETURNING like_count INTO new_count;
         result_is_liked := true;
-        -- コメント著者に通知
+        -- Notify the comment author
         PERFORM public.create_notification(
             p_recipient_user_id => comment_owner_id,
             p_actor_user_id     => current_user_id,
@@ -653,7 +665,7 @@ REVOKE EXECUTE ON FUNCTION public.toggle_comment_like(uuid) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.toggle_comment_like(uuid) TO authenticated;
 
 -- ============================================
--- 14. delete_all_comments_on_post RPC (投稿者一括削除)
+-- 14. delete_all_comments_on_post RPC (bulk delete by the post author)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.delete_all_comments_on_post(target_post_id uuid)
 RETURNS integer
@@ -699,8 +711,8 @@ GRANT  EXECUTE ON FUNCTION public.delete_all_comments_on_post(uuid) TO authentic
 -- ============================================
 -- 15. fetch_comments_for_post RPC
 -- ============================================
--- 返却: 親コメント + 各親に紐づく返信群を一括で平坦化して返す
--- (アプリ側で parent_comment_id でグループ化して描画)
+-- Returns: parent comments + the replies tied to each parent, flattened together
+-- (the app groups them by parent_comment_id to draw them)
 CREATE OR REPLACE FUNCTION public.fetch_comments_for_post(
     target_post_id uuid,
     limit_count    integer DEFAULT 200
@@ -737,7 +749,7 @@ AS $$
             WHERE l.comment_id = c.id AND l.user_id = auth.uid()
         ) AS is_liked_by_me,
         c.created_at,
-        -- 返信先ユーザー名 (parent が存在すればその author の display_name)
+        -- Name of the user being replied to (the display_name of the parent's author, if the parent exists)
         (
             SELECT pu.display_name
             FROM public.user_comments pc
@@ -828,7 +840,7 @@ REVOKE EXECUTE ON FUNCTION public.fetch_unread_notification_count() FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_unread_notification_count() TO authenticated;
 
 -- ============================================
--- 18. mark_notifications_read RPC (全件 or 指定 ID 群)
+-- 18. mark_notifications_read RPC (all, or a given set of IDs)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.mark_all_notifications_read()
 RETURNS integer
@@ -861,7 +873,7 @@ REVOKE EXECUTE ON FUNCTION public.mark_all_notifications_read() FROM anon;
 GRANT  EXECUTE ON FUNCTION public.mark_all_notifications_read() TO authenticated;
 
 -- ============================================
--- 19. fetch_mixed_feed_random を comment_count 追加で書き直し
+-- 19. Rewrite fetch_mixed_feed_random to add comment_count
 -- ============================================
 DROP FUNCTION IF EXISTS public.fetch_mixed_feed_random(integer);
 
@@ -937,7 +949,7 @@ REVOKE EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer) TO authenticated;
 
 -- ============================================
--- 20. fetch_following_feed を comment_count 追加で書き直し
+-- 20. Rewrite fetch_following_feed to add comment_count
 -- ============================================
 DROP FUNCTION IF EXISTS public.fetch_following_feed(integer);
 
@@ -1021,7 +1033,7 @@ REVOKE EXECUTE ON FUNCTION public.fetch_following_feed(integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_following_feed(integer) TO authenticated;
 
 -- ============================================
--- 21. fetch_tag_feed を comment_count 追加で書き直し
+-- 21. Rewrite fetch_tag_feed to add comment_count
 -- ============================================
 DROP FUNCTION IF EXISTS public.fetch_tag_feed(text, integer);
 
@@ -1102,7 +1114,7 @@ REVOKE EXECUTE ON FUNCTION public.fetch_tag_feed(text, integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_tag_feed(text, integer) TO authenticated;
 
 -- ============================================
--- 22. 既存 user_posts.comment_count を実カウントで初期化
+-- 22. Initialize the existing user_posts.comment_count with the actual count
 -- ============================================
 UPDATE public.user_posts p
     SET comment_count = COALESCE((
@@ -1112,13 +1124,13 @@ UPDATE public.user_posts p
     ), 0);
 
 -- ============================================
--- 23. 動作確認用クエリ (実行不要、コメント)
+-- 23. Queries for checking behavior (no need to run, comments only)
 -- ============================================
--- 自分宛通知の確認:
+-- Check notifications addressed to you:
 --   SELECT * FROM fetch_notifications(20);
--- 未読件数:
+-- Unread count:
 --   SELECT fetch_unread_notification_count();
--- 投稿のコメント:
+-- Comments on a post:
 --   SELECT * FROM fetch_comments_for_post('<post_id>'::uuid);
--- 全件既読化:
+-- Mark all as read:
 --   SELECT mark_all_notifications_read();

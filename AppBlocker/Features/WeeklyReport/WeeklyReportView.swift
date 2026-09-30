@@ -2,32 +2,34 @@
 //  WeeklyReportView.swift
 //  AppBlocker
 //
-//  週次レポート (Opal の Focus Report 相当)。
-//  中身は 080_weekly_report.sql の get_weekly_report をそのまま描くだけ。
+//  Weekly report (equivalent to Opal's Focus Report).
+//  The content just draws get_weekly_report from 080_weekly_report.sql as is.
 //
-//  ⚠️⚠️ 文言はユーザー添削待ち — この画面の日本語/英語は全て仮置き。
-//        ブランドの声は Claude が発明しない (feedback_brand_voice_no_invented_copy)。
+//  ⚠️⚠️ Wording is waiting for the user's review. All Japanese/English text on this screen is a
+//        placeholder. Claude does not invent the brand voice (feedback_brand_voice_no_invented_copy).
 //
-//  設計メモ:
-//    - ❌ アプリ別の内訳は出せない。Screen Time API が実測値をアプリ本体に渡さない仕様。
-//      代わりに「曜日別」と「モード別」を出す (どちらも block_sessions だけで作れる)。
-//    - 🔴 scaleEffect は使わない (実機 10fps の前例あり)。棒グラフは frame(height:) で伸ばす。
-//    - 🔴 取得結果はこの View のローカル state。共有シングルトンに書き戻すと
-//      履歴から複数枚開いたときに互いを上書きする。
+//  Design notes:
+//    - ❌ A per-app breakdown is not possible. By design, the Screen Time API does not pass measured
+//      values to the app itself.
+//      Instead show "by weekday" and "by mode" (both can be built from block_sessions alone).
+//    - 🔴 Do not use scaleEffect (it caused 10fps on a real device before). Bars grow with
+//      frame(height:).
+//    - 🔴 The fetched result is local state of this View. Writing it back to a shared singleton makes
+//      multiple reports opened from history overwrite each other.
 //
 
 import SwiftUI
 
 struct WeeklyReportView: View {
 
-    /// 何週前のレポートか。0 = 進行中の今週、1 = 先週 (既定)
+    /// How many weeks ago the report is for. 0 = this week in progress, 1 = last week (default)
     var weekOffset: Int = 1
 
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
 
     @State private var report: WeeklyReport?
     @State private var isLoading = true
-    /// 「今週の順位」タップ → 累計ランキング (2026-09-05)
+    /// Tap on "今週の順位" ("Your rank this week") → all-time ranking (2026-09-05)
     @State private var showRanking = false
 
     private var lang: AppLanguage { AppLanguage(rawValue: mainLanguageRaw) ?? .english }
@@ -47,10 +49,11 @@ struct WeeklyReportView: View {
                 emptyView
             }
         }
-        .navigationTitle(isJa ? "週次レポート" : "Weekly Report")  // 文言はユーザー添削待ち
+        .navigationTitle(isJa ? "週次レポート" : "Weekly Report")  // Wording is waiting for the user's review
         .navigationBarTitleDisplayMode(.inline)
-        // 親 (設定 / 通知一覧) が toolbarBackground(.hidden) を持つ画面から push されるため、
-        // ここでも不透明バーを明示する。この NavigationStack に push する画面は必須 (2026-08-04)
+        // This is pushed from screens whose parent (settings / notification list) has
+        // toolbarBackground(.hidden), so set an opaque bar explicitly here too. Required for every screen
+        // pushed onto this NavigationStack (2026-08-04)
         .toolbarBackground(AppColors.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
@@ -63,7 +66,7 @@ struct WeeklyReportView: View {
         }
     }
 
-    // MARK: - 本体
+    // MARK: - Body
 
     private func content(_ r: WeeklyReport) -> some View {
         ScrollView {
@@ -83,7 +86,7 @@ struct WeeklyReportView: View {
         }
     }
 
-    // MARK: - 見出し + 今週のロック時間
+    // MARK: - Heading + lock time this week
 
     private func heroCard(_ r: WeeklyReport) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -93,7 +96,7 @@ struct WeeklyReportView: View {
                     .foregroundColor(AppColors.textSecondary)
 
                 if r.isCurrentWeek {
-                    Text(isJa ? "途中経過" : "In progress")  // 文言はユーザー添削待ち
+                    Text(isJa ? "途中経過" : "In progress")  // Wording is waiting for the user's review
                         .font(.system(size: 10, weight: .bold))
                         .foregroundColor(AppColors.textTertiary)
                         .padding(.horizontal, 8)
@@ -110,7 +113,7 @@ struct WeeklyReportView: View {
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
 
-            Text(isJa ? "今週ロックした時間" : "Locked this week")  // 文言はユーザー添削待ち
+            Text(isJa ? "今週ロックした時間" : "Locked this week")  // Wording is waiting for the user's review
                 .font(.system(size: 13))
                 .foregroundColor(AppColors.textSecondary)
 
@@ -122,14 +125,14 @@ struct WeeklyReportView: View {
         .background(RoundedRectangle(cornerRadius: 18).fill(AppColors.cardBackground))
     }
 
-    /// 🔴 先週比の出し方。
-    /// 本番実データに **+6603.1%** (先週2時間 → 今週133時間) が存在する。
-    /// 数値は正しいが画面に出すと壊れて見えるので、母数が小さい/変化が極端なときは
-    /// % をやめて実数の比較に落とす (判定は WeeklyReport.showsDeltaPercent)。
+    /// 🔴 How to show the change vs last week.
+    /// Real production data includes **+6603.1%** (2 hours last week → 133 hours this week).
+    /// The number is correct but looks broken on screen, so when the base is small / the change is
+    /// extreme, drop the % and compare actual values (decided by WeeklyReport.showsDeltaPercent).
     @ViewBuilder
     private func deltaRow(_ r: WeeklyReport) -> some View {
         if !r.hasComparison {
-            Text(isJa ? "先週の記録はありません" : "No record last week")  // 文言はユーザー添削待ち
+            Text(isJa ? "先週の記録はありません" : "No record last week")  // Wording is waiting for the user's review
                 .font(.system(size: 13))
                 .foregroundColor(AppColors.textTertiary)
         } else if r.showsDeltaPercent, let d = r.deltaPercent {
@@ -139,48 +142,49 @@ struct WeeklyReportView: View {
                     .font(.system(size: 12, weight: .bold))
                 Text(String(format: "%@%.0f%%", up ? "+" : "", d))
                     .font(.system(size: 15, weight: .bold))
-                Text(isJa ? "先週比" : "vs last week")  // 文言はユーザー添削待ち
+                Text(isJa ? "先週比" : "vs last week")  // Wording is waiting for the user's review
                     .font(.system(size: 13))
                     .foregroundColor(AppColors.textSecondary)
             }
             .foregroundColor(up ? AppColors.success : AppColors.textSecondary)
         } else {
-            // 実数で並べる。%だと壊れて見えるケースのフォールバック
+            // Show actual values side by side. Fallback for cases where % looks broken
             Text(isJa
                  ? "先週 \(r.prevSeconds.lockDurationText) → 今週 \(r.seconds.lockDurationText)"
-                 : "\(r.prevSeconds.lockDurationText) last week → \(r.seconds.lockDurationText)")  // 文言はユーザー添削待ち
+                 : "\(r.prevSeconds.lockDurationText) last week → \(r.seconds.lockDurationText)")  // Wording is waiting for the user's review
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(AppColors.textSecondary)
         }
     }
 
-    // MARK: - 上位%
+    // MARK: - Top percentile
 
-    /// 🔴 母数が閾値未満の週はサーバーが topPercent を返さない (「上位50%」が出て
-    ///    格好悪い問題への対処)。ここに来るのは母数が足りた週だけ。
+    /// 🔴 In weeks where the pool is below the threshold, the server does not return topPercent (fixes
+    ///    the problem of an embarrassing "上位50%" ("Top 50%") showing). Only weeks with a big enough
+    ///    pool reach here.
     private func rankCard(_ r: WeeklyReport) -> some View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(isJa ? "今週の順位" : "Your rank this week")  // 文言はユーザー添削待ち
+                Text(isJa ? "今週の順位" : "Your rank this week")  // Wording is waiting for the user's review
                     .font(.system(size: 13))
                     .foregroundColor(AppColors.textSecondary)
 
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(isJa ? "上位 \(topPercentText(r))%" : "Top \(topPercentText(r))%")  // 文言はユーザー添削待ち
+                    Text(isJa ? "上位 \(topPercentText(r))%" : "Top \(topPercentText(r))%")  // Wording is waiting for the user's review
                         .font(Self.brandFont(26))
                         .foregroundColor(AppColors.textPrimary)
 
                     if let rank = r.rank {
-                        Text(isJa ? "\(r.activeUsers)人中 \(rank)位" : "\(rank) of \(r.activeUsers)")  // 文言はユーザー添削待ち
+                        Text(isJa ? "\(r.activeUsers)人中 \(rank)位" : "\(rank) of \(r.activeUsers)")  // Wording is waiting for the user's review
                             .font(.system(size: 12))
                             .foregroundColor(AppColors.textTertiary)
                     }
                 }
             }
             Spacer()
-            // 🔴 この順位は「その週」のもので、飛び先は「累計」ランキング。
-            //    数字が変わるので、押す前にそれが分かるよう chevron を出す
-            //    (飛び先の画面タイトルも「累計ランキング」で再度明示している)
+            // 🔴 This rank is for "that week", but the destination is the "all-time" ranking.
+            //    The number changes, so show a chevron so the user knows before tapping
+            //    (the destination screen title also says "累計ランキング" ("All-time ranking") again)
             HStack(spacing: 4) {
                 Image(systemName: "trophy.fill")
                     .font(.system(size: 20))
@@ -193,27 +197,28 @@ struct WeeklyReportView: View {
         .background(RoundedRectangle(cornerRadius: 18).fill(AppColors.cardBackground))
     }
 
-    /// 「上位 0.4%」のような値を潰さず、かつ「上位 12.0%」の .0 は出さない
+    /// Do not round away values like "上位 0.4%" ("Top 0.4%"), and do not show the .0 in "上位 12.0%"
+    /// ("Top 12.0%")
     private func topPercentText(_ r: WeeklyReport) -> String {
         guard let p = r.topPercent else { return "-" }
         return p < 10 ? String(format: "%.1f", p) : String(format: "%.0f", p)
     }
 
-    // MARK: - 曜日別
+    // MARK: - By weekday
 
     private func dayChartCard(_ r: WeeklyReport) -> some View {
         let maxValue = max(r.days.max() ?? 0, 1)
         let barArea: CGFloat = 108
 
         return VStack(alignment: .leading, spacing: 14) {
-            Text(isJa ? "曜日別" : "By day")  // 文言はユーザー添削待ち
+            Text(isJa ? "曜日別" : "By day")  // Wording is waiting for the user's review
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(AppColors.textSecondary)
 
             HStack(alignment: .bottom, spacing: 8) {
                 ForEach(Array(r.days.enumerated()), id: \.offset) { idx, secs in
                     VStack(spacing: 8) {
-                        // 🔴 scaleEffect は使わない。高さを直接与える
+                        // 🔴 Do not use scaleEffect. Set the height directly
                         RoundedRectangle(cornerRadius: 5)
                             .fill(secs > 0 ? AppColors.textPrimary : AppColors.secondaryBackground)
                             .frame(height: secs > 0
@@ -232,7 +237,7 @@ struct WeeklyReportView: View {
         .background(RoundedRectangle(cornerRadius: 18).fill(AppColors.cardBackground))
     }
 
-    /// 月曜始まり (サーバーの days[0] が月曜)
+    /// Weeks start on Monday (the server's days[0] is Monday)
     private func weekdayLabel(_ idx: Int) -> String {
         let ja = ["月", "火", "水", "木", "金", "土", "日"]
         let en = ["M", "T", "W", "T", "F", "S", "S"]
@@ -240,17 +245,17 @@ struct WeeklyReportView: View {
         return idx >= 0 && idx < a.count ? a[idx] : ""
     }
 
-    // MARK: - モード別
+    // MARK: - By mode
 
     private func modeCard(_ r: WeeklyReport) -> some View {
-        // 表示順を固定する (辞書の順序に任せると毎回並びが変わる)
+        // Fix the display order (leaving it to dictionary order changes the order every time)
         let order: [(key: String, icon: String, ja: String, en: String)] = [
             ("timer",    "timer",            "タイマー",   "Timer"),
             ("schedule", "calendar",         "スケジュール", "Schedule"),
             ("location", "location.fill",    "位置",       "Location")
         ]
         return VStack(alignment: .leading, spacing: 12) {
-            Text(isJa ? "ロックの種類" : "Lock type")  // 文言はユーザー添削待ち
+            Text(isJa ? "ロックの種類" : "Lock type")  // Wording is waiting for the user's review
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(AppColors.textSecondary)
 
@@ -274,23 +279,24 @@ struct WeeklyReportView: View {
         .background(RoundedRectangle(cornerRadius: 18).fill(AppColors.cardBackground))
     }
 
-    // MARK: - 累計と予測
+    // MARK: - Totals and projection
 
     private func totalsCard(_ r: WeeklyReport) -> some View {
         VStack(spacing: 14) {
-            totalRow(label: isJa ? "これまでの累計" : "All-time total",  // 文言はユーザー添削待ち
+            totalRow(label: isJa ? "これまでの累計" : "All-time total",  // Wording is waiting for the user's review
                      value: r.totalSeconds.lockDurationText)
 
             Divider().overlay(AppColors.secondaryBackground)
 
-            totalRow(label: isJa ? "今週のセッション" : "Sessions this week",  // 文言はユーザー添削待ち
+            totalRow(label: isJa ? "今週のセッション" : "Sessions this week",  // Wording is waiting for the user's review
                      value: "\(r.sessions)")
 
-            // 🔴 予測は「直近4週の平均 × 52」。初回セッションより前の週は平均に入れていない
-            //    (入れると使い始めたばかりの人の予測が実ペースの 1/4 になる)
+            // 🔴 The projection is "average of the last 4 weeks × 52". Weeks before the first session are not
+            //    included in the average (including them would make the projection for new users 1/4 of their
+            //    actual pace)
             if r.avg4Seconds > 0 {
                 Divider().overlay(AppColors.secondaryBackground)
-                totalRow(label: isJa ? "このペースで1年" : "A year at this pace",  // 文言はユーザー添削待ち
+                totalRow(label: isJa ? "このペースで1年" : "A year at this pace",  // Wording is waiting for the user's review
                          value: "\(r.projectionYearSeconds / 3600)h")
             }
         }
@@ -310,17 +316,17 @@ struct WeeklyReportView: View {
         }
     }
 
-    // MARK: - 空
+    // MARK: - Empty
 
     private var emptyView: some View {
         VStack(spacing: 12) {
             Image(systemName: "chart.bar.doc.horizontal")
                 .font(.system(size: 34))
                 .foregroundColor(AppColors.textTertiary)
-            Text(isJa ? "まだレポートを出せません" : "No report yet")  // 文言はユーザー添削待ち
+            Text(isJa ? "まだレポートを出せません" : "No report yet")  // Wording is waiting for the user's review
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(AppColors.textPrimary)
-            Text(isJa ? "一度ロックを使うと、翌週から届きます" : "Use a lock once and your report starts next week")  // 文言はユーザー添削待ち
+            Text(isJa ? "一度ロックを使うと、翌週から届きます" : "Use a lock once and your report starts next week")  // Wording is waiting for the user's review
                 .font(.system(size: 13))
                 .foregroundColor(AppColors.textSecondary)
                 .multilineTextAlignment(.center)
@@ -328,7 +334,7 @@ struct WeeklyReportView: View {
         .padding(32)
     }
 
-    // MARK: - 部品
+    // MARK: - Parts
 
     private func weekRangeText(_ r: WeeklyReport) -> String {
         guard let s = r.weekStart, let e = r.weekEnd else { return r.weekStartRaw }
@@ -340,8 +346,8 @@ struct WeeklyReportView: View {
         return "\(f.string(from: s)) – \(f.string(from: e))"
     }
 
-    /// 端末に無いフォント名で silent fallback させない (Didot-Bold が実機に無かった
-    /// 2026-07-15 の教訓。QuoteCardView.installed と同じ流儀)
+    /// Do not let a font name missing on the device silently fall back (lesson from 2026-07-15, when
+    /// Didot-Bold was not on the real device. Same style as QuoteCardView.installed)
     static func brandFont(_ size: CGFloat) -> Font {
         UIFont(name: "Montserrat-BlackItalic", size: size) != nil
             ? .custom("Montserrat-BlackItalic", size: size)

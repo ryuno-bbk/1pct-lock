@@ -1,18 +1,19 @@
 -- ============================================================
 -- 034_completion_all_time.sql
--- 統計セルの詳細シート用: get_user_stats に「全期間の完遂率」を追加
+-- For the stats cell detail sheet: add the "all-time completion rate" to get_user_stats
 -- ============================================================
--- 経緯 (2026-07-17 ユーザー要望):
---   統計セルをタップすると詳細説明シートが出る UI を追加。完遂率セルの詳細には
---   ヘッドラインの直近30日に加えて全期間の完遂率も表示する (30日=今の自分、
---   全期間=通算の対比。ヘッドラインは30日のまま変えない)。
+-- History (2026-07-17 user request):
+--   Added a UI where tapping a stats cell shows a detail sheet. The completion rate cell's detail
+--   shows the all-time completion rate in addition to the headline last-30-days one (30 days = you
+--   now, all time = contrast with your whole record. The headline stays at 30 days).
 --
--- 定義は 033 と同一 (タイマーのみ / 予定10分以上 / 件数ベース)。窓だけ無し。
--- 注意: 過去の aborted は planned_seconds が NULL のため除外される (033 と同じ規則)。
---   つまり 033 適用前の中断履歴は全期間値に含まれず、やや甘めに出る。
---   リリース後の新規データは planned_seconds が常に入るので正確。
+-- The definition is the same as 033 (timer only / planned 10 minutes or more / count-based). Only
+-- the window is removed.
+-- Note: past aborted sessions have a NULL planned_seconds, so they are excluded (same rule as 033).
+--   So the abort history from before 033 was applied is not in the all-time value, which comes
+--   out somewhat generous. New data after release always has planned_seconds, so it is accurate.
 --
--- 実行順序: 033 の後 (planned_seconds カラムが前提)。何度実行しても安全
+-- Execution order: after 033 (requires the planned_seconds column). Safe to run any number of times
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.get_user_stats(
@@ -37,11 +38,11 @@ BEGIN
     SELECT total_block_seconds INTO total_seconds
     FROM public.users WHERE id = target_user_id;
 
-    -- 既存 RPC をそのまま呼び出す (二重実装しない)
+    -- Call the existing RPC as-is (no duplicate implementation)
     streak          := public.get_streak_days(target_user_id, tz);
     percentile_json := public.get_block_percentile(target_user_id);
 
-    -- 適格セッション (033 の定義) を1回のスキャンで 30日窓 / 全期間の両方に集計
+    -- Aggregate eligible sessions (033's definition) for both the 30-day window and all time in 1 scan
     SELECT
         count(*) FILTER (WHERE status = 'completed'
                            AND started_at >= now() - interval '30 days'),
@@ -94,5 +95,5 @@ GRANT  EXECUTE ON FUNCTION public.get_user_stats(uuid, text) TO authenticated;
 COMMENT ON FUNCTION public.get_user_stats(uuid, text) IS
     'プロフィール統計の統合RPC (累計/連続/上位%/完遂率30日+全期間)。他人の user_id で呼べるのは仕様 (公開統計)';
 
--- 動作確認 (実行不要、コメント):
+-- Behavior check (no need to run, comments only):
 --   SELECT get_user_stats(auth.uid());

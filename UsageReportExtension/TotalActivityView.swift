@@ -2,28 +2,29 @@
 //  TotalActivityView.swift
 //  UsageReportExtension
 //
-//  オンボ診断のレポート View 2つ (比較チャート / 使用量トップ3)。
-//  拡張はメインアプリの AppColors を import できないため、ブランドトークンを
-//  ここにハードコードする (AppColors.swift と一致させること):
-//    背景 #000000 / オフホワイト #F2EFE7 / 弱調 #97928A / 最弱 #6E6A63 / カード #17171B
-//  ⚠️ 背景は必ず不透明で塗る: 本体側は「このレポートが描画されない時に下の
-//  プレースホルダが透けて見える」フォールバック構造なので、描画された時は
-//  完全に覆う必要がある。
+//  The 2 report views for the onboarding diagnosis (comparison chart / top 3 by usage).
+//  The extension cannot import the main app's AppColors, so the brand tokens are
+//  hardcoded here (keep them in sync with AppColors.swift):
+//    background #000000 / off-white #F2EFE7 / muted #97928A / most muted #6E6A63 / card #17171B
+//  ⚠️ Always paint the background opaque: the main app side has a fallback structure where "the
+//  placeholder below shows through when this report is not drawn", so when it is drawn it must
+//  cover it completely.
 //
 
 import SwiftUI
 import FamilyControls
 import ManagedSettings
 
-// ブランドトークン (AppColors と一致)
+// Brand tokens (match AppColors)
 private let inkColor = Color(red: 242/255, green: 239/255, blue: 231/255)   // #F2EFE7
 private let secondaryColor = Color(red: 151/255, green: 146/255, blue: 138/255) // #97928A
 private let tertiaryColor = Color(red: 110/255, green: 106/255, blue: 99/255)   // #6E6A63
 private let cardColor = Color(red: 23/255, green: 23/255, blue: 27/255)     // #17171B
 private let barGrayColor = Color(red: 42/255, green: 42/255, blue: 48/255)  // #2A2A30
 
-/// 分 → "7h 18m"。日本語でも単位は英語表記に統一する
-/// (「7時間18分」は横幅を食いすぎてチャートの余白が崩れる — 2026-07-15 実機FB、リファレンス準拠)
+/// Minutes → "7h 18m". Units are written in English even in Japanese
+/// (the Japanese form of "7 hours 18 minutes" takes too much width and breaks the chart's margins.
+/// 2026-07-15 real device feedback, follows the reference)
 private func durationLabel(minutes: Int, jp: Bool) -> String {
     let h = minutes / 60
     let m = minutes % 60
@@ -32,14 +33,15 @@ private func durationLabel(minutes: Int, jp: Bool) -> String {
     return "\(m)m"
 }
 
-/// L28: スクリーンタイムの記録が端末に全く無い (実測0分 かつ トップアプリ0件)。
-/// この場合「実際の使用時間 0m」や空のトップ3カードをそのまま描画すると壊れて見えるため、
-/// 呼び出し側 (Comparison/TopApps 両方) で空状態に差し替える
+/// L28: the device has no Screen Time records at all (measured 0 minutes and 0 top apps).
+/// In this case, drawing "actual usage 0m" or empty top 3 cards as is looks broken, so
+/// the callers (both Comparison/TopApps) swap in an empty state
 private extension UsageConfiguration {
     var hasNoUsageHistory: Bool { actualDailyMinutes == 0 && apps.isEmpty }
 }
 
-/// 空状態の共通表示 (L28)。拡張はメインアプリの L enum を import できないためローカル文字列
+/// Shared empty state display (L28). The extension cannot import the main app's L enum, so these are
+/// local strings
 private struct EmptyUsageHistoryView: View {
     let jp: Bool
 
@@ -58,22 +60,22 @@ private struct EmptyUsageHistoryView: View {
     }
 }
 
-// MARK: - 比較チャート (予想 vs 実測)
+// MARK: - Comparison chart (estimate vs measured)
 
 struct ComparisonReportView: View {
     let config: UsageConfiguration
 
     private var jp: Bool { config.isJapanese }
 
-    /// 予想の +20% を超えていたら比較チャート (2本棒) を出す
+    /// Show the comparison chart (2 bars) if the measured value is more than +20% over the estimate
     private var isOverEstimate: Bool {
         config.estimateDailyMinutes > 0 &&
         Double(config.actualDailyMinutes) > Double(config.estimateDailyMinutes) * 1.2
     }
 
-    /// 「8時間以上」(予想の最上ブラケット = 480分) と答えた人は、実測がそれを超えていても
-    /// 本人に驚きは無い (16時間の自覚があって 8+ を選んでいる) ので、
-    /// ショック見出しは出さない (2026-07-17 ユーザー指定の条件分岐)
+    /// People who answered "8時間以上" ("8 hours or more") (the top bracket of the estimate = 480 minutes)
+    /// are not surprised even if the measured value is higher (they chose 8+ knowing they use 16 hours),
+    /// so no shock headline is shown (condition specified by the user 2026-07-17)
     private var isTopBracketEstimate: Bool {
         config.estimateDailyMinutes >= 480
     }
@@ -84,25 +86,28 @@ struct ComparisonReportView: View {
         if showsShockHeadline {
             return jp ? "予想より多く\n使っています" : "You're using more\nthan you thought"
         } else {
-            // 予想が合っていた / 予想の方が多かった / 8時間以上と自覚済み → 淡々と事実の提示
-            return jp ? "実際の使用時間" : "Your actual\nscreen time" // 文言はユーザー添削待ち
+            // Estimate was right / estimate was higher / already aware of 8+ hours → just present the facts
+            // plainly
+            return jp ? "実際の使用時間" : "Your actual\nscreen time" // Wording is waiting for the user's review
         }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            // 上の 72pt は本体側の戻るボタン+プログレスバー (OnboardingTopNav) を
-            // 避けるための余白。少ないと見出しがナビに重なる (2026-07-13 実機FB)
+            // The 72pt at the top is space to avoid the main app's back button + progress bar
+            // (OnboardingTopNav). If it is smaller, the headline overlaps the nav (2026-07-13 real device
+            // feedback)
             Spacer().frame(height: 72)
 
             if config.hasNoUsageHistory {
-                // L28: スクリーンタイム履歴が0件の端末 (実機/シミュレータの初回起動直後など)
+                // L28: devices with 0 Screen Time history (right after the first launch on a real device/simulator,
+                // etc.)
                 Spacer()
                 EmptyUsageHistoryView(jp: jp)
                 Spacer()
             } else {
-                // リファレンス準拠 (2026-07-15 実機FB): 見出しは sans 太字。
-                // serif の濫用をやめる方針 (かっこいい書体を無理に使うと逆にダサい)
+                // Follows the reference (2026-07-15 real device feedback): headlines are bold sans.
+                // Policy of no longer overusing serif (forcing a cool typeface actually looks lame)
                 Text(headline)
                     .font(.system(size: 26, weight: .bold))
                     .foregroundColor(inkColor)
@@ -112,21 +117,22 @@ struct ComparisonReportView: View {
 
                 Spacer()
 
-                // 比較 (予想vs実測の2本棒) はショック演出が成立する時だけ。
-                // 8時間以上と自覚済み / 予想的中の場合は比較自体が不要で、実測の1本棒のみ出す
-                // (2026-07-17 ユーザー指定)
+                // Comparison (2 bars, estimate vs measured) only when the shock effect works.
+                // If the user is already aware of 8+ hours / the estimate was right, no comparison is needed at all;
+                // show only the single measured bar (2026-07-17 user request)
                 if showsShockHeadline {
                     comparisonBars
                 } else {
                     singleBar
                 }
 
-                // チャートを画面中央でなく下寄せにして間延びを消す (2026-07-15 実機FB: 余白が空きすぎ)
+                // Place the chart lower instead of in the center of the screen to remove the stretched look
+                // (2026-07-15 real device feedback: too much empty space)
                 Spacer().frame(height: 44)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black) // 不透明必須 (下のプレースホルダを覆う)
+        .background(Color.black) // Must be opaque (covers the placeholder below)
     }
 
     private let maxChartHeight: CGFloat = 230
@@ -140,9 +146,12 @@ struct ComparisonReportView: View {
 
     private var comparisonBars: some View {
         let refMax = Int(Double(max(config.actualDailyMinutes, config.estimateDailyMinutes, 1)) * 1.08)
-        // 列幅120/130固定+間隔10 (2026-07-17 実機FB: 棒同士の隙間が空きすぎると指摘され28→10に短縮)。
-        // 列幅はそのまま維持 — 「1日の平均使用時間」ラベルが折り返さず収まる最小幅のため
-        // リファレンス準拠: 数値ラベルは sans 太字、棒はやや太め、ラベルは棒の直下
+        // Column width fixed at 120/130 + spacing 10 (2026-07-17 real device feedback: the gap between bars
+        // was too wide, so it was shortened 28→10).
+        // Column width stays as is: it is the minimum width where the "1日の平均使用時間" ("Daily average")
+        // label fits without wrapping
+        // Follows the reference: number labels are bold sans, bars are a bit thick, labels are right under
+        // the bars
         return HStack(alignment: .bottom, spacing: 10) {
             VStack(spacing: 12) {
                 Text(durationLabel(minutes: config.estimateDailyMinutes, jp: jp))
@@ -153,7 +162,7 @@ struct ComparisonReportView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(barGrayColor)
                     .frame(width: 76, height: barHeight(minutes: config.estimateDailyMinutes, referenceMax: refMax))
-                Text(jp ? "自分の予想" : "Your guess") // 文言はリファレンス準拠 (2026-07-15)
+                Text(jp ? "自分の予想" : "Your guess") // Wording follows the reference (2026-07-15)
                     .font(.system(size: 13))
                     .foregroundColor(tertiaryColor)
                     .lineLimit(1)
@@ -170,7 +179,7 @@ struct ComparisonReportView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(inkColor)
                     .frame(width: 76, height: barHeight(minutes: config.actualDailyMinutes, referenceMax: refMax))
-                Text(jp ? "1日の平均使用時間" : "Daily average") // 文言はリファレンス準拠 (2026-07-15)
+                Text(jp ? "1日の平均使用時間" : "Daily average") // Wording follows the reference (2026-07-15)
                     .font(.system(size: 13))
                     .foregroundColor(tertiaryColor)
                     .lineLimit(1)
@@ -189,14 +198,14 @@ struct ComparisonReportView: View {
             RoundedRectangle(cornerRadius: 12)
                 .fill(inkColor)
                 .frame(width: 84, height: 220)
-            Text(jp ? "1日の平均使用時間" : "Daily average") // 文言はリファレンス準拠 (2026-07-15)
+            Text(jp ? "1日の平均使用時間" : "Daily average") // Wording follows the reference (2026-07-15)
                 .font(.system(size: 13))
                 .foregroundColor(tertiaryColor)
         }
     }
 }
 
-// MARK: - 使用量トップ3
+// MARK: - Top 3 by usage
 
 struct TopAppsReportView: View {
     let config: UsageConfiguration
@@ -205,11 +214,11 @@ struct TopAppsReportView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 本体側の戻るボタン+プログレスバーを避ける余白
+            // Space to avoid the main app's back button + progress bar
             Spacer().frame(height: 72)
 
             if config.hasNoUsageHistory {
-                // L28: スクリーンタイム履歴が0件の端末では空のトップ3カードを描画しない
+                // L28: on devices with 0 Screen Time history, do not draw empty top 3 cards
                 Spacer()
                 EmptyUsageHistoryView(jp: jp)
                 Spacer()
@@ -228,18 +237,19 @@ struct TopAppsReportView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black) // 不透明必須 (下のプレースホルダを覆う)
+        .background(Color.black) // Must be opaque (covers the placeholder below)
     }
 
-    /// バーの固定幅。GeometryReader は Report 描画コンテキストで行が縦に伸びる
-    /// レイアウトバグの原因になったため一切使わず、全て固定寸法で組む (2026-07-13 実機FB)
+    /// Fixed width of the bar. GeometryReader caused a layout bug where rows stretch vertically in the
+    /// Report drawing context, so it is not used at all; everything is built with fixed sizes
+    /// (2026-07-13 real device feedback)
     private let barWidth: CGFloat = 280
 
     private var card: some View {
         let maxMinutes = config.apps.map(\.totalMinutes).max() ?? 1
 
         return VStack(alignment: .leading, spacing: 16) {
-            // 値は1日平均のまま、タイトルは短く (リファレンス準拠 2026-07-15)
+            // The value stays the daily average; the title is kept short (follows the reference 2026-07-15)
             Text(jp ? "使用量トップ 3" : "Top 3 by usage")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(secondaryColor)
@@ -258,7 +268,7 @@ struct TopAppsReportView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// 競合準拠の行: [アイコン+名前 ... 時間] の1行 + その下に全幅バー
+    /// Row that follows competitors: one line of [icon + name ... time] + a full-width bar under it
     private func row(app: TopAppEntry, maxMinutes: Int) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
@@ -298,7 +308,7 @@ struct TopAppsReportView: View {
     }
 }
 
-/// Label(ApplicationToken) のアイコン+タイトルをブランドトーンで整える
+/// Styles the icon + title of Label(ApplicationToken) in the brand tone
 private struct TopAppLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 12) {

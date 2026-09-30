@@ -1,20 +1,20 @@
 -- ============================================================
--- Phase A-1: Apple Sign-In + users テーブル作成
+-- Phase A-1: Apple Sign-In + create the users table
 -- ============================================================
--- 目的:
---   1. public.users テーブル（Supabase Auth と連動するアプリ側プロフィール）
---   2. auth.users INSERT 時に public.users 行を自動生成する trigger
+-- Purpose:
+--   1. public.users table (app-side profile linked to Supabase Auth)
+--   2. trigger that creates a public.users row automatically on auth.users INSERT
 --
--- 前提:
---   - Supabase Dashboard で Apple Provider が有効化済み（既に完了）
---   - クライアント側は Apple Sign-In → Supabase Auth signInWithIdToken 経由
+-- Assumptions:
+--   - The Apple Provider is enabled in the Supabase Dashboard (already done)
+--   - The client goes through Apple Sign-In → Supabase Auth signInWithIdToken
 --
--- 実行順序:
---   このファイル → 002 → 003 の順
+-- Run order:
+--   this file → 002 → 003
 -- ============================================================
 
 -- ============================================
--- 1. users テーブル
+-- 1. users table
 -- ============================================
 CREATE TABLE IF NOT EXISTS public.users (
     id           uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -29,7 +29,7 @@ COMMENT ON COLUMN public.users.display_name IS 'Apple Sign-In 初回ログイン
 COMMENT ON COLUMN public.users.avatar_url IS '将来 MyProfile からアップロード予定';
 
 -- ============================================
--- 2. updated_at 自動更新 trigger 用関数
+-- 2. Function for the trigger that updates updated_at automatically
 -- ============================================
 CREATE OR REPLACE FUNCTION public.set_updated_at()
 RETURNS trigger
@@ -48,10 +48,10 @@ CREATE TRIGGER users_set_updated_at
     EXECUTE FUNCTION public.set_updated_at();
 
 -- ============================================
--- 3. auth.users INSERT 時に public.users 自動作成
+-- 3. Create public.users automatically on auth.users INSERT
 -- ============================================
--- Why: クライアント側で insert 漏れがあっても整合性を担保する
--- SECURITY DEFINER: auth スキーマ参照のため必須
+-- Why: keeps data consistent even if the client misses an insert
+-- SECURITY DEFINER: required to reference the auth schema
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -62,14 +62,14 @@ BEGIN
     INSERT INTO public.users (id, display_name)
     VALUES (
         NEW.id,
-        -- Apple Sign-In は初回のみ raw_user_meta_data に full_name を入れる
+        -- Apple Sign-In puts full_name into raw_user_meta_data only the first time
         COALESCE(
             NEW.raw_user_meta_data->>'full_name',
             NEW.raw_user_meta_data->>'name',
             NULL
         )
     )
-    ON CONFLICT (id) DO NOTHING;  -- 万一の重複は無視
+    ON CONFLICT (id) DO NOTHING;  -- ignore a duplicate, just in case
     RETURN NEW;
 END;
 $$;

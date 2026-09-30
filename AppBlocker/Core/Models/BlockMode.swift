@@ -2,7 +2,7 @@
 //  BlockMode.swift
 //  AppBlocker
 //
-//  制限モード定義 - 3つのブロックモード
+//  Restriction mode definitions - the 3 block modes
 //
 
 import Foundation
@@ -10,50 +10,50 @@ import SwiftUI
 
 // MARK: - Block Mode
 
-/// 3つの制限モード
+/// The 3 restriction modes
 enum BlockMode: String, CaseIterable, Identifiable {
-    /// タイマーブロック - 指定時間だけブロック（カウントダウン）
+    /// Timer block - blocks for a set time (countdown)
     case timer = "timer"
 
-    /// スケジュール - DeviceActivitySchedule で時間帯指定ブロック
+    /// Schedule - blocks during time windows set with DeviceActivitySchedule
     case schedule = "schedule"
 
-    /// 位置情報ロック - 特定の場所に入ったらブロック
+    /// Location lock - blocks when the user enters a specific place
     case location = "location"
 
     var id: String { rawValue }
 
-    /// 表示名（日本語フォールバック）
+    /// Display name (Japanese fallback)
     var displayName: String {
         L.blockModeDisplayName(self, .japanese)
     }
 
-    /// 言語対応の表示名
+    /// Localized display name
     func displayName(lang: AppLanguage) -> String {
         L.blockModeDisplayName(self, lang)
     }
 
-    /// 説明文（日本語フォールバック）
+    /// Description (Japanese fallback)
     var description: String {
         L.blockModeDescription(self, .japanese)
     }
 
-    /// 言語対応の説明文
+    /// Localized description
     func description(lang: AppLanguage) -> String {
         L.blockModeDescription(self, lang)
     }
 
-    /// 詳細説明（日本語フォールバック）
+    /// Detailed description (Japanese fallback)
     var detailDescription: String {
         L.blockModeDetail(self, .japanese)
     }
 
-    /// 言語対応の詳細説明
+    /// Localized detailed description
     func detailDescription(lang: AppLanguage) -> String {
         L.blockModeDetail(self, lang)
     }
 
-    /// アイコン名（SF Symbols）
+    /// Icon name (SF Symbols)
     var iconName: String {
         switch self {
         case .timer: return "stopwatch.fill"
@@ -62,7 +62,7 @@ enum BlockMode: String, CaseIterable, Identifiable {
         }
     }
 
-    /// カードの背景色（モノクロブランドのため 3 モード共通トークンを参照）
+    /// Card background color (the brand is monochrome, so all 3 modes use a shared token)
     var accentColor: Color {
         switch self {
         case .timer: return AppColors.modeTimer
@@ -74,7 +74,7 @@ enum BlockMode: String, CaseIterable, Identifiable {
 
 // MARK: - Block Session
 
-/// ブロックセッションの状態
+/// State of a block session
 struct BlockSession: Identifiable, Codable {
     let id: UUID
     let mode: String
@@ -82,10 +82,10 @@ struct BlockSession: Identifiable, Codable {
     let endDate: Date?
     let isActive: Bool
 
-    // タイマーモード用
+    // For timer mode
     let timerConfig: TimerConfig?
 
-    // スケジュールモード用
+    // For schedule mode
     let scheduleConfig: ScheduleConfig?
 
     init(
@@ -113,10 +113,10 @@ struct BlockSession: Identifiable, Codable {
 
 // MARK: - Timer Config
 
-/// タイマーモードの設定
+/// Timer mode settings
 struct TimerConfig: Codable {
-    let durationMinutes: Int  // ブロック時間（分）
-    let endTime: Date         // 終了予定時刻
+    let durationMinutes: Int  // Block duration (minutes)
+    let endTime: Date         // Scheduled end time
 
     init(durationMinutes: Int) {
         self.durationMinutes = durationMinutes
@@ -128,13 +128,13 @@ struct TimerConfig: Codable {
         self.endTime = endTime
     }
 
-    /// 残り時間（秒）
+    /// Remaining time (seconds)
     var remainingSeconds: Int {
         let remaining = Int(endTime.timeIntervalSinceNow)
         return max(0, remaining)
     }
 
-    /// タイマーが終了したか
+    /// Whether the timer has finished
     var isExpired: Bool {
         remainingSeconds <= 0
     }
@@ -142,20 +142,20 @@ struct TimerConfig: Codable {
 
 // MARK: - Schedule Config (Phase 4)
 
-/// スケジュールモードの設定 (複数保持可、上限は ScheduleManager.maxSchedules)
+/// Schedule mode settings (several can be kept, the limit is ScheduleManager.maxSchedules)
 ///
-/// ⚠️ フィールド構成は DeviceActivityMonitorExtension.ScheduleConfigMirror と手動同期すること
-/// (Extension は別ターゲットでこの型を import できない)。
-/// id/isEnabled は複数スケジュール化 (2026-07-15) で追加。旧単一形式の保存データには
-/// 存在しないため decodeIfPresent でフォールバックする (id は移行時に採番され、
-/// AppGroupStorage.getScheduleConfigs が配列形式で即永続化するので以後は安定する)
+/// ⚠️ Keep the fields in sync by hand with DeviceActivityMonitorExtension.ScheduleConfigMirror
+/// (the Extension is a separate target and cannot import this type).
+/// id/isEnabled were added with multi-schedule support (2026-07-15). They do not exist in data saved in
+/// the old single format, so decodeIfPresent falls back (the id is assigned on migration, and
+/// AppGroupStorage.getScheduleConfigs persists it right away in array form, so it is stable after that)
 struct ScheduleConfig: Codable, Identifiable, Equatable {
     let id: UUID
     let startHour: Int
     let startMinute: Int
     let endHour: Int
     let endMinute: Int
-    let weekdays: [Int] // 1=日曜, 2=月曜, ... 7=土曜
+    let weekdays: [Int] // 1=Sunday, 2=Monday, ... 7=Saturday
     var isEnabled: Bool
 
     init(
@@ -164,7 +164,7 @@ struct ScheduleConfig: Codable, Identifiable, Equatable {
         startMinute: Int,
         endHour: Int,
         endMinute: Int,
-        weekdays: [Int] = [2, 3, 4, 5, 6], // デフォルト: 平日
+        weekdays: [Int] = [2, 3, 4, 5, 6], // Default: weekdays
         isEnabled: Bool = true
     ) {
         self.id = id

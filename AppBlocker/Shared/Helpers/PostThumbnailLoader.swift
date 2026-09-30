@@ -2,14 +2,14 @@
 //  PostThumbnailLoader.swift
 //  AppBlocker
 //
-//  投稿サムネイル (M5) 用のダウンサンプル + メモリキャッシュローダー。
-//  投稿v2の焼き込み画像は 1080×1350 前後 (1枚 5.5MB 前後) あり、AsyncImage +
-//  Image(uiImage:) の組み合わせだとプロフィールの 3 列グリッドを開くたびに
-//  表示枚数分のフルデコードが走ってメモリ・CPU を圧迫していた。
-//  ImageIO の CGImageSourceCreateThumbnailAtIndex はデコード時点から縮小するため、
-//  400px サムネなら約 0.6MB で済む。NSCache でセル再出現時の再取得・再デコードも防ぐ。
-//  アバターも表示サイズが小さい (最大 120pt @3x=360px 程度) ので、
-//  AvatarImage (L5) からも同じキャッシュ/デコード経路を共用する。
+//  Downsample + memory cache loader for post thumbnails (M5).
+//  Post v2 baked-in images are around 1080×1350 (around 5.5MB each), and with AsyncImage +
+//  Image(uiImage:), every time the 3-column profile grid was opened a full decode ran
+//  for every visible image, putting pressure on memory and CPU.
+//  ImageIO's CGImageSourceCreateThumbnailAtIndex downscales from decode time, so
+//  a 400px thumbnail takes only about 0.6MB. NSCache also prevents re-fetching and re-decoding when a
+//  cell reappears. Avatars are also shown small (at most about 120pt @3x=360px), so
+//  AvatarImage (L5) shares the same cache/decode path.
 //
 
 import UIKit
@@ -19,19 +19,19 @@ final class PostThumbnailLoader {
 
     static let shared = PostThumbnailLoader()
 
-    /// サムネイルの最大辺ピクセル数。グリッド/アバターいずれの表示サイズも十分にカバーする
+    /// Max pixel size of the longest side of a thumbnail. Covers the display size of both the grid and avatars
     private static let maxPixelSize: CGFloat = 400
 
-    /// デコード済み UIImage の URL 単位メモリキャッシュ。
-    /// NSCache はスレッドセーフなので、複数セルからの同時アクセスでもロック不要
+    /// Per-URL memory cache of decoded UIImages.
+    /// NSCache is thread-safe, so no lock is needed even with concurrent access from multiple cells
     private let cache = NSCache<NSURL, UIImage>()
 
     private init() {
         cache.countLimit = 300
     }
 
-    /// URL からダウンサンプル済みサムネイルを取得する。
-    /// キャッシュヒット時はネットワーク・デコードを両方スキップして即座に返す
+    /// Get a downsampled thumbnail from a URL.
+    /// On a cache hit, skip both network and decode and return immediately
     func thumbnail(for url: URL) async -> UIImage? {
         if let cached = cache.object(forKey: url as NSURL) {
             return cached
@@ -39,21 +39,22 @@ final class PostThumbnailLoader {
 
         do {
             var request = URLRequest(url: url)
-            // URLSession.shared 標準の URLCache に乗せる (M18 で拡張予定のキャッシュ層の恩恵を受ける)
+            // Use the standard URLCache of URLSession.shared (benefits from the cache layer planned to be expanded
+            // in M18)
             request.cachePolicy = .returnCacheDataElseLoad
             let (data, _) = try await URLSession.shared.data(for: request)
             guard let thumbnail = Self.downsample(data: data) else { return nil }
             cache.setObject(thumbnail, forKey: url as NSURL)
             return thumbnail
         } catch {
-            // 実機FB#1 真因: 呼び出し元 (LazyVGrid セル) の再出現/レイアウト揺れで
-            // Task がキャンセルされると URLSession は URLError(.cancelled)
-            // (まれに CancellationError) を投げるが、従来は「本当のロード失敗」と
-            // 同一視して警告ログを出し nil を返していた。呼び出し側がその nil を
-            // 恒久失敗として @State に保存し、画像投稿が石背景 (QuoteBackgroundView)
-            // に化けたまま戻らなくなる不具合につながっていた。
-            // ここではログを分けるだけで返り値契約 (nil を返す) は変えない。
-            // キャンセル時に @State を書かない対策は呼び出し側 (UserPostGridCell) で行う。
+            // Real cause of real device feedback #1: when the Task is cancelled because the caller (LazyVGrid cell)
+            // reappears or the layout shifts, URLSession throws URLError(.cancelled)
+            // (rarely CancellationError), but before this it was treated the same as a "real load failure",
+            // logging a warning and returning nil. The caller saved that nil to @State as
+            // a permanent failure, which led to the bug where an image post turned into the stone background
+            // (QuoteBackgroundView) and never came back.
+            // Here we only separate the logs and do not change the return contract (returns nil).
+            // Not writing @State on cancellation is handled by the caller (UserPostGridCell).
             let isCancellation = error is CancellationError || (error as? URLError)?.code == .cancelled
             if isCancellation {
                 print("ℹ️ PostThumbnailLoader: cancelled for \(url)")
@@ -64,8 +65,8 @@ final class PostThumbnailLoader {
         }
     }
 
-    /// ImageIO でフルデコードを避けてサムネイルだけを作る
-    /// (1080×1350 のフルデコード 約5.5MB が 400px サムネ 約0.6MB になる)
+    /// Avoid a full decode with ImageIO and make only the thumbnail
+    /// (a 1080×1350 full decode of about 5.5MB becomes a 400px thumbnail of about 0.6MB)
     private static func downsample(data: Data) -> UIImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
 

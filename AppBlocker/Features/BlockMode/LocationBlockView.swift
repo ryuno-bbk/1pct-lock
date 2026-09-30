@@ -2,8 +2,8 @@
 //  LocationBlockView.swift
 //  AppBlocker
 //
-//  位置情報ベースのロック設定画面（HomeView 内に埋め込まれる Content View）
-//  特定の場所に入ったらアプリをロック
+//  Location-based lock settings screen (Content View embedded in HomeView)
+//  Locks apps when the user enters a specific place
 //
 
 import SwiftUI
@@ -14,7 +14,8 @@ import MapKit
 struct LocationBlockView: View {
     @ObservedObject private var locationManager = LocationManager.shared
     @ObservedObject private var blockingService = BlockingService.shared
-    // 2026-07-19 ゲート方針転換: 設定 (場所の追加・編集) は無料、実行 (ON) の瞬間に課金ゲート
+    // 2026-07-19 gate policy change: settings (adding/editing places) are free, the paywall appears at the
+    // moment of running it (ON)
     @ObservedObject private var proAccess = ProAccess.shared
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
 
@@ -23,24 +24,28 @@ struct LocationBlockView: View {
     }
 
     @State private var showProPaywall = false
-    /// 無課金で場所を保存した直後の説明アラート (保存はされている・実行には課金、を一拍で伝える)
+    /// Explanation alert right after a non-paying user saves a place (tells in one beat that it is saved
+    /// but running it requires a purchase)
     @State private var showLockedSavedAlert = false
     @State private var showAddLocationSheet = false
     @State private var showAppPicker = false
     @State private var appSelection: FamilyActivitySelection = FamilyActivitySelection()
     @State private var showDeleteConfirmation = false
     @State private var locationToDelete: RegisteredLocation?
-    /// カードタップで開く編集シートの対象 (2026-07-15 実機FB: 場所も後から編集できるように)
+    /// Target of the edit sheet opened by tapping a card (2026-07-15 real-device feedback: places should also
+    /// be editable later)
     @State private var editingLocation: RegisteredLocation?
 
     var body: some View {
         VStack(spacing: 24) {
-            // 権限に問題がある時だけ先頭でカード警告 (機能がブロックされるため)
-            // B-3: "使用中のみ許可" はバックグラウンドで動作しないため、専用の警告を出す
-            // 実機FB第7弾 (2026-07-15): 「位置情報の利用/常に許可」の状態ピルは不要と判断し撤去。
-            // 許可は場所追加の瞬間にシステムモーダルで取る方針に変更 (addLocationButton 参照)。
-            // authorizationSection は事前催促をやめるため .notDetermined では出さず、
-            // denied/restricted (= 一度拒否されて操作が必要) の時のみ出す
+            // Show a warning card at the top only when there is a permission problem (the feature is blocked)
+            // B-3: "使用中のみ許可" ("Allow While Using") does not work in the background, so a dedicated warning is shown
+            // Real-device feedback round 7 (2026-07-15): the "location use / always allow" status pill was judged
+            // unnecessary and removed.
+            // Changed the policy to ask for permission with the system modal at the moment a place is added (see
+            // addLocationButton).
+            // authorizationSection no longer nags in advance, so it is not shown for .notDetermined,
+            // only for denied/restricted (= denied once, the user needs to act)
             if locationManager.authorizationStatus == .authorizedWhenInUse {
                 whenInUseWarningSection
             } else if locationManager.authorizationStatus == .denied
@@ -48,15 +53,15 @@ struct LocationBlockView: View {
                 authorizationSection
             }
 
-            // 場所一覧 + 追加 (モード固有UIを上に)
+            // Place list + add (mode-specific UI at the top)
             registeredLocationsSection
             addLocationButton
 
-            // アプリ選択は最下部 = 他モードと同じ位置 (共通部品)
+            // App selection is at the bottom = the same position as the other modes (shared component)
             AppSelectCard(
                 selection: appSelection,
                 lang: lang,
-                subtitle: lang == .japanese ? "全ての場所で共通" : "Shared across places" // 文言はユーザー添削待ち
+                subtitle: lang == .japanese ? "全ての場所で共通" : "Shared across places" // Copy waiting for user review
             ) {
                 showAppPicker = true
             }
@@ -70,7 +75,8 @@ struct LocationBlockView: View {
         .sheet(isPresented: $showProPaywall) {
             ProPaywallView(triggeredBy: .location)
         }
-        // FB#11 (2026-07-21): 保存後の説明は alert からカスタムシートに格上げ。文言はユーザー添削待ち
+        // FB#11 (2026-07-21): the post-save explanation was upgraded from an alert to a custom sheet. Copy
+        // waiting for user review
         .sheet(isPresented: $showLockedSavedAlert) {
             LockedSavedNoticeSheet(
                 title: lang == .japanese
@@ -80,7 +86,7 @@ struct LocationBlockView: View {
                     ? "登録した場所は保存されています。有効にするには 1% エリートに参加してください。"
                     : "Your place is saved. Join 1% Elite to turn it on.",
                 onSeeElite: {
-                    // シート同士の presentation 衝突回避 (presentPaywallAfterSheet と同じ理由の遅延)
+                    // Avoid a presentation conflict between sheets (a delay for the same reason as presentPaywallAfterSheet)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
                         showProPaywall = true
                     }
@@ -106,21 +112,21 @@ struct LocationBlockView: View {
             }
         }
         .onAppear {
-            // 権限状態を再チェック
+            // Recheck the permission state
             locationManager.refreshAuthorizationStatus()
 
-            // 保存された選択を読み込み
+            // Load the saved selection
             if let saved = locationManager.loadSelection() {
                 appSelection = saved
             }
 
-            // 現在地が登録済みの場所の範囲内かチェック
+            // Check whether the current location is within the range of a registered place
             locationManager.checkCurrentLocationAgainstAllGeofences()
         }
     }
 
-    /// 追加/編集シートが閉じ切ってから説明アラートを出す (シートとの presentation 衝突回避 —
-    /// HomeView の jumpToModeFromSheet と同じ理由の遅延)
+    /// Show the explanation alert after the add/edit sheet has fully closed (avoids a presentation conflict
+    /// with the sheet, a delay for the same reason as jumpToModeFromSheet in HomeView)
     private func presentPaywallAfterSheet() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
             showLockedSavedAlert = true
@@ -170,7 +176,7 @@ struct LocationBlockView: View {
             }
             .buttonStyle(.plain)
 
-            // 設定アプリを開くボタン
+            // Button that opens the Settings app
             Button(action: {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
                     UIApplication.shared.open(url)
@@ -191,7 +197,8 @@ struct LocationBlockView: View {
 
     // MARK: - When In Use Warning Section (B-3)
 
-    /// "使用中のみ許可" のままだとバックグラウンドでジオフェンスが機能しないための専用警告
+    /// Dedicated warning because geofences do not work in the background while it stays at
+    /// "使用中のみ許可" ("Allow While Using")
     private var whenInUseWarningSection: some View {
         VStack(spacing: 16) {
             HStack(spacing: 8) {
@@ -208,7 +215,7 @@ struct LocationBlockView: View {
                 .foregroundColor(AppColors.textSecondary)
                 .multilineTextAlignment(.center)
 
-            // 設定アプリを開くボタン
+            // Button that opens the Settings app
             Button(action: {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
                     UIApplication.shared.open(url)
@@ -257,8 +264,9 @@ struct LocationBlockView: View {
                 )
             } else {
                 ForEach(locationManager.registeredLocations) { location in
-                    // 左スワイプ→赤い削除 (確認 alert は既存のものを流用)、タップ→編集シート
-                    // (タップは SwipeRevealDelete の onTap で受ける — カード内 Button はスワイプ誤爆する)
+                    // Swipe left → red delete (reuses the existing confirmation alert), tap → edit sheet
+                    // (taps are received by onTap of SwipeRevealDelete, because a Button inside the card fires by mistake
+                    // on swipes)
                     SwipeRevealDelete(
                         onDelete: {
                             locationToDelete = location
@@ -277,14 +285,14 @@ struct LocationBlockView: View {
 
     private func locationCard(for location: RegisteredLocation) -> some View {
         let isActive = locationManager.activeLocationIds.contains(location.id)
-        // FB#11: 無課金 かつ OFF (=このカードは実行できない) の時だけ下端ストリップとロック錠を出す
+        // FB#11: show the bottom strip and the padlock only for non-paying + OFF (= this card cannot run)
         let isLocked = !proAccess.canAccess(.location) && !location.isEnabled
 
         return VStack(spacing: 0) {
             HStack(spacing: 12) {
-                // タップ (編集) は SwipeRevealDelete 側の onTap で処理する (Button 禁止 — スワイプ誤爆)
-                // FB#11改 (2026-07-22 実機FB): 減光は情報部 (アイコン+テキスト) のみ。
-                // トグル/ロック錠バッジまで 55% にすると「何のボタンかわからない」暗さになる
+                // Taps (edit) are handled by onTap on the SwipeRevealDelete side (no Button, it fires by mistake on swipes)
+                // FB#11 revised (2026-07-22 real-device feedback): only the info part (icon + text) is dimmed.
+                // Dimming the toggle/padlock badge to 55% too makes it so dark that "you can't tell what the button is"
                 HStack(spacing: 12) {
                     Image(systemName: "mappin.circle.fill")
                         .font(.system(size: 22))
@@ -313,17 +321,17 @@ struct LocationBlockView: View {
 
                 Spacer(minLength: 8)
 
-                // トグル (settle 付き: 圏内で ON にすると即時シールド書き込みが走りフリーズするため、
-                // timer と同じ PreparingLockOverlay で操作を封じる — フリーズ調査 2026-07-15)
+                // Toggle (with settle: turning it ON while inside the area writes the shield immediately and freezes,
+                // so input is blocked with the same PreparingLockOverlay as timer. Freeze investigation 2026-07-15)
                 if isLocked {
-                    // 無課金ゲート: トグルの代わりに「OFFトグル+錠前バッジ」(2026-07-21 FB#11)
+                    // Gate for non-paying users: instead of a toggle, an "OFF toggle + padlock badge" (2026-07-21 FB#11)
                     LockedToggleBadge(action: { showProPaywall = true })
                 } else {
                     Toggle("", isOn: Binding(
                         get: { location.isEnabled },
                         set: { newValue in
-                            // ONへの切替 = 実行の瞬間の課金ゲート (通常はロック錠表示で到達しないが、
-                            // 購読失効直後の残存ON等の保険)
+                            // Switching to ON = the paywall at the moment of running (normally not reachable because the padlock is
+                            // shown, but a safety net for things like a leftover ON right after the subscription expired)
                             if newValue && !proAccess.canAccess(.location) {
                                 showProPaywall = true
                             } else {
@@ -338,7 +346,8 @@ struct LocationBlockView: View {
             .padding(16)
 
             if isLocked {
-                // FB#11改: CTA色ベタ塗り初版はユーザー却下 → 静音ストリップ (LockedRunStrip 参照)
+                // FB#11 revised: the first version with a solid CTA color fill was rejected by the user → a quiet strip
+                // (see LockedRunStrip)
                 LockedRunStrip(lang: lang, action: { showProPaywall = true })
             }
         }
@@ -346,28 +355,29 @@ struct LocationBlockView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
-    // MARK: - Add Location Button (CTA 級 — 2026-07-15 実機FB)
+    // MARK: - Add Location Button (CTA level, 2026-07-15 real-device feedback)
 
     private var addLocationButton: some View {
         VStack(spacing: 8) {
             PrimaryButton(
-                lang == .japanese ? "場所を追加" : "Add place", // 文言はユーザー添削待ち
+                lang == .japanese ? "場所を追加" : "Add place", // Copy waiting for user review
                 icon: "plus",
-                // .notDetermined はここでシステムの許可モーダルを出す方針 (下記 action 参照) なので
-                // isDisabled では弾かない。それ以外の未許可 (denied/restricted) は authorizationSection
-                // 側で案内するためここは押させない
+                // .notDetermined is not rejected by isDisabled, because the policy is to show the system permission
+                // modal here (see action below). Other unauthorized states (denied/restricted) are guided by
+                // authorizationSection, so the button cannot be pressed here
                 isDisabled: (!locationManager.isAuthorized && locationManager.authorizationStatus != .notDetermined)
                     || !locationManager.canAddLocation
             ) {
-                // 事前催促カード廃止・場所追加時に要求 (2026-07-15 実機FB)。
-                // .notDetermined ならここで初めてシステムの許可モーダルを出す
+                // Removed the advance nag card, permission is requested when adding a place (2026-07-15 real-device
+                // feedback).
+                // If .notDetermined, the system permission modal is shown here for the first time
                 if locationManager.authorizationStatus == .notDetermined {
                     locationManager.requestAuthorization()
                 }
                 showAddLocationSheet = true
             }
 
-            // B-4: iOS のジオフェンス同時監視上限 (20) に達している場合の注記
+            // B-4: note shown when the iOS limit on concurrently monitored geofences (20) has been reached
             if locationManager.isAuthorized && !locationManager.canAddLocation {
                 Text(L.locationLimitNote(lang))
                     .font(AppTypography.caption1)
@@ -376,7 +386,8 @@ struct LocationBlockView: View {
         }
     }
 
-    // statusSection は廃止 (2026-07-15 モックv1): 「現在ここ」ドットが各場所カードにあり重複だった
+    // statusSection was removed (2026-07-15 mock v1): each place card already has a "you are here" dot, so
+    // it was a duplicate
 }
 
 // MARK: - Add Location View
@@ -384,34 +395,39 @@ struct LocationBlockView: View {
 struct AddLocationView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var locationManager: LocationManager
-    /// 編集対象。nil = 新規追加 (2026-07-15 実機FB: カードタップで場所を編集できるように)
+    /// Edit target. nil = add new (2026-07-15 real-device feedback: tapping a card should let the user edit
+    /// the place)
     let existing: RegisteredLocation?
 
-    // 2026-07-17: このシートは日本語ハードコードだったため英語対応 (英語なし17件の解消)
+    // 2026-07-17: this sheet had hardcoded Japanese, so English support was added (fixes 17 strings with
+    // no English)
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
     private var lang: AppLanguage { AppLanguage(rawValue: mainLanguageRaw) ?? .english }
 
     @State private var name: String = ""
-    /// 追加/編集シートを「保存」で閉じたが無課金で OFF 保存になった場合に親へ通知する
-    /// (親がシートの閉じ切りを待ってペイウォールを出す)
+    /// Notifies the parent when the add/edit sheet was closed with "保存" ("Save") but it was saved as OFF
+    /// because the user is not paying
+    /// (the parent waits for the sheet to finish closing and then shows the paywall)
     var onSavedWhileLocked: (() -> Void)? = nil
 
     @State private var radius: Double = 100
     @State private var selectedCoordinate: CLLocationCoordinate2D?
     @State private var showDeleteConfirmation = false
-    // 地図の軽量検索 (2026-07-15 実機FB: スワイプで場所を探すのがだるい)。送信時のみ MKLocalSearch
+    // Lightweight map search (2026-07-15 real-device feedback: finding a place by swiping is tedious).
+    // MKLocalSearch only on submit
     @State private var searchQuery: String = ""
     @State private var isSearching = false
     @State private var searchFailed = false
     @State private var region = MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 35.6762, longitude: 139.6503), // 東京
+        center: CLLocationCoordinate2D(latitude: 35.6762, longitude: 139.6503), // Tokyo
         span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
     )
 
-    // M12 (2026-07-21 確定): 50m はこの理由で提供しない — iOS のジオフェンスは
-    // 半径100m未満だと検知の遅延・取りこぼしが増え信頼性が落ちる (Apple推奨の実用下限は~100m)。
-    // LocationManager.loadLocations 側の max(100, radius) クランプ（既存データの引き上げ）は
-    // 正当な防衛として維持し、選択肢自体からも 50 を外して二重に矛盾しないようにする
+    // M12 (confirmed 2026-07-21): 50m is not offered for this reason: iOS geofences with a radius under
+    // 100m have more detection delay and misses and are less reliable (Apple's recommended practical
+    // minimum is ~100m).
+    // The max(100, radius) clamp in LocationManager.loadLocations (raising existing data) is kept as a
+    // valid defense, and 50 is also removed from the options themselves so the two do not contradict
     private let radiusOptions: [Double] = [100, 200, 500, 1000]
 
     init(locationManager: LocationManager,
@@ -421,7 +437,7 @@ struct AddLocationView: View {
         self.existing = existing
         self.onSavedWhileLocked = onSavedWhileLocked
 
-        // 編集モード: 既存の値をプリフィルし、地図も登録地点を中心にする
+        // Edit mode: prefill the existing values and center the map on the registered location
         if let existing {
             _name = State(initialValue: existing.name)
             _radius = State(initialValue: existing.radius)
@@ -441,13 +457,13 @@ struct AddLocationView: View {
 
                 ScrollView {
                     VStack(spacing: 24) {
-                        // 名前入力
+                        // Name input
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(lang == .japanese ? "場所の名前" : "Place name") // 文言はユーザー添削待ち
+                            Text(lang == .japanese ? "場所の名前" : "Place name") // Copy waiting for user review
                                 .font(AppTypography.headline)
                                 .foregroundColor(AppColors.textSecondary)
 
-                            TextField(lang == .japanese ? "例: カフェ、職場、図書館" : "e.g. Café, office, library", text: $name) // 文言はユーザー添削待ち
+                            TextField(lang == .japanese ? "例: カフェ、職場、図書館" : "e.g. Café, office, library", text: $name) // Copy waiting for user review
                                 .font(AppTypography.body)
                                 .padding(16)
                                 .background(
@@ -457,9 +473,9 @@ struct AddLocationView: View {
                                 .foregroundColor(AppColors.textPrimary)
                         }
 
-                        // 地図
+                        // Map
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(lang == .japanese ? "場所を選択（タップして選択）" : "Pick a spot (tap the map)") // 文言はユーザー添削待ち
+                            Text(lang == .japanese ? "場所を選択（タップして選択）" : "Pick a spot (tap the map)") // Copy waiting for user review
                                 .font(AppTypography.headline)
                                 .foregroundColor(AppColors.textSecondary)
 
@@ -470,19 +486,19 @@ struct AddLocationView: View {
                             )
                             .frame(height: 250)
                             .cornerRadius(16)
-                            // 地図の上に半透明の検索バー (2026-07-15 実機FB)
+                            // Semi-transparent search bar on top of the map (2026-07-15 real-device feedback)
                             .overlay(alignment: .top) {
                                 mapSearchBar
                                     .padding(10)
                             }
 
                             if searchFailed {
-                                Text(lang == .japanese ? "見つかりませんでした" : "No results found") // 文言はユーザー添削待ち
+                                Text(lang == .japanese ? "見つかりませんでした" : "No results found") // Copy waiting for user review
                                     .font(AppTypography.caption1)
                                     .foregroundColor(AppColors.textSecondary)
                             }
 
-                            // 現在地ボタン
+                            // Current location button
                             Button {
                                 if let location = locationManager.currentLocation {
                                     region.center = location.coordinate
@@ -493,21 +509,21 @@ struct AddLocationView: View {
                             } label: {
                                 HStack {
                                     Image(systemName: "location.fill")
-                                    Text(lang == .japanese ? "現在地を使用" : "Use current location") // 文言はユーザー添削待ち
+                                    Text(lang == .japanese ? "現在地を使用" : "Use current location") // Copy waiting for user review
                                 }
                                 .font(AppTypography.caption1)
                                 .foregroundColor(AppColors.textSecondary)
                             }
                         }
 
-                        // 半径選択 (serif廃止 — UI文字はsansに統一、2026-07-15 実機FB)
+                        // Radius selection (serif removed, UI text unified to sans. 2026-07-15 real-device feedback)
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(lang == .japanese ? "半径: \(Int(radius))m" : "Radius: \(Int(radius))m") // 文言はユーザー添削待ち
+                            Text(lang == .japanese ? "半径: \(Int(radius))m" : "Radius: \(Int(radius))m") // Copy waiting for user review
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundColor(AppColors.textPrimary)
 
-                            // 均等幅ピル: 固定 padding だと 4 個目 (1000m) が押されて潰れる
-                            // (実機FB 2026-07-15) ため、行全体に等分で広げる
+                            // Equal-width pills: with fixed padding the 4th one (1000m) gets squeezed
+                            // (real-device feedback 2026-07-15), so they are spread evenly across the whole row
                             HStack(spacing: 8) {
                                 ForEach(radiusOptions, id: \.self) { option in
                                     Button {
@@ -527,13 +543,13 @@ struct AddLocationView: View {
                             }
                         }
 
-                        // 追加/保存ボタン
+                        // Add/save button
                         Button {
                             saveLocation()
                         } label: {
                             Text(existing == nil
                                  ? (lang == .japanese ? "場所を追加" : "Add place")
-                                 : (lang == .japanese ? "保存" : "Save")) // 文言はユーザー添削待ち
+                                 : (lang == .japanese ? "保存" : "Save")) // Copy waiting for user review
                                 .font(AppTypography.buttonMedium)
                                 .foregroundColor(canAdd ? AppColors.background : AppColors.textSecondary)
                                 .frame(maxWidth: .infinity)
@@ -545,10 +561,10 @@ struct AddLocationView: View {
                         }
                         .disabled(!canAdd)
 
-                        // 名前が必須なことが伝わらず混乱する (実機FB 2026-07-15) ため、
-                        // 無効時は不足しているものを明示する
+                        // Users were confused because it was not clear that the name is required (real-device feedback
+                        // 2026-07-15), so when disabled, show explicitly what is missing
                         if let hint = missingRequirementHint {
-                            Text(hint) // 文言はユーザー添削待ち
+                            Text(hint) // Copy waiting for user review
                                 .font(AppTypography.caption1)
                                 .foregroundColor(AppColors.textSecondary)
                                 .frame(maxWidth: .infinity)
@@ -556,7 +572,7 @@ struct AddLocationView: View {
                                 .padding(.top, -12)
                         }
 
-                        // 編集モードのみ: 削除 (ミュートした destructive アウトライン、スケジュール編集と同型)
+                        // Edit mode only: delete (muted destructive outline, same style as schedule editing)
                         if existing != nil {
                             Button {
                                 showDeleteConfirmation = true
@@ -564,7 +580,7 @@ struct AddLocationView: View {
                                 HStack {
                                     Image(systemName: "trash")
                                         .font(.system(size: 15))
-                                    Text(lang == .japanese ? "場所を削除" : "Delete place") // 文言はユーザー添削待ち
+                                    Text(lang == .japanese ? "場所を削除" : "Delete place") // Copy waiting for user review
                                         .font(AppTypography.buttonMedium)
                                 }
                                 .foregroundColor(AppColors.error)
@@ -582,7 +598,7 @@ struct AddLocationView: View {
             }
             .navigationTitle(existing == nil
                              ? (lang == .japanese ? "場所を追加" : "Add Place")
-                             : (lang == .japanese ? "場所を編集" : "Edit Place")) // 文言はユーザー添削待ち
+                             : (lang == .japanese ? "場所を編集" : "Edit Place")) // Copy waiting for user review
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -603,10 +619,10 @@ struct AddLocationView: View {
             } message: {
                 Text(lang == .japanese
                      ? "「\(existing?.name ?? name)」を削除しますか？"
-                     : "Delete \"\(existing?.name ?? name)\"?") // 文言はユーザー添削待ち
+                     : "Delete \"\(existing?.name ?? name)\"?") // Copy waiting for user review
             }
             .onAppear {
-                // 現在地を中心にする (新規のみ。編集時は登録地点を中心にしたまま動かさない)
+                // Center on the current location (new only. When editing, keep the registered location centered)
                 guard existing == nil else { return }
                 if let location = locationManager.currentLocation {
                     region.center = location.coordinate
@@ -620,18 +636,19 @@ struct AddLocationView: View {
         !name.isEmpty && selectedCoordinate != nil
     }
 
-    /// 追加ボタンが無効な理由 (両方欠けている時は先に済ませるべき地図選択を案内)
+    /// Reason the add button is disabled (if both are missing, guide to the map selection first, since it
+    /// should be done first)
     private var missingRequirementHint: String? {
         if selectedCoordinate == nil {
-            return lang == .japanese ? "地図をタップして場所を選んでください" : "Tap the map to pick a spot" // 文言はユーザー添削待ち
+            return lang == .japanese ? "地図をタップして場所を選んでください" : "Tap the map to pick a spot" // Copy waiting for user review
         }
         if name.isEmpty {
-            return lang == .japanese ? "場所の名前を入力してください" : "Give this place a name" // 文言はユーザー添削待ち
+            return lang == .japanese ? "場所の名前を入力してください" : "Give this place a name" // Copy waiting for user review
         }
         return nil
     }
 
-    // MARK: - Map Search (軽量: 送信時のみ検索、先頭ヒットへ移動)
+    // MARK: - Map Search (lightweight: searches only on submit, moves to the first hit)
 
     private var mapSearchBar: some View {
         HStack(spacing: 8) {
@@ -639,7 +656,7 @@ struct AddLocationView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(AppColors.textSecondary)
 
-            TextField(lang == .japanese ? "場所を検索" : "Search places", text: $searchQuery) // 文言はユーザー添削待ち
+            TextField(lang == .japanese ? "場所を検索" : "Search places", text: $searchQuery) // Copy waiting for user review
                 .font(.system(size: 13))
                 .foregroundColor(AppColors.textPrimary)
                 .submitLabel(.search)
@@ -653,7 +670,8 @@ struct AddLocationView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        // 地図の上で沈まないよう不透明寄りに (2026-07-15 実機FB: ultraThin だと透けすぎ)
+        // Close to opaque so it does not sink into the map (2026-07-15 real-device feedback: ultraThin was too
+        // see-through)
         .background(Capsule().fill(Color.black.opacity(0.72)))
         .environment(\.colorScheme, .dark)
     }
@@ -682,8 +700,8 @@ struct AddLocationView: View {
                     span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
                 )
                 selectedCoordinate = coordinate
-                // 検索ヒットに連動して場所の名前も常に更新する (2026-07-15 実機FB)。
-                // ユーザーが直したい場合はこの後で自由に編集できる
+                // Always update the place name along with the search hit (2026-07-15 real-device feedback).
+                // If the user wants to change it, they can edit it freely afterwards
                 if let itemName = item.name {
                     name = itemName
                 }
@@ -694,12 +712,14 @@ struct AddLocationView: View {
     private func saveLocation() {
         guard let coordinate = selectedCoordinate else { return }
 
-        // settle 付きラッパー経由 (フリーズ調査 2026-07-15): 追加/編集地点の圏内に居ると
-        // 即時シールド書き込みが走るため、PreparingLockOverlay で enforcement 起動レースを避ける
+        // Through the wrapper with settle (freeze investigation 2026-07-15): if the user is inside the area of
+        // the added/edited place, the shield is written immediately, so PreparingLockOverlay avoids the
+        // enforcement startup race
         if let existing {
-            // 編集: id は保持したまま更新 (ジオフェンスは updateLocation が再登録する)。
-            // H8: 失効ユーザーが座標・半径を自由に変更し続けられる穴があったため、
-            // 新規追加と同じ課金ゲートを適用する (ScheduleBlockView の isEnabled ゲートと同型、2026-07-21 監査対応)
+            // Edit: update while keeping the id (updateLocation re-registers the geofence).
+            // H8: there was a hole where an expired user could keep changing coordinates and radius freely,
+            // so the same paywall gate as adding new is applied (same pattern as the isEnabled gate in
+            // ScheduleBlockView, 2026-07-21 audit fix)
             let canRun = ProAccess.shared.canAccess(.location)
             var updated = existing
             updated.name = name
@@ -708,13 +728,15 @@ struct AddLocationView: View {
             updated.radius = radius
             updated.isEnabled = existing.isEnabled && canRun
             Task { await BlockingService.shared.updateLocationWithSettle(updated) }
-            // ONだったものが課金失効でOFFに落ちた場合のみ、保存後にペイウォール導線の説明アラートを出す
+            // Only when something that was ON dropped to OFF because the purchase expired, show the explanation
+            // alert leading to the paywall after saving
             if existing.isEnabled && !canRun {
                 onSavedWhileLocked?()
             }
         } else {
-            // 無課金は必ず OFF で保存 (設定は無料・実行には課金のゲート方針 2026-07-19)。
-            // 保存後、親がペイウォールを出して「ONには課金が要る」ことをその場で伝える
+            // Non-paying users always save as OFF (gate policy: settings are free, running requires a purchase,
+            // 2026-07-19).
+            // After saving, the parent shows the paywall to tell the user right there that "ON requires a purchase"
             let canRun = ProAccess.shared.canAccess(.location)
             let location = RegisteredLocation(
                 name: name,
@@ -754,17 +776,17 @@ struct MapViewWithPin: UIViewRepresentable {
     func updateUIView(_ mapView: MKMapView, context: Context) {
         mapView.setRegion(region, animated: true)
 
-        // 既存のアノテーションとオーバーレイを削除
+        // Remove existing annotations and overlays
         mapView.removeAnnotations(mapView.annotations)
         mapView.removeOverlays(mapView.overlays)
 
-        // 選択された座標にピンを追加
+        // Add a pin at the selected coordinate
         if let coordinate = selectedCoordinate {
             let annotation = MKPointAnnotation()
             annotation.coordinate = coordinate
             mapView.addAnnotation(annotation)
 
-            // 半径の円を追加
+            // Add the radius circle
             let circle = MKCircle(center: coordinate, radius: radius)
             mapView.addOverlay(circle)
         }

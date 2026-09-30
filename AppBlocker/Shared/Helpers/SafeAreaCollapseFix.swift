@@ -2,19 +2,22 @@
 //  SafeAreaCollapseFix.swift
 //  AppBlocker
 //
-//  実機FB#6 (ヘッダー食い込みバグ) の恒久ワークアラウンド。
+//  Permanent workaround for real device feedback #6 (header cut-in bug).
 //
-//  確定した事実 (2026-07-25、DebugSafeAreaProbe のスクショ実測):
-//    MyProfileView (透過ツールバー + ignoresSafeArea(.top) ヒーロー) から push した画面
-//    (投稿フィード/通知) で、まれに上セーフエリア+ナビバーのインセットが丸ごと消え、
-//    コンテンツが画面最上端から描画される (y:0 / win:62 — UIKit は正しい値を保持している)。
-//    トリガーは投稿シート閉鎖直後の疑い。SwiftUI 内部のバー連携の崩壊で、
-//    toolbarBackground(.visible) 明示でも直らないことを実測済み。
+//  Confirmed facts (2026-07-25, measured from DebugSafeAreaProbe screenshots):
+//    On screens pushed from MyProfileView (transparent toolbar + ignoresSafeArea(.top) hero)
+//    (post feed/notifications), the top safe area + nav bar insets occasionally disappear
+//    completely, and the content is drawn from the very top of the screen (y:0 / win:62: UIKit keeps
+//    the correct value).
+//    The trigger is suspected to be right after the post sheet closes. It is a breakdown of SwiftUI's
+//    internal bar coordination, and we measured that it is not fixed even with an explicit
+//    toolbarBackground(.visible).
 //
-//  対処: 「UIKit が報告する正しいセーフエリアと、SwiftUI レイアウトの実測値の食い違い」を
-//  検知した時だけ、失われた分 (ステータスバー + ナビバー標準高 44pt) を明示的に補う。
-//  正常時 (minY > 0) は何もしないため、誤発動は構造上起きない。
-//  Release にも含める (計装 DebugSafeAreaProbe とは別物)。
+//  Fix: only when a "mismatch between the correct safe area reported by UIKit and the measured
+//  SwiftUI layout" is detected, explicitly add back what was lost (status bar + standard nav bar
+//  height 44pt).
+//  When normal (minY > 0) it does nothing, so false triggers structurally cannot happen.
+//  Included in Release too (separate from the DebugSafeAreaProbe instrumentation).
 //
 
 import SwiftUI
@@ -38,9 +41,10 @@ struct SafeAreaCollapseFix: ViewModifier {
 
     private func update(minY: CGFloat) {
         let winTop = Self.windowSafeAreaTop()
-        // minY ≈ 0 = 「ナビバーの下に置かれるべき画面がスクリーン最上端に居る」= インセット崩壊。
-        // 補正は外側フレームでなく safeAreaPadding (内側) に足すため、補正後も minY は 0 のままで
-        // 検知が振動しない。崩壊が自然回復 (minY > 0) したら補正も即座に外す
+        // minY ≈ 0 = "a screen that should sit under the nav bar is at the very top of the screen" = inset
+        // collapse. The correction is added to safeAreaPadding (inside), not the outer frame, so minY stays 0
+        // after correction and detection does not oscillate. When the collapse recovers naturally (minY > 0),
+        // the correction is removed immediately
         let collapsed = minY < 1 && winTop > 1
         let newFix: CGFloat = collapsed ? winTop + 44 : 0
         if topFix != newFix {
@@ -49,7 +53,7 @@ struct SafeAreaCollapseFix: ViewModifier {
         }
     }
 
-    /// UIKit 側の実測セーフエリア (SwiftUI の崩壊の影響を受けない基準値)
+    /// Measured safe area on the UIKit side (a reference value not affected by the SwiftUI collapse)
     private static func windowSafeAreaTop() -> CGFloat {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -60,7 +64,7 @@ struct SafeAreaCollapseFix: ViewModifier {
 }
 
 extension View {
-    /// 実機FB#6: MyProfileView から push される画面の root に付ける
+    /// Real device feedback #6: attach to the root of screens pushed from MyProfileView
     func safeAreaCollapseFix() -> some View {
         modifier(SafeAreaCollapseFix())
     }

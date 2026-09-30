@@ -2,12 +2,12 @@
 //  OnboardingModeration.swift
 //  AppBlocker
 //
-//  診断オンボーディング PHASE 0.5: モデレーションポリシー。
-//  フィードプレビュー (「あなたを高める投稿だけが流れる」) の直後に置き、
-//  「こういう投稿は流れてこない / 削除される」を実例で見せる。
-//  1% が「規律のSNS」であること (= 誘惑・自堕落コンテンツを弾く) をオンボ段階で宣言し、
-//  期待値を揃える + ブランドの厳格さを印象づける。
-//  画像はテキスト焼き込み済み (OnboardingFeedAssets.moderate)。無ければグラデーション。
+//  Diagnostic onboarding PHASE 0.5: moderation policy.
+//  Placed right after the feed preview ("only posts that lift you up appear"), it shows
+//  with real examples "these kinds of posts never appear / get removed".
+//  It declares at the onboarding stage that 1% is "a social network for discipline" (= it filters out
+//  temptation and slacker content), to align expectations + make the brand's strictness stick.
+//  The images already have the text baked in (OnboardingFeedAssets.moderate). If missing, a gradient.
 //
 
 import SwiftUI
@@ -18,20 +18,21 @@ struct ModerationPolicyStepView: View {
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
     private var lang: AppLanguage { AppLanguage(rawValue: mainLanguageRaw) ?? .english }
 
-    /// カルーセルのカード幅 (画面の58%)。2:3 アスペクトで高さは自動 (幅×1.5)。
-    /// 58% = iPhone SE でも カード高 + 見出し + CTA が収まる上限付近
+    /// Card width of the carousel (58% of the screen). With a 2:3 aspect ratio the height is automatic
+    /// (width × 1.5).
+    /// 58% = about the upper limit where card height + heading + CTA still fit even on iPhone SE
     private var cardWidth: CGFloat { UIScreen.main.bounds.width * 0.58 }
 
     var body: some View {
         VStack(spacing: 0) {
             Spacer().frame(height: 64)
 
-            // 2026-07-25 FB: タイトル/サブタイトル/キャプションの行間がでかすぎ → spacing を詰める。
-            // 強調行の余分な top padding も撤去して3行を均等な近さに
+            // 2026-07-25 feedback: the line spacing between title/subtitle/caption was too large → tighten spacing.
+            // Also removed the extra top padding on the emphasized line so the 3 lines are evenly close
             VStack(spacing: 5) {
-                // 2026-07-29 ユーザー指示: ライブ審査 (合格も見せる) ページになったため
-                // 「これらは流れてこない」→「AIがコンテンツを監査している」が伝わるタイトルへ
-                Text(lang == .japanese ? "全ての投稿をAIが審査する" : "Every post is screened by AI") // 文言はユーザー添削待ち
+                // 2026-07-29 user instruction: this page became a live review page (it also shows passes), so
+                // the title changed from "these never appear" to one that says "AI is auditing the content"
+                Text(lang == .japanese ? "全ての投稿をAIが審査する" : "Every post is screened by AI") // Copy waiting for user review
                     .font(.system(size: 25, weight: .semibold))
                     .foregroundColor(AppColors.textPrimary)
                     .multilineTextAlignment(.center)
@@ -44,8 +45,9 @@ struct ModerationPolicyStepView: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
 
-                // AI モデレーションの明言をこのページの強調行にする (2026-07-17 ユーザーFB第2弾:
-                // 「あなたの脳を腐らせない」単体行は削除し、こちらを強調に昇格) // 文言はユーザー添削待ち
+                // Stating AI moderation is the emphasized line of this page (2026-07-17 user feedback round 2:
+                // the standalone line "あなたの脳を腐らせない" ("We won't rot your brain") was deleted and this was
+                // promoted to the emphasis) // Copy waiting for user review
                 Text(lang == .japanese
                      ? "脳を腐らせる投稿はAIと運営が弾く"
                      : "AI and moderators remove brain-rot posts")
@@ -57,10 +59,10 @@ struct ModerationPolicyStepView: View {
 
             Spacer().frame(height: 8)
 
-            // ライブ審査演出 (2026-07-29 実機FB: フック画面からここへ移設+拡大)。
-            // 「これらは流れてこない」の主張を、投稿がスキャン→判定→弾かれる出来事として見せる。
-            // 旧・横スクロールカルーセル (9枚) は JudgmentFeedView に置き換え
-            // (ロールバック用に ModerationCard は残置)
+            // Live review animation (2026-07-29 real-device feedback: moved here from the hook screen + enlarged).
+            // It shows the claim "these never appear" as an event where a post is scanned → judged → rejected.
+            // The old horizontal scroll carousel (9 cards) was replaced by JudgmentFeedView
+            // (ModerationCard is kept for rollback)
             JudgmentFeedView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -75,7 +77,8 @@ struct ModerationPolicyStepView: View {
     }
 }
 
-/// 削除対象カード: 画像を暗く落とし、赤い「削除」タグ + 斜線で「弾かれる」を視覚化
+/// Card for removed content: darkens the image, and shows "rejected" with a red "削除" ("Removed") tag +
+/// a diagonal line
 private struct ModerationCard: View {
     let imageName: String
     let lang: AppLanguage
@@ -96,7 +99,7 @@ private struct ModerationCard: View {
             .saturation(0.5)
             .overlay(Color.black.opacity(0.45))
 
-            // 赤い「削除」バッジ
+            // Red "削除" ("Removed") badge
             VStack {
                 HStack {
                     Spacer()

@@ -2,7 +2,7 @@
 //  AppLanguage.swift
 //  AppBlocker
 //
-//  アプリ表示言語の選択肢。新しい言語追加は case を追加するだけで完結する。
+//  Choices for the app display language. Adding a new language only needs a new case.
 //
 
 import Foundation
@@ -10,11 +10,11 @@ import Foundation
 enum AppLanguage: String, CaseIterable, Identifiable {
     case english = "en"
     case japanese = "ja"
-    // 将来追加例: case chinese = "zh", case spanish = "es"
+    // Future examples: case chinese = "zh", case spanish = "es"
 
     var id: String { rawValue }
 
-    /// 設定画面の Picker で表示するネイティブ言語名
+    /// Native language name shown in the Picker on the settings screen
     var displayName: String {
         switch self {
         case .english:  return "English"
@@ -22,14 +22,15 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         }
     }
 
-    /// 端末言語に追従する既定言語 (2026-07-25 実機FB: 端末を英語にしてもUIが日本語のままで、
-    /// OS提供画面 (FamilyActivityPicker 等) だけ英語になるチグハグが発生。審査も英語端末で行われる)。
-    /// 旧実装は日本市場ファーストの「日本語固定」だったが、日本語端末は引き続き日本語になるので
-    /// 日本先行戦略とは矛盾しない。mainLanguage への書き込みは存在しないため、
-    /// この値が毎起動評価され端末言語に追従する
+    /// Default language that follows the device language (2026-07-25 real device feedback: with the
+    /// device set to English, the UI stayed in Japanese while only OS-provided screens
+    /// (FamilyActivityPicker etc.) were in English, an inconsistent mix. App Review also uses English
+    /// devices). The old implementation was "always Japanese" for a Japan-first market, but Japanese
+    /// devices still get Japanese, so this does not conflict with the Japan-first strategy. Nothing
+    /// writes to mainLanguage, so this value is evaluated on every launch and follows the device language
     static var deviceDefault: AppLanguage {
-        // Locale.current はアプリの宣言済みローカリゼーションに解決され得るため、
-        // 端末のユーザー設定そのもの (AppleLanguages) を直接読む
+        // Locale.current can resolve to the app's declared localizations, so
+        // read the user's device setting itself (AppleLanguages) directly
         (Locale.preferredLanguages.first ?? "en").hasPrefix("ja") ? .japanese : .english
     }
 }

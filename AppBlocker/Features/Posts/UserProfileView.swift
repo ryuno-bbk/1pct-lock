@@ -2,8 +2,8 @@
 //  UserProfileView.swift
 //  AppBlocker
 //
-//  一般ユーザー (UGC 投稿者) のプロフィール画面
-//  公式偉人 (AuthorProfileView) とは別物
+//  Profile screen of a regular user (UGC poster)
+//  Separate from the official great figures (AuthorProfileView)
 //
 
 import SwiftUI
@@ -27,22 +27,24 @@ struct UserProfileView: View {
     @State private var avatarUrl: String?
     @State private var handle: String?
     @State private var isPro: Bool = false
-    /// 公式マーク。🔴 ProfileHero には元から描画コードがあるのに、この画面だけ
-    ///    is_official を読んでおらず誰にもマークが出なかった (2026-08-30 修正)。
-    ///    1%公式アカウントは OfficialProfileView が true をベタ書きしているので出ていた
+    /// Official badge. 🔴 ProfileHero already had the drawing code, but only this screen
+    ///    did not read is_official, so no one got the badge (fixed 2026-08-30).
+    ///    The 1% official account showed it because OfficialProfileView hardcodes true
     @State private var isOfficial: Bool = false
     @State private var followerCount: Int = 0
     @State private var followingCount: Int = 0
     @State private var percentile: BlockSessionTracker.BlockPercentile?
-    /// 相手が自分をフォローしているか (相互フォロー表示、058 RPC。未適用/失敗時は false)
+    /// Whether the other user follows you (mutual follow display, 058 RPC. false if not applied / on
+    /// failure)
     @State private var isFollowedBy = false
-    /// 統計シート (他人のプロフィールでも見られる。連続日数だけは本人専用のため出さない)。
-    /// sheet(item:) 方式 — 非nil=表示中+主役。isPresented+別@Stateの初回presentationバグ対策 (2026-07-30)
+    /// Stats sheet (visible on other people's profiles too. Only consecutive days are private to the
+    /// user, so they are not shown). sheet(item:) approach: non-nil = shown + the focused item.
+    /// Workaround for the first-presentation bug with isPresented + a separate @State (2026-07-30)
     @State private var statsSheetFocus: ProfileStatsSheet.Focus?
-    /// 他人のプロフィールの統計シートからもランキングへ行けるようにする (2026-09-09)
+    /// Allow going to the ranking from the stats sheet on other people's profiles too (2026-09-09)
     @State private var showRanking: Bool = false
 
-    /// シートを閉じ切ってから push する (シート内には NavigationStack が無いため)
+    /// Push only after the sheet has fully closed (there is no NavigationStack inside the sheet)
     private func openRankingFromSheet() {
         statsSheetFocus = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
@@ -50,21 +52,23 @@ struct UserProfileView: View {
         }
     }
     @State private var totalBlockSeconds: Int = 0
-    /// 連続ロック日数 (get_user_stats RPC 由来)。他人のプロフィールにも表示する仕様 (2026-07-16 統計パック)
+    /// Consecutive lock days (from the get_user_stats RPC). Shown on other people's profiles too, by
+    /// design (2026-07-16 stats pack)
     @State private var streakDays: Int = 0
-    /// 完遂率 (直近30日・タイマーのみ、get_user_stats RPC 由来)
+    /// Completion rate (last 30 days, timer only, from the get_user_stats RPC)
     @State private var completion: BlockSessionTracker.CompletionRate?
-    /// 完遂率 (全期間)。統計セルの詳細シート用 (034 未適用の DB では nil)
+    /// Completion rate (all time). For the stats cell detail sheet (nil on a DB without 034 applied)
     @State private var completionAllTime: BlockSessionTracker.CompletionRate?
     @State private var isLoadingProfile: Bool = true
     @State private var jumpPost: UserPost?
     @State private var reportTarget: ReportSheetView.Target?
-    /// 審査中の異議申し立てがある自分の投稿 id (isSelf のグリッド表示用、2026-07-25 実機FB)
+    /// IDs of your own posts with an appeal under review (for the grid display when isSelf, 2026-07-25
+    /// real device feedback)
     @State private var appealPendingPostIds: Set<UUID> = []
     @State private var showBlockConfirm: Bool = false
     @State private var showReportThanks: Bool = false
 
-    /// 累計ロック時間の表示 (BlockSessionTracker.formattedTotal() と同じ書式)
+    /// Total lock time display (same format as BlockSessionTracker.formattedTotal())
     private var totalLockText: String {
         let hours = totalBlockSeconds / 3600
         let minutes = (totalBlockSeconds % 3600) / 60
@@ -75,7 +79,7 @@ struct UserProfileView: View {
         postService.viewingPosts(for: userId)
     }
 
-    /// isSelf のときの制限中 (rejected/flagged) 投稿 id (申し立て状態の一括取得キー)
+    /// IDs of restricted (rejected/flagged) posts when isSelf (key for bulk-fetching the appeal status)
     private var selfModeratedPostIds: Set<UUID> {
         guard isSelf else { return [] }
         return Set(viewingPosts
@@ -87,8 +91,10 @@ struct UserProfileView: View {
         viewingPosts.reduce(0) { $0 + $1.likeCount }
     }
 
-    /// 上位%表示。データ不足 (実績ゼロ or 母数10人未満) の時は "—"
-    /// D案: TOP10%以内なら名前横の金タイポバッジに出す整数。圏外/母数不足は nil
+    /// Top percentile display. Shows the em dash placeholder when data is insufficient (no record, or
+    /// fewer than 10 people in the pool)
+    /// Plan D: the integer shown in the gold type badge next to the name if within the TOP 10%. nil if
+    /// outside it / the pool is too small
     private var topPercentBadge: Int? {
         guard let p = percentile, p.hasData,
               (p.totalUsers ?? 0) >= 10,
@@ -108,7 +114,8 @@ struct UserProfileView: View {
         return L.profileTopPercentValue(roundedPercent, lang)
     }
 
-    /// 完遂率表示 (直近30日・タイマーのみ)。データ不足 (対象セッション0件) の時は "—"
+    /// Completion rate display (last 30 days, timer only). Shows the em dash placeholder when data is
+    /// insufficient (0 target sessions)
     private var completionRateText: String {
         guard let completion = completion,
               completion.hasData,
@@ -118,14 +125,15 @@ struct UserProfileView: View {
         return L.profileCompletionValue(rate, lang)
     }
 
-    /// 詳細シート用の完遂率行の値 (例: "92% (12/13回)")。nil / データ不足は "—"
+    /// Value of the completion rate row in the detail sheet (e.g. "92% (12/13回)" ("92% (12/13 times)")).
+    /// nil / insufficient data shows the em dash placeholder
     private func completionRowValue(_ c: BlockSessionTracker.CompletionRate?) -> String {
         guard let c, c.hasData, let rate = c.ratePercent,
               let done = c.completedCount, let total = c.eligibleCount else { return "—" }
         return L.statInfoCompletionRow(rate, done, total, lang)
     }
 
-    /// 詳細シート用の順位行の値 (例: "3位 / 128人中")
+    /// Value of the rank row in the detail sheet (e.g. "3位 / 128人中" ("3rd / out of 128"))
     private var rankRowValue: String {
         guard let p = percentile, p.hasData,
               let rank = p.rank, let total = p.totalUsers else { return "—" }
@@ -155,10 +163,11 @@ struct UserProfileView: View {
                 }
             }
             .coordinateSpace(name: ProfileHeroHeader.scrollSpace)
-            // ヒーロー画像を画面上端 (ステータスバー下) までべったり付ける (BeReal 準拠)
+            // Attach the hero image flush to the top edge of the screen (under the status bar) (following BeReal)
             .ignoresSafeArea(edges: .top)
         }
-        // 名前はヒーロー内に大きく出るためバータイトルは空。バー背景も透過して画像に重ねる
+        // The name appears large inside the hero, so the bar title is empty. The bar background is also
+        // transparent and laid over the image
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
@@ -207,10 +216,11 @@ struct UserProfileView: View {
         .sheet(item: $statsSheetFocus) { focus in
             lockStatsSheet(focus: focus)
         }
-        // viewingPostsByUser は userId をキーに保持するキー付きストアなので、この画面が
-        // 自分自身の上に再度 push されていても互いのデータを上書き/クリアしない。
-        // そのため pop 時のクリアは不要 (このプロフィールが再訪された時は .task が再取得する)。
-        // push 遷移 (fullScreenCover だと右スワイプバックが構造的に効かないため navigationDestination に統一)
+        // viewingPostsByUser is a keyed store keyed by userId, so even if this screen is pushed again
+        // on top of itself, they do not overwrite/clear each other's data.
+        // So no clearing is needed on pop (when this profile is revisited, .task refetches).
+        // Push transition (unified on navigationDestination because swipe-right-to-go-back structurally
+        // does not work with fullScreenCover)
         .navigationDestination(item: $jumpPost) { post in
             MyPostsFeedView(
                 posts: viewingPosts,
@@ -240,7 +250,7 @@ struct UserProfileView: View {
         }
     }
 
-    // MARK: - Header (BeReal 風ヒーロー、2026-07-10)
+    // MARK: - Header (BeReal-style hero, 2026-07-10)
 
     private var profileHeader: some View {
         ProfileHeroHeader(
@@ -250,12 +260,15 @@ struct UserProfileView: View {
             isOfficial: isOfficial,
             handle: handle,
             bio: bio,
-            // 夢は公開 (is_public=true) の行だけ RLS が返す (非公開なら user_dreams が 0 行 = 非表示)
+            // For the dream, RLS returns only public (is_public=true) rows (if private, user_dreams has 0 rows
+            // = hidden)
             dreamText: dream,
-            // D案 (2026-07-30): チップ全廃。統計行=フォロワー/累計ロック/いいね、
-            // TOP10%のみ名前横に金タイポ (earned)。連続・完遂率は非公開化 (本人のマイページのみ)。
-            // フォロー中の数字は表示から外す (他人のフォロー中一覧はもともと導線なし)。
-            // 相互フォロー時はボタンが「相互フォロー」+双方向アイコンに変わる
+            // Plan D (2026-07-30): all chips removed. Stats row = followers / total lock / likes, and only the
+            // TOP 10% gets the gold type next to the name (earned). Consecutive days and completion rate are
+            // made private (only on the user's own My Page).
+            // The following count is removed from the display (there was never a path to other people's
+            // following lists). When following each other, the button changes to "相互フォロー" ("Mutuals") +
+            // a two-way icon
             topPercent: topPercentBadge,
             onTopPercentTap: {
                 statsSheetFocus = .topPercent
@@ -268,7 +281,7 @@ struct UserProfileView: View {
                 ProfileHeroStat(value: "\(totalLikesReceived)", label: L.profileLikes(lang))
             ],
             actionTitle: isSelf ? nil : (isFollowing && isFollowedBy
-                ? (lang == .japanese ? "相互フォロー" : "Mutuals")  // 文言はユーザー添削待ち
+                ? (lang == .japanese ? "相互フォロー" : "Mutuals")  // Wording awaiting user review
                 : L.authorFollowButton(isFollowing, lang)),
             actionIsProminent: !isFollowing,
             actionIcon: isFollowing ? (isFollowedBy ? "arrow.left.arrow.right" : "checkmark") : "plus",
@@ -278,9 +291,10 @@ struct UserProfileView: View {
         )
     }
 
-    // MARK: - 統計シート (D案: 累計ロックタップ。他人プロフィール版=連続日数なし)
+    // MARK: - Stats sheet (plan D: tap on total lock. Other-user profile version = no consecutive days)
 
-    /// 統計シート (2026-07-30 高級化: 入口の統計が主役。共通実装=ProfileStatsSheet、他人版=連続なし)
+    /// Stats sheet (2026-07-30 premium redesign: the stat used as the entry point is the main element.
+    /// Shared implementation = ProfileStatsSheet, other-user version = no consecutive days)
     private func lockStatsSheet(focus: ProfileStatsSheet.Focus) -> some View {
         let common: [ProfileStatsSheetRow] = [
             .init(icon: "checkmark.circle", label: L.statSheetCompletion30(lang), value: completionRowValue(completion)),
@@ -335,7 +349,8 @@ struct UserProfileView: View {
                         UserPostGridCell(
                             post: post,
                             onTap: { jumpPost = post },
-                            // 検索等から自分のプロフィールをこの画面で開いた場合も制限状態を明示する
+                            // Show the restricted state explicitly even when your own profile is opened in this screen from
+                            // search etc.
                             showsModerationState: isSelf,
                             isAppealPending: isSelf && appealPendingPostIds.contains(post.id)
                         )
@@ -396,9 +411,9 @@ struct UserProfileView: View {
             print("⚠️ Failed to load user profile: \(error)")
         }
 
-        // 夢: user_dreams (024 v2)。非公開の行は RLS で本人以外に返らないため、
-        // ここでの出し分けは不要 (行が返らない = 非表示)。アプリ側フィルタだけの
-        // 旧方式は API 直叩きで非公開の夢が読めてしまうため廃止した
+        // Dream: user_dreams (024 v2). RLS does not return private rows to anyone but the owner, so
+        // no filtering is needed here (no row returned = hidden). The old approach of filtering only in the
+        // app was removed because private dreams could be read by calling the API directly
         do {
             struct DreamRow: Decodable { let dream: String? }
             let rows: [DreamRow] = try await SupabaseManager.shared.client
@@ -424,8 +439,8 @@ struct UserProfileView: View {
             print("⚠️ Failed to load follower count: \(error)")
         }
 
-        // フォロー中 (このユーザーがフォローしている数 = 1%公式 + 一般ユーザー合算)。
-        // head + count で件数だけもらう
+        // Following (the number this user follows = 1% official + regular users combined).
+        // Get only the count with head + count
         do {
             let response = try await SupabaseManager.shared.client
                 .from("user_follows")
@@ -437,15 +452,16 @@ struct UserProfileView: View {
             print("⚠️ Failed to load following count: \(error)")
         }
 
-        // 統計 (上位% / 連続日数 / 完遂率) を1 RPCで取得 (033 get_user_stats)。
-        // 累計ロック秒数は上の users select で既に取得済みなのでここでは使わない
-        // (RPC失敗時のフォールバック表示を users select 由来のまま残すため二重取得しない)
+        // Fetch the stats (top percentile / consecutive days / completion rate) with 1 RPC (033
+        // get_user_stats). Total lock seconds are already fetched by the users select above, so they are not
+        // used here (not fetched twice, so that the fallback display on RPC failure keeps coming from the
+        // users select)
         do {
             struct UserStatsResponse: Decodable {
                 let streakDays: Int
                 let percentile: BlockSessionTracker.BlockPercentile
                 let completion: BlockSessionTracker.CompletionRate
-                // 034 で追加。033 のみ適用の DB ではキーが無いため Optional
+                // Added in 034. On a DB with only 033 applied, the key does not exist, so it is Optional
                 let completionAllTime: BlockSessionTracker.CompletionRate?
 
                 enum CodingKeys: String, CodingKey {

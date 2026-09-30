@@ -2,14 +2,14 @@
 //  AppIntent.swift
 //  AreteWidget
 //
-//  ウィジェットのコンフィグレーション。ホーム画面でウィジェットを長押し → 「ウィジェットを編集」で
-//  「ランダム / お気に入りのみ」を切り替えられる。
+//  Widget configuration. Long press the widget on the home screen → "ウィジェットを編集"
+//  ("Edit Widget") to switch between "ランダム / お気に入りのみ" ("Random / Favorites only").
 //
 
 import WidgetKit
 import AppIntents
 
-/// 表示モード。ラベルは AreteWidget/Localizable.xcstrings で ja / en に翻訳される。
+/// Display mode. The labels are translated to ja / en in AreteWidget/Localizable.xcstrings.
 enum WidgetQuoteMode: String, AppEnum {
     case random
     case favorite

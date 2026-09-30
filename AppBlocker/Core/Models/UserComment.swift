@@ -2,16 +2,16 @@
 //  UserComment.swift
 //  AppBlocker
 //
-//  ユーザー投稿 (post_id) または公式名言 (quote_id 側は post_id が NULL) へのコメント。
-//  返信は parent_comment_id (ネスト 1 階層)
-//  fetch_comments_for_post / fetch_comments_for_quote RPC の戻り値型 (列構成は共通)
+//  A comment on a user post (post_id) or an official quote (on the quote_id side, post_id is NULL).
+//  Replies use parent_comment_id (1 level of nesting)
+//  Return type of the fetch_comments_for_post / fetch_comments_for_quote RPCs (same column layout)
 //
 
 import Foundation
 
 struct UserComment: Identifiable, Decodable, Equatable {
     let id: UUID
-    /// UGC 投稿へのコメントの場合のみセット (公式名言へのコメントでは nil)
+    /// Set only for comments on UGC posts (nil for comments on official quotes)
     let postId: UUID?
     let parentCommentId: UUID?
     let authorUserId: UUID
@@ -22,9 +22,9 @@ struct UserComment: Identifiable, Decodable, Equatable {
     let likeCount: Int
     let isLikedByMe: Bool
     let createdAt: Date?
-    /// 返信先ユーザー名 (parent コメント著者の display_name、なければ nil)
+    /// Name of the user replied to (display_name of the parent comment's author, nil if none)
     let replyToName: String?
-    /// 投稿の作者がこのコメントをいいねしているか (050 RPC。名言コメントや旧RPCでは false)
+    /// Whether the post's author liked this comment (050 RPC. false for quote comments and the old RPC)
     let isLikedByOwner: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -57,11 +57,11 @@ struct UserComment: Identifiable, Decodable, Equatable {
         self.isLikedByMe      = try c.decodeIfPresent(Bool.self, forKey: .isLikedByMe) ?? false
         self.createdAt        = try c.decodeIfPresent(Date.self, forKey: .createdAt)
         self.replyToName      = try c.decodeIfPresent(String.self, forKey: .replyToName)
-        // 050 適用前の RPC / fetch_comments_for_quote には列が無いので必ず decodeIfPresent
+        // The RPC before 050 / fetch_comments_for_quote do not have the column, so always use decodeIfPresent
         self.isLikedByOwner   = try c.decodeIfPresent(Bool.self, forKey: .isLikedByOwner) ?? false
     }
 
-    /// 楽観 UI 用の memberwise 初期化 (like 状態を差し替えた新インスタンスを作るため)
+    /// Memberwise init for optimistic UI (to create a new instance with a replaced like state)
     init(
         id: UUID,
         postId: UUID?,

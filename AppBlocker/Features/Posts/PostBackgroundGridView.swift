@@ -2,11 +2,13 @@
 //  PostBackgroundGridView.swift
 //  AppBlocker
 //
-//  UGC 投稿 v2 Step1: 背景を選ぶ。
-//  主役は [カメラ] [ライブラリ] の2大タイル (今の作業をその場で撮らせるのが目的)。
-//  黒/白/テンプレ14種は「テンプレートから選ぶ」の折りたたみに格納する。
-//  タップした瞬間に背景を確定して Step2 (StoryTextEditorView) へ進む。
-//  写真は選択時に長辺2000pxへダウンサンプルしてから保持する。
+//  UGC post v2 Step1: choose a background.
+//  The main elements are the 2 big tiles [Camera] [Library] (the goal is to have users shoot what they
+//  are working on right now, on the spot).
+//  Black/white/14 templates are stored in the collapsible "テンプレートから選ぶ" ("Choose from
+//  templates") section.
+//  The moment one is tapped, the background is fixed and it goes to Step2 (StoryTextEditorView).
+//  Photos are downsampled to 2000px on the long side when selected, then kept.
 //
 
 import SwiftUI
@@ -15,10 +17,12 @@ import UIKit
 
 struct PostBackgroundGridView: View {
     @ObservedObject var draft: PostDraft
-    /// 背景確定後に Step2 へ push するためのコールバック
+    /// Callback to push to Step2 after the background is fixed
     let onChosen: () -> Void
-    /// × ボタンで投稿フロー全体 (シート) を閉じる (2026-07-25 実機FB: × と戻るが同じ挙動だった)。
-    /// nil のときは従来どおり1段戻る (確認画面からの画像追加中はドラフト保護のため nil を渡す)
+    /// The × button closes the whole post flow (sheet) (2026-07-25 real-device feedback: × and back
+    /// behaved the same).
+    /// When nil, it goes back one level as before (nil is passed while adding images from the confirmation
+    /// screen, to protect the draft)
     var onCloseFlow: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
@@ -27,8 +31,9 @@ struct PostBackgroundGridView: View {
     @State private var photoPickerItem: PhotosPickerItem?
     @State private var isLoadingPhoto = false
     @State private var showCamera = false
-    // カメラ画面の「テンプレートから選ぶ」から来るのが主動線になったため、初期状態で展開
-    // (閉じていると「テンプレートどこ?」になる。2026-07-11 実機FB)
+    // Coming from "テンプレートから選ぶ" ("Choose from templates") on the camera screen became the main
+    // path, so it starts expanded
+    // (if it is closed, users ask "where are the templates?". 2026-07-11 real-device feedback)
     @State private var isTemplatesExpanded = true
 
     private var lang: AppLanguage {
@@ -48,7 +53,7 @@ struct PostBackgroundGridView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                // 主役: カメラ / ライブラリ の2大タイル
+                // Main elements: the 2 big tiles Camera / Library
                 HStack(spacing: 10) {
                     if isCameraAvailable {
                         heroTile(icon: "camera.fill", label: PostFlowStrings.cameraLabel(lang)) {
@@ -62,7 +67,7 @@ struct PostBackgroundGridView: View {
                     .disabled(isLoadingPhoto)
                 }
 
-                // テンプレートは折りたたみ (黒/白/テンプレ14)
+                // Templates are collapsible (black/white/14 templates)
                 Button {
                     withAnimation(.easeOut(duration: 0.2)) { isTemplatesExpanded.toggle() }
                 } label: {
@@ -98,7 +103,7 @@ struct PostBackgroundGridView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button {
-                    // × = フロー全体を閉じる (戻る = 1段戻る、と役割を分ける)
+                    // × = close the whole flow (a separate role from back = go back one level)
                     if let onCloseFlow {
                         onCloseFlow()
                     } else {
@@ -182,9 +187,9 @@ struct PostBackgroundGridView: View {
         }
     }
 
-    /// 全セル共通のフレーム/角丸/枠線 (比率 4:5 = 投稿キャンバスと同じ、角丸8)。
-    /// 器 (Color.clear + aspectRatio) を先に確定させてから中身を overlay することで、
-    /// Image の resizable().fill がレイアウトを押し広げてセルが崩れる問題を回避する。
+    /// Frame/rounded corners/border shared by all cells (ratio 4:5 = same as the post canvas, corner
+    /// radius 8). Fixing the container (Color.clear + aspectRatio) first and then overlaying the content
+    /// avoids the problem where Image's resizable().fill pushes the layout wider and breaks the cell.
     private func cellShape<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         Color.clear
             .aspectRatio(4.0 / 5.0, contentMode: .fit)
@@ -202,7 +207,7 @@ struct PostBackgroundGridView: View {
 
     // MARK: - Actions
 
-    /// 背景確定: PostDraft.selectBackground (カメラ画面と共通ロジック) → Step2 へ進む
+    /// Fix the background: PostDraft.selectBackground (logic shared with the camera screen) → go to Step2
     private func select(_ background: PostBackground) {
         if draft.selectBackground(background) {
             onChosen()
@@ -225,7 +230,7 @@ struct PostBackgroundGridView: View {
         select(.photo(resized))
     }
 
-    /// 長辺を maxDimension に収める (アスペクト比維持)。すでに小さければそのまま返す。
+    /// Fit the long side within maxDimension (keeping the aspect ratio). If already smaller, return it as is.
     private func downsample(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
         let longSide = max(image.size.width, image.size.height)
         guard longSide > maxDimension else { return image }
@@ -238,12 +243,13 @@ struct PostBackgroundGridView: View {
     }
 }
 
-// MARK: - CameraPicker (UIImagePickerController の SwiftUI ラッパー)
+// MARK: - CameraPicker (SwiftUI wrapper for UIImagePickerController)
 
-/// その場でカメラ撮影して背景写真に使うためのピッカー。
-/// PhotosUI にカメラ相当が無いため UIImagePickerController を使う (シミュレータでは isSourceTypeAvailable が false)。
+/// Picker for taking a photo with the camera on the spot and using it as the background photo.
+/// PhotosUI has no camera equivalent, so UIImagePickerController is used (isSourceTypeAvailable is
+/// false on the simulator).
 private struct CameraPicker: UIViewControllerRepresentable {
-    /// 撮影完了 (キャンセル時は nil)
+    /// Shooting finished (nil when canceled)
     let onComplete: (UIImage?) -> Void
 
     func makeUIViewController(context: Context) -> UIImagePickerController {

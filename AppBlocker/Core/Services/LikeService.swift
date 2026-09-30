@@ -2,14 +2,14 @@
 //  LikeService.swift
 //  AppBlocker
 //
-//  名言いいね管理サービス（Supabase）
+//  Quote like management service (Supabase)
 //
 
 import Foundation
 import Combine
 import Supabase
 
-/// 名言のいいね/取り消し管理
+/// Manages liking/unliking quotes
 final class LikeService: ObservableObject {
 
     static let shared = LikeService()
@@ -19,18 +19,20 @@ final class LikeService: ObservableObject {
     @Published private(set) var likedQuoteIds: Set<UUID> = []
     @Published private(set) var likedQuotes: [Quote] = []
     @Published private(set) var likedPostIds: Set<UUID> = []
-    /// 🔴 2026-08-08 追加: いいねした UGC 投稿の実体。
-    /// これが無かったため、プロフィールの「いいね」タブが likedQuotes しか出せず、
-    /// **公式アカウントの名言以外 (= 普通のユーザーの投稿) へのいいねが一切表示されなかった**。
+    /// 🔴 Added 2026-08-08: the actual objects of liked UGC posts.
+    /// Without this, the profile's "いいね" ("Likes") tab could only show likedQuotes, and
+    /// **likes on anything other than the official account's quotes (= posts by regular users) were not
+    /// shown at all**.
     @Published private(set) var likedPosts: [UserPost] = []
 
     // MARK: - Private Properties
 
     private let client: SupabaseClient
 
-    /// お気に入りWidget反映のデバウンス用 Task (L2)。いいね連打のたびに
-    /// WidgetCenter.reloadAllTimelines() + プール全書き出しが走ると無駄なので、
-    /// 新しいトグルが来たら前の待機をキャンセルし、最後のトグルから2秒後に1回だけ反映する
+    /// Debounce Task for reflecting favorites in the Widget (L2). Running
+    /// WidgetCenter.reloadAllTimelines() + writing out the whole pool on every rapid like tap is
+    /// wasteful, so when a new toggle comes, the previous wait is cancelled and it is applied only once,
+    /// 2 seconds after the last toggle
     private var widgetFavoritesRefreshTask: Task<Void, Never>?
 
     // MARK: - Init
@@ -43,17 +45,17 @@ final class LikeService: ObservableObject {
 
     // MARK: - Public Methods
 
-    /// いいね状態を確認 (公式名言)
+    /// Check the like state (official quote)
     func isLiked(quoteId: UUID) -> Bool {
         likedQuoteIds.contains(quoteId)
     }
 
-    /// いいね状態を確認 (UGC 投稿)
+    /// Check the like state (UGC post)
     func isLikedPost(postId: UUID) -> Bool {
         likedPostIds.contains(postId)
     }
 
-    /// UGC 投稿いいね/取消 (toggle_post_like RPC)
+    /// Like/unlike a UGC post (toggle_post_like RPC)
     @MainActor
     func togglePostLike(postId: UUID) async {
         guard UserAuthService.shared.userId != nil else {
@@ -63,7 +65,7 @@ final class LikeService: ObservableObject {
 
         let wasLiked = isLikedPost(postId: postId)
 
-        // 楽観 UI
+        // Optimistic UI
         if wasLiked {
             likedPostIds.remove(postId)
         } else {
@@ -90,14 +92,15 @@ final class LikeService: ObservableObject {
                 likedPostIds.insert(postId)
             } else {
                 likedPostIds.remove(postId)
-                // 2026-08-08: いいねタブに出している実体からも外す (タブを開き直さなくても消える)
+                // 2026-08-08: also remove it from the objects shown in the likes tab (it disappears without
+                // reopening the tab)
                 likedPosts.removeAll { $0.id == postId }
             }
             print(result.isLiked
                   ? "❤️ Liked post: \(postId) (server count=\(result.likeCount))"
                   : "💔 Unliked post: \(postId) (server count=\(result.likeCount))")
         } catch {
-            // ロールバック
+            // Rollback
             if wasLiked {
                 likedPostIds.insert(postId)
             } else {
@@ -107,19 +110,19 @@ final class LikeService: ObservableObject {
         }
     }
 
-    /// いいね/取り消し切り替え
+    /// Toggle like/unlike
     func toggleLike(quoteId: UUID) async {
         await performToggle(quoteId: quoteId)
     }
 
-    /// いいねを追加（既にいいね済みなら何もしない）
+    /// Add a like (does nothing if already liked)
     @MainActor
     func like(quoteId: UUID) async {
         guard !isLiked(quoteId: quoteId) else { return }
         await performToggle(quoteId: quoteId)
     }
 
-    /// いいねを取り消し（未いいねなら何もしない）
+    /// Remove a like (does nothing if not liked)
     @MainActor
     func unlike(quoteId: UUID) async {
         guard isLiked(quoteId: quoteId) else { return }
@@ -128,8 +131,9 @@ final class LikeService: ObservableObject {
 
     // MARK: - Private Methods
 
-    /// toggle_quote_like RPC で user_likes と quotes.like_count を 1 トランザクション更新。
-    /// RPC 戻り値の is_liked を server-authoritative として最終状態に反映する。
+    /// The toggle_quote_like RPC updates user_likes and quotes.like_count in 1 transaction.
+    /// The is_liked in the RPC return value is treated as server-authoritative and applied as the final
+    /// state.
     @MainActor
     private func performToggle(quoteId: UUID) async {
         guard UserAuthService.shared.userId != nil else {
@@ -139,7 +143,7 @@ final class LikeService: ObservableObject {
 
         let wasLiked = isLiked(quoteId: quoteId)
 
-        // 楽観 UI 更新
+        // Optimistic UI update
         if wasLiked {
             likedQuoteIds.remove(quoteId)
         } else {
@@ -162,7 +166,8 @@ final class LikeService: ObservableObject {
                 .execute()
                 .value
 
-            // RPC 結果で確定値を反映（楽観 UI とサーバ実状態のズレを補正）
+            // Apply the confirmed value from the RPC result (corrects drift between the optimistic UI and the
+            // real server state)
             if result.isLiked {
                 likedQuoteIds.insert(quoteId)
             } else {
@@ -173,7 +178,7 @@ final class LikeService: ObservableObject {
                   : "💔 Unliked quote: \(quoteId) (server count=\(result.likeCount))")
             scheduleWidgetFavoritesRefresh()
         } catch {
-            // 失敗時は元状態にロールバック
+            // On failure, roll back to the original state
             if wasLiked {
                 likedQuoteIds.insert(quoteId)
             } else {
@@ -183,9 +188,10 @@ final class LikeService: ObservableObject {
         }
     }
 
-    /// お気に入りWidgetキャッシュの反映を2秒デバウンスする (L2)。
-    /// 前回分の待機 Task をキャンセルしてから積み直すので、連打中は発火せず、
-    /// 最後のトグルから2秒後に必ず1回だけ WidgetCacheService.refreshFavorites() が走る
+    /// Debounce the favorites Widget cache refresh by 2 seconds (L2).
+    /// The previous waiting Task is cancelled before a new one is queued, so it does not fire during
+    /// rapid taps, and WidgetCacheService.refreshFavorites() always runs exactly once, 2 seconds after
+    /// the last toggle
     @MainActor
     private func scheduleWidgetFavoritesRefresh() {
         widgetFavoritesRefreshTask?.cancel()
@@ -196,7 +202,7 @@ final class LikeService: ObservableObject {
         }
     }
 
-    /// 起動時にいいね一覧を読み込み (quote_id + post_id 両方)
+    /// Load the like list at launch (both quote_id + post_id)
     @MainActor
     func loadLikedQuotes() async {
         guard let userId = UserAuthService.shared.userId else {
@@ -229,19 +235,21 @@ final class LikeService: ObservableObject {
             likedPostIds  = Set(rows.compactMap { $0.postId })
             print("📚 Loaded \(likedQuoteIds.count) liked quotes, \(likedPostIds.count) liked posts")
 
-            // いいね済み名言オブジェクトも読み込み
+            // Also load the liked quote objects
             await loadLikedQuoteObjects()
-            // 2026-08-08: 投稿側も同時に読む。これが無いと「いいね」タブに投稿が出ない
+            // 2026-08-08: also load the post side at the same time. Without this, posts do not appear in the
+            // "いいね" ("Likes") tab
             await loadLikedPostObjects()
         } catch {
             print("⚠️ Failed to load likes: \(error)")
         }
     }
 
-    /// いいねした UGC 投稿の実体を取得 (2026-08-08 追加)。
-    /// ⚠️ likedPostIds は user_likes から取れるが、実体を引かないと画面に出せない。
-    /// 名言側の loadLikedQuoteObjects と対になる処理。
-    /// 削除済み投稿やモデレーションで落ちた投稿は単に返ってこないので、自然に消える。
+    /// Fetch the actual objects of liked UGC posts (added 2026-08-08).
+    /// ⚠️ likedPostIds can be taken from user_likes, but they cannot be shown on screen without fetching
+    /// the objects. The counterpart of loadLikedQuoteObjects on the quote side.
+    /// Deleted posts and posts removed by moderation are simply not returned, so they disappear
+    /// naturally.
     @MainActor
     func loadLikedPostObjects() async {
         guard !likedPostIds.isEmpty else {
@@ -265,10 +273,10 @@ final class LikeService: ObservableObject {
         }
     }
 
-    /// いいねした投稿の著者情報。
-    /// ⚠️ user_posts には著者名もアバターも入っていないので別途引く必要がある。
-    /// これが無いと詳細を開いた時に **他人の投稿に自分の名前とアイコンが出る**
-    /// (MyPostsFeedView は authorDisplayName が nil だと auth.displayName に落ちるため)
+    /// Author info of liked posts.
+    /// ⚠️ user_posts has neither the author name nor the avatar, so they must be fetched separately.
+    /// Without this, opening the detail shows **your own name and icon on someone else's post**
+    /// (MyPostsFeedView falls back to auth.displayName when authorDisplayName is nil)
     struct LikedPostAuthor {
         let displayName: String?
         let avatarUrl: String?
@@ -316,13 +324,13 @@ final class LikeService: ObservableObject {
         }
     }
 
-    /// いいね解除した投稿をグリッドから即座に消す (再取得を待たない)
+    /// Remove an unliked post from the grid immediately (without waiting for a refetch)
     @MainActor
     func removeFromLikedPosts(postId: UUID) {
         likedPosts.removeAll { $0.id == postId }
     }
 
-    /// いいね済み名言をJOIN付きで取得
+    /// Fetch liked quotes with a JOIN
     @MainActor
     func loadLikedQuoteObjects() async {
         guard !likedQuoteIds.isEmpty else {
@@ -330,14 +338,14 @@ final class LikeService: ObservableObject {
             return
         }
 
-        // QuoteServiceのキャッシュから取得（高速）
+        // Get from the QuoteService cache (fast)
         let allQuotes = QuoteService.shared.quotes
         if !allQuotes.isEmpty {
             likedQuotes = allQuotes.filter { likedQuoteIds.contains($0.id) }
             return
         }
 
-        // フォールバック: Supabaseから直接取得
+        // Fallback: fetch directly from Supabase
         do {
             struct QuoteRow: Decodable {
                 let id: UUID
@@ -396,7 +404,7 @@ final class LikeService: ObservableObject {
         }
     }
 
-    /// ローカルのlikedQuotesリストを更新（いいね追加時）
+    /// Update the local likedQuotes list (when a like is added)
     @MainActor
     func addToLikedQuotes(_ quote: Quote) {
         if !likedQuotes.contains(where: { $0.id == quote.id }) {
@@ -404,7 +412,7 @@ final class LikeService: ObservableObject {
         }
     }
 
-    /// ローカルのlikedQuotesリストから削除（いいね取り消し時）
+    /// Remove from the local likedQuotes list (when a like is removed)
     @MainActor
     func removeFromLikedQuotes(quoteId: UUID) {
         likedQuotes.removeAll { $0.id == quoteId }

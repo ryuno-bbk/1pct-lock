@@ -1,22 +1,23 @@
 -- ============================================================
 -- 062_quote_feed_deprioritize.sql
--- 公式名言がユーザー投稿を埋もれさせない (2026-07-31 ユーザー起票)
+-- Official quotes must not bury user posts (filed by the user 2026-07-31)
 -- ============================================================
--- 背景: 名言の点数は固定 quote_base=0.8 で減衰なし・既読ペナルティなし・キャップなし。
---   新規投稿 (新しさ点3.0〜) には負けるが、2〜3日経った投稿と互角、それ以降は名言が勝つ。
---   ユーザーが少ない初期はフィードの空きスロットを名言68件が埋め続ける構造だった。
--- 変更 (052 の全文をベースに2点だけ):
---   1. quote_base 0.8 → 0.45: 投稿はおよそ3〜4日は名言より上に居られる
---      (伸びてる名言は like/comment 項で自然に加点されるので上に来てよい — ユーザー了承)
---   2. 名言の適応型キャップ (2026-07-31 ユーザーFB「最初は公式だけ。フィードは
---      ずっとたくさんあってほしい」で固定キャップから変更):
---      quote_allow = GREATEST(quote_cap, limit_count − 投稿候補数)。
---      投稿が埋めきれない分は名言が全部埋める = フィードは常に limit_count 件を
---      目指す (初期は名言50件でもよい)。投稿が増えるほど名言枠は自動で縮み、
---      下限 quote_cap (15) 件まで絞られる
--- 適用: SQL Editor で全文実行。冪等。
--- ロールバック: quote_base を 0.8、quote_cap を 999 に書き換えて再実行。
--- ユーザー増加後のチューニングも params の2定数を書き換えるだけ。
+-- Background: quote scores are fixed at quote_base=0.8 with no decay, no read penalty and no cap.
+--   They lose to new posts (recency score 3.0 and up), are even with posts 2 to 3 days old, and win
+--   after that. In the early days with few users, the 68 quotes kept filling the empty slots in the feed.
+-- Changes (only 2 points, based on the full text of 052):
+--   1. quote_base 0.8 → 0.45: posts stay above quotes for about 3 to 4 days
+--      (quotes that are doing well get points naturally from the like/comment terms, so it is fine for
+--      them to rise; user agreed)
+--   2. Adaptive cap for quotes (changed from a fixed cap after user feedback 2026-07-31 "at first only
+--      official. I want the feed to always have lots of items"):
+--      quote_allow = GREATEST(quote_cap, limit_count − number of post candidates).
+--      Whatever posts cannot fill, quotes fill completely = the feed always aims for limit_count items
+--      (early on, 50 quotes is fine). As posts increase, the quote slots shrink automatically,
+--      down to the lower bound of quote_cap (15) items
+-- Apply: run the full text in the SQL Editor. Idempotent.
+-- Rollback: change quote_base to 0.8 and quote_cap to 999 and run again.
+-- Tuning after the user base grows is also just changing the 2 constants in params.
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.fetch_mixed_feed_random(limit_count integer DEFAULT 50)
@@ -43,18 +44,18 @@ LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = public
 AS $$
     WITH params AS (
-        -- ============ チューニング用重み (ここだけ書き換えて CREATE OR REPLACE すれば調整可) ============
+        -- ============ Tuning weights (to adjust, change only this part and run CREATE OR REPLACE) ============
         SELECT
-            3.0  ::double precision AS w_recency,          -- 投稿の新しさの最大点 (投稿直後)
-            24.0 ::double precision AS recency_half_hours, -- この時間経過で新しさ点が半減
-            0.5  ::double precision AS w_like,             -- ln(1+like_count) の係数
-            0.7  ::double precision AS w_comment,          -- ln(1+comment_count) の係数 (コメントはいいねより強い関心)
-            1.2  ::double precision AS w_follow,           -- フォロー中の投稿者へのボーナス
-            1.0  ::double precision AS w_seen,             -- ln(1+自分の閲覧回数) の既読ペナルティ係数 (減点)
-            1.5  ::double precision AS w_jitter,           -- ランダムジッターの最大値 (探索性)
-            0.45 ::double precision AS quote_base,         -- 062: 0.8→0.45 (名言はユーザー投稿より控えめに)
-            2    ::integer          AS author_cap,         -- 1フィードあたり同一投稿者の最大件数 (postsのみ)
-            15   ::integer          AS quote_cap           -- 062: 投稿が十分ある時の名言枠の下限 (適応型、下のquota参照)
+            3.0  ::double precision AS w_recency,          -- max recency score of a post (right after posting)
+            24.0 ::double precision AS recency_half_hours, -- the recency score halves after this much time
+            0.5  ::double precision AS w_like,             -- coefficient of ln(1+like_count)
+            0.7  ::double precision AS w_comment,          -- coefficient of ln(1+comment_count) (a comment shows stronger interest than a like)
+            1.2  ::double precision AS w_follow,           -- bonus for authors you follow
+            1.0  ::double precision AS w_seen,             -- read penalty coefficient on ln(1+own view count) (subtracted)
+            1.5  ::double precision AS w_jitter,           -- max random jitter (for exploration)
+            0.45 ::double precision AS quote_base,         -- 062: 0.8→0.45 (quotes are kept lower than user posts)
+            2    ::integer          AS author_cap,         -- max items from the same author per feed (posts only)
+            15   ::integer          AS quote_cap           -- 062: lower bound of quote slots when there are enough posts (adaptive, see quota below)
     ),
     scored AS (
         SELECT
@@ -140,10 +141,10 @@ AS $$
           AND up.created_at > now() - interval '30 days'
     ),
     ranked AS (
-        -- posts: 同一投稿者の連投キャップ (052)。
-        -- quotes: 062 で kind 単位の1パーティションに変更 = フィード全体の名言キャップ
-        --   (060 で全名言が匿名著者1人になったが、将来著者が分かれても壊れないよう
-        --    author_id には依存させない)
+        -- posts: cap on consecutive posts from the same author (052).
+        -- quotes: changed in 062 to 1 partition per kind = quote cap for the whole feed
+        --   (in 060 all quotes became one anonymous author, but it does not depend on author_id
+        --    so it will not break if authors split again in the future)
         SELECT s.*,
                row_number() OVER (
                    PARTITION BY s.kind,
@@ -153,8 +154,8 @@ AS $$
         FROM scored s
     )
     quota AS (
-        -- 適応型の名言枠: 投稿候補 (author_cap 適用後) が limit_count に足りない分は
-        -- 名言で満たす。投稿が十分あれば下限 quote_cap まで絞る
+        -- Adaptive quote slots: whatever the post candidates (after applying author_cap) lack to reach limit_count
+        -- is filled with quotes. If there are enough posts, narrow down to the lower bound quote_cap
         SELECT GREATEST(
             p.quote_cap,
             limit_count - (

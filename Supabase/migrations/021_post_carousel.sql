@@ -1,32 +1,32 @@
 -- ============================================================
 -- 021_post_carousel.sql
--- 複数枚投稿 (最大4枚) 対応
+-- Support for multi-image posts (up to 4 images)
 -- ============================================================
--- 目的:
---   1. user_posts に image_count を追加 (1〜4、デフォルト1)
---      - image_path (1枚目/カバー) は既存のまま維持。2枚目以降は Storage 側の
---        パス規約 "{uid}/{post_id}_2.jpg" 〜 "{post_id}_4.jpg" で管理 (DB 列は増やさない)
---   2. fetch_mixed_feed_random / fetch_following_feed / fetch_tag_feed の戻り値に
---      image_count integer を追加 (019/020 の全カラムを維持したまま末尾に追加)
---      - 公式 quotes 側は NULL::integer
---      - UGC user_posts 側は p.image_count をそのまま返す
---   3. overlays jsonb (PostOverlayDTO) は列変更なし。imageIndex はアプリ側で
---      jsonb 配列の各要素に含めて保存するため DB スキーマ変更は不要。
---      既存の overlays 行 (imageIndex キー無し) はアプリ側 decodeIfPresent ?? 0 で
---      後方互換に読む。
+-- Purpose:
+--   1. Add image_count to user_posts (1 to 4, default 1)
+--      - image_path (1st image/cover) stays as is. The 2nd and later images are managed by the
+--        Storage path convention "{uid}/{post_id}_2.jpg" to "{post_id}_4.jpg" (no new DB columns)
+--   2. Add image_count integer to the return values of fetch_mixed_feed_random /
+--      fetch_following_feed / fetch_tag_feed (appended at the end, keeping all columns from 019/020)
+--      - NULL::integer on the official quotes side
+--      - the UGC user_posts side returns p.image_count as is
+--   3. No column change for overlays jsonb (PostOverlayDTO). The app stores imageIndex inside each
+--      element of the jsonb array, so no DB schema change is needed.
+--      Existing overlays rows (without an imageIndex key) are read backward-compatibly by the app with
+--      decodeIfPresent ?? 0.
 --
--- 適用方法:
---   Supabase Dashboard の SQL Editor で貼り付け実行、または
+-- How to apply:
+--   Paste and run it in the SQL Editor of the Supabase Dashboard, or
 --   `NEW_DB_URL=... bash apply_sql.sh supabase/migrations/021_post_carousel.sql`
---   のいずれか。
+--   (either one).
 --
--- 実行順序: 019 → 020 → 021 の順で適用すること (fetch_following_feed は 020 の
--- 「1% 公式アカウントをフォローしていれば全公式名言」ロジックを引き継いでいる)。
--- 何度実行しても安全 (IF NOT EXISTS / DROP IF EXISTS で冪等)
+-- Run order: apply in the order 019 → 020 → 021 (fetch_following_feed inherits the 020 logic
+-- "if you follow the 1% official account, all official quotes").
+-- Safe to run any number of times (idempotent with IF NOT EXISTS / DROP IF EXISTS)
 -- ============================================================
 
 -- ============================================
--- 1. user_posts へ image_count 追加 (1〜4、デフォルト1)
+-- 1. Add image_count to user_posts (1 to 4, default 1)
 -- ============================================
 ALTER TABLE public.user_posts
     ADD COLUMN IF NOT EXISTS image_count integer NOT NULL DEFAULT 1;
@@ -43,9 +43,10 @@ COMMENT ON COLUMN public.user_posts.image_count IS
     '複数枚投稿: 画像枚数 (1〜4)。1枚目は image_path、2枚目以降は Storage 側 "{post_id}_2.jpg"〜"_4.jpg" 規約';
 
 -- ============================================
--- 2. フィード RPC v4: image_count を末尾に追加
+-- 2. Feed RPC v4: append image_count at the end
 -- ============================================
--- RETURNS TABLE 列追加は CREATE OR REPLACE 不可なので DROP → CREATE (019/020 に倣う)
+-- Adding columns to RETURNS TABLE is not possible with CREATE OR REPLACE, so DROP → CREATE (same as
+-- 019/020)
 
 -- ---- 2-1. fetch_mixed_feed_random ----
 DROP FUNCTION IF EXISTS public.fetch_mixed_feed_random(integer);
@@ -128,7 +129,8 @@ REVOKE EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer) TO authenticated;
 
 -- ---- 2-2. fetch_following_feed ----
--- quote 側の WHERE は 020 の「1% 公式アカウントをフォローしていれば全公式名言」ロジックを維持する。
+-- The WHERE on the quote side keeps the 020 logic "if you follow the 1% official account, all official
+-- quotes".
 DROP FUNCTION IF EXISTS public.fetch_following_feed(integer);
 
 CREATE FUNCTION public.fetch_following_feed(limit_count integer DEFAULT 50)
@@ -173,7 +175,8 @@ AS $$
             NULL::integer AS image_count
         FROM public.quotes q
         JOIN public.authors a ON a.id = q.author_id
-        -- 「著者をフォロー」ではなく「1% 公式アカウントをフォロー」していれば全公式名言が対象 (020 と同じ)
+        -- If the user follows "the 1% official account" rather than "the author", all official quotes are
+        -- included (same as 020)
         WHERE EXISTS (
             SELECT 1 FROM public.user_follows
             WHERE follower_id = auth.uid()

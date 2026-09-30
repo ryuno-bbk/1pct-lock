@@ -2,14 +2,14 @@
 //  UnlockImageStore.swift
 //  AppBlocker
 //
-//  解除課題「自分の画像を見る」で使う画像の保管。
+//  Storage for the images used by the unlock challenge "自分の画像を見る" ("View my images").
 //
-//  🔴 端末内だけに保存する。サーバーには絶対に上げない:
-//    - 個人的な写真を送ると App Privacy の申告をやり直すことになる
-//      (2026-08-04 に 14/14 で確定済み。「写真またはビデオ」の用途が増える)
-//    - Storage の egress も増える (M19 で一度踏んでいる)
-//    - 他人に見せる必要が一切無い (2026-08-29 ユーザー確認)
-//  失うのは「機種変で消える」点だけ。
+//  🔴 Stored only on the device. Never upload to the server:
+//    - Sending personal photos would mean redoing the App Privacy declaration
+//      (finalized at 14/14 on 2026-08-04. The "Photos or Videos" use would be added)
+//    - Storage egress would also increase (we already hit that once in M19)
+//    - There is no need at all to show them to anyone else (confirmed by the user 2026-08-29)
+//  The only loss is that "they disappear when you change phones".
 //
 
 import Foundation
@@ -21,10 +21,10 @@ final class UnlockImageStore: ObservableObject {
 
     static let shared = UnlockImageStore()
 
-    /// 登録済み画像の識別子 (新しい順)。実体はファイルとして保存する
+    /// Identifiers of registered images (newest first). The actual data is saved as files
     @Published private(set) var imageIds: [String] = []
 
-    /// 登録できる上限。多すぎても選びきれないし、端末容量も食う
+    /// Upper limit on how many can be registered. Too many is hard to choose from and uses device storage
     static let maxImages = 20
 
     private let directory: URL
@@ -36,7 +36,7 @@ final class UnlockImageStore: ObservableObject {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         imageIds = UserDefaults.standard.stringArray(forKey: indexKey) ?? []
-        // ファイルが消えている id は落とす (バックアップ復元などでズレることがある)
+        // Drop ids whose files are gone (can get out of sync after e.g. a backup restore)
         let existing = imageIds.filter { FileManager.default.fileExists(atPath: url(for: $0).path) }
         if existing.count != imageIds.count {
             imageIds = existing
@@ -46,14 +46,14 @@ final class UnlockImageStore: ObservableObject {
 
     var canAddMore: Bool { imageIds.count < Self.maxImages }
 
-    // MARK: - 読み書き
+    // MARK: - Read/write
 
     func image(for id: String) -> UIImage? {
         UIImage(contentsOfFile: url(for: id).path)
     }
 
-    /// 追加する。⚠️ 長辺を抑えてから保存する。
-    /// 原寸のまま持つと1枚で十数MBになり、端末容量とデコード時間を無駄に食う
+    /// Add one. ⚠️ Limit the long side before saving.
+    /// Kept at original size, one image can be over ten MB, wasting device storage and decode time
     @discardableResult
     func add(_ image: UIImage) -> String? {
         guard canAddMore else { return nil }
@@ -78,7 +78,7 @@ final class UnlockImageStore: ObservableObject {
         persistIndex()
     }
 
-    // MARK: - 内部
+    // MARK: - Internal
 
     private func url(for id: String) -> URL {
         directory.appendingPathComponent("\(id).jpg")

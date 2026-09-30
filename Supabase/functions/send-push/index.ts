@@ -1,54 +1,57 @@
 // ============================================================
 // send-push / index.ts
-// user_notifications の INSERT を APNs のプッシュ通知に変換する Edge Function (Deno)
+// Edge Function (Deno) that turns INSERTs into user_notifications into APNs push notifications
 // ============================================================
-// 背景:
-//   user_notifications は動いているのに配信手段が無く、
-//   通知の大半が未読のまま死んでいた。新機能ではなく「切れていた配線」。
+// Background:
+//   user_notifications was working but had no delivery channel,
+//   so most notifications died unread. Not a new feature but "wiring that had been cut".
 //
-// 役割:
-//   Supabase Database Webhook (public.user_notifications の INSERT) を受け、
-//   受信者の端末トークン (078: user_push_tokens) を引いて APNs へ1通ずつ送る。
+// Role:
+//   Receives the Supabase Database Webhook (INSERT into public.user_notifications),
+//   looks up the recipient's device tokens (078: user_push_tokens) and sends to APNs one by one.
 //
-// 🔴 既存の未読102件は飛ばない:
-//   Webhook は INSERT イベントにしか反応しないため、過去行は対象外。
-//   有効化した瞬間に102通が一斉送信される事故は構造的に起きない。
+// 🔴 The existing 102 unread notifications are not sent:
+//   The webhook only reacts to INSERT events, so past rows are out of scope.
+//   An accident where 102 notifications go out at once the moment it is enabled cannot happen by
+//   design.
 //
-// 🔴 サンドボックス / 本番 APNs:
-//   開発ビルド = サンドボックス、TestFlight・App Store = 本番。ホストが別物なので、
-//   端末が登録時に申告した environment でホストを選ぶ (078 の environment 列)。
-//   ここを誤ると「開発では届くが本番で無音」を踏む。
-//   保険として、片方のホストが BadDeviceToken を返したらもう片方に1回だけ再送し、
-//   成功した側に environment を訂正する (端末が Debug/Release を跨いだ場合の自己修復)。
+// 🔴 Sandbox / production APNs:
+//   Development builds = sandbox, TestFlight / App Store = production. The hosts are different, so
+//   the host is chosen by the environment the device declared at registration (the environment
+//   column in 078). Getting this wrong hits "delivered in development but silent in production".
+//   As insurance, if one host returns BadDeviceToken, resend once to the other host, and
+//   correct environment to the side that succeeded (self-healing when a device moves between
+//   Debug/Release).
 //
-// 言語:
-//   075/076 と同じく users.lang ('ja' / 'en') で本文を出し分ける。
-//   ⚠️ 文言はユーザー添削待ち (ブランドの声は Claude が発明しない)。
+// Language:
+//   Like 075/076, the body text switches by users.lang ('ja' / 'en').
+//   ⚠️ Wording awaiting user review (Claude does not invent the brand voice).
 //
-// バッジ:
-//   受信者の未読件数を毎回数えて aps.badge に入れる。アプリを開かなくても
-//   アイコンに数字が出るので、102件が見えないまま死ぬ状態そのものが解消する。
+// Badge:
+//   Count the recipient's unread notifications every time and put the number in aps.badge. The
+//   number shows on the icon even without opening the app, which removes the very state where 102
+//   of them die unseen.
 //
-// エラー処理:
-//   シークレット照合失敗のみ 401。それ以外は moderate-post と同じ方針で常に 200
-//   (Webhook を 4xx/5xx で落とすと Supabase 側がリトライの嵐を起こすため)。
-//   プッシュは本質的にベストエフォートなので、1通落ちても握りつぶしてログを残す。
+// Error handling:
+//   Only a secret mismatch returns 401. Everything else always returns 200, the same policy as
+//   moderate-post (failing the webhook with 4xx/5xx makes Supabase fire a storm of retries).
+//   Push is best-effort by nature, so if one notification fails, swallow it and log it.
 //
-// 環境変数 (`supabase secrets set` で設定 = ユーザー作業):
-//   APNS_KEY_ID       - Apple Developer → Keys で作った APNs キーの Key ID (10文字)
-//   APNS_TEAM_ID      - Apple Developer の Team ID (10文字)
-//   APNS_PRIVATE_KEY  - 同キーの .p8 の中身 (-----BEGIN PRIVATE KEY----- ごと全部)
+// Environment variables (set with `supabase secrets set` = user task):
+//   APNS_KEY_ID       - Key ID (10 chars) of the APNs key created in Apple Developer → Keys
+//   APNS_TEAM_ID      - Apple Developer Team ID (10 chars)
+//   APNS_PRIVATE_KEY  - contents of that key's .p8 (all of it, including -----BEGIN PRIVATE KEY-----)
 //   APNS_BUNDLE_ID    - com.jeimii.AppBlocker
-//   PUSH_WEBHOOK_SECRET - Database Webhook の x-push-secret ヘッダと同じ文字列。
-//                         未設定の間は全リクエスト 401 (fail-closed)
-//   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY - ランタイム自動注入
+//   PUSH_WEBHOOK_SECRET - same string as the x-push-secret header of the Database Webhook.
+//                         While unset, every request gets 401 (fail-closed)
+//   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY - auto-injected by the runtime
 //
-// デプロイ: `supabase functions deploy send-push --no-verify-jwt`
-//   ⚠️ --no-verify-jwt 必須。忘れると Database Webhook が全滅して無音で止まる
-//      (moderate-post で同じ事故を踏んでいる)
-// Webhook 登録: Dashboard → Database → Webhooks で public.user_notifications の
-//   INSERT をこの Function の URL に向け、HTTP Headers に
-//   x-push-secret: <PUSH_WEBHOOK_SECRET と同じ値> を追加する (ユーザー作業)
+// Deploy: `supabase functions deploy send-push --no-verify-jwt`
+//   ⚠️ --no-verify-jwt is required. If forgotten, every Database Webhook call fails and it silently
+//      stops (the same accident already happened with moderate-post)
+// Webhook registration: in Dashboard → Database → Webhooks, point the INSERT on
+//   public.user_notifications to this Function's URL, and add to HTTP Headers
+//   x-push-secret: <same value as PUSH_WEBHOOK_SECRET> (user task)
 // ============================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -70,10 +73,10 @@ const APNS_HOST = {
 type Environment = keyof typeof APNS_HOST;
 
 // ============================================================
-// APNs プロバイダトークン (JWT / ES256)
+// APNs provider token (JWT / ES256)
 // ============================================================
-// APNs のトークンは最長60分。かつ短時間に作り直すと TooManyProviderTokenUpdates で
-// 弾かれるため、インスタンス内でキャッシュして50分だけ使い回す。
+// An APNs token lasts at most 60 minutes. Recreating it too often in a short time gets rejected
+// with TooManyProviderTokenUpdates, so it is cached in the instance and reused for only 50 minutes.
 let cachedToken: { jwt: string; issuedAt: number } | null = null;
 let cachedKey: CryptoKey | null = null;
 
@@ -87,8 +90,9 @@ function base64UrlEncodeString(text: string): string {
   return base64UrlEncode(new TextEncoder().encode(text));
 }
 
-/// .p8 (PKCS#8 PEM) を WebCrypto の鍵にする。
-/// `supabase secrets set` 経由だと改行が \n という2文字で入ることがあるので実改行に戻す。
+/// Turn the .p8 (PKCS#8 PEM) into a WebCrypto key.
+/// Via `supabase secrets set`, newlines can arrive as the 2 characters \n, so convert them back to
+/// real newlines.
 async function importPrivateKey(): Promise<CryptoKey> {
   if (cachedKey) return cachedKey;
 
@@ -120,8 +124,8 @@ async function apnsProviderToken(): Promise<string> {
   const claims = base64UrlEncodeString(JSON.stringify({ iss: APNS_TEAM_ID, iat: now }));
   const signingInput = `${header}.${claims}`;
 
-  // WebCrypto の ECDSA 署名は raw の r||s (64バイト) を返す。
-  // JWS の ES256 が要求する形式そのものなので変換不要 (DER に包んではいけない)
+  // WebCrypto ECDSA signing returns raw r||s (64 bytes).
+  // That is exactly the format JWS ES256 requires, so no conversion is needed (do not wrap it in DER)
   const signature = await crypto.subtle.sign(
     { name: "ECDSA", hash: "SHA-256" },
     key,
@@ -134,10 +138,11 @@ async function apnsProviderToken(): Promise<string> {
 }
 
 // ============================================================
-// 文言 (⚠️ ユーザー添削待ち)
+// Wording (⚠️ awaiting user review)
 // ============================================================
-// ブランドの声は Claude が発明しない方針のため、ここは機能的な仮置き。
-// actor = 行動した人の表示名。空なら「誰か」に落とす (表示名は未設定があり得る)
+// Claude does not invent the brand voice, so this is a functional placeholder.
+// actor = display name of the person who acted. If empty, fall back to "誰か" ("someone") (a
+// display name may be unset)
 function buildMessage(
   kind: string,
   lang: string,
@@ -170,7 +175,7 @@ function buildMessage(
     case "new_post":
       return { title: "1%", body: ja ? `${who}が新しく投稿しました` : `${who} shared a new post` };
 
-    // モデレーション系は actor が運営。名前を出さない
+    // For moderation types, the actor is the operator. Do not show a name
     case "content_rejected":
       return { title: "1%", body: ja ? "投稿が公開できませんでした" : "Your post couldn't be published" };
     case "content_flagged":
@@ -180,9 +185,10 @@ function buildMessage(
     case "appeal_rejected":
       return { title: "1%", body: ja ? "異議申し立ての結果が出ました" : "Your appeal was reviewed" };
 
-    // 週次レポート (081)。preview_text にその週のロック秒数が入っている。
-    // 本文はここで組む (users.lang で日英を出し分けるため SQL 側では確定させない)
-    // ⚠️ 文言はユーザー添削待ち
+    // Weekly report (081). preview_text holds that week's lock seconds.
+    // The body is built here (not fixed on the SQL side, so it can switch between Japanese and English
+    // by users.lang)
+    // ⚠️ Wording awaiting user review
     case "weekly_report": {
       const secs = Math.max(0, Number(preview ?? "0") || 0);
       const h = Math.floor(secs / 3600);
@@ -191,8 +197,9 @@ function buildMessage(
         ? (h > 0 ? `${h}時間${m}分` : `${m}分`)
         : (h > 0 ? `${h}h ${m}m` : `${m}m`);
 
-      // 🔴 0秒の人にも送る (2026-09-05 ユーザー判断)。ただし
-      //    「0分でした」とだけ言うと「あなたは失敗した」の定期送信になるため文面を分ける
+      // 🔴 Also sent to people with 0 seconds (user decision 2026-09-05). However,
+      //    saying only "it was 0 minutes" would become a regular "you failed" message, so the text is
+      //    different
       if (secs === 0) {
         return {
           title: "1%",
@@ -209,19 +216,19 @@ function buildMessage(
       };
     }
 
-    // 運営宛ての内部通知。ユーザーには送らない
+    // Internal notification for the operator. Not sent to users
     case "appeal_unsure":
       return null;
 
     default:
-      // 将来 kind が増えたときに無音で落とさない (ログに出す)
+      // Do not silently drop kinds added in the future (log them)
       console.warn(`send-push: unknown kind ${kind}`);
       return null;
   }
 }
 
 // ============================================================
-// APNs 送信
+// APNs send
 // ============================================================
 interface SendResult {
   status: number;
@@ -259,11 +266,11 @@ async function sendToApns(
 }
 
 // ============================================================
-// エントリポイント
+// Entry point
 // ============================================================
 Deno.serve(async (req) => {
-  // 認可: Database Webhook からの呼び出しであることをシークレットで確認する。
-  // 未設定なら常に 401 (fail-closed)。moderate-post と同じ方針
+  // Authorization: confirm with the secret that the call comes from the Database Webhook.
+  // If unset, always 401 (fail-closed). Same policy as moderate-post
   if (PUSH_WEBHOOK_SECRET.length === 0) {
     console.error("send-push: PUSH_WEBHOOK_SECRET is not set");
     return new Response("unauthorized", { status: 401 });
@@ -285,7 +292,7 @@ Deno.serve(async (req) => {
     const recipientId: string = record.recipient_user_id;
     const actorId: string | null = record.actor_user_id ?? null;
 
-    // 受信者の端末と言語、行動した人の名前をまとめて引く
+    // Fetch the recipient's devices and language and the actor's name together
     const [tokensRes, recipientRes, actorRes, unreadRes] = await Promise.all([
       admin.from("user_push_tokens").select("token, environment").eq("user_id", recipientId),
       admin.from("users").select("lang").eq("id", recipientId).maybeSingle(),
@@ -301,7 +308,7 @@ Deno.serve(async (req) => {
 
     const tokens = tokensRes.data ?? [];
     if (tokens.length === 0) {
-      // まだプッシュを許可していない人。正常系なので静かに終わる
+      // Someone who has not allowed push yet. This is a normal case, so finish quietly
       return new Response("ok", { status: 200 });
     }
 
@@ -318,7 +325,7 @@ Deno.serve(async (req) => {
         sound: "default",
         badge,
       },
-      // タップ時に通知一覧へ飛ばすために渡す (クライアント側で使う)
+      // Passed so that a tap can jump to the notification list (used on the client side)
       notification_id: record.id ?? null,
       kind: record.kind,
     };
@@ -327,8 +334,8 @@ Deno.serve(async (req) => {
       const declared = (row.environment === "sandbox" ? "sandbox" : "production") as Environment;
       let result = await sendToApns(row.token, declared, apsPayload);
 
-      // 端末が Debug/Release を跨ぐと申告した environment と実体がズレる。
-      // BadDeviceToken のときだけ、もう片方のホストに1回だけ賭けて自己修復する
+      // When a device moves between Debug/Release, the declared environment and the real one diverge.
+      // Only on BadDeviceToken, try the other host once to self-heal
       if (result.status === 400 && result.reason === "BadDeviceToken") {
         const other: Environment = declared === "production" ? "sandbox" : "production";
         const retry = await sendToApns(row.token, other, apsPayload);
@@ -345,8 +352,8 @@ Deno.serve(async (req) => {
 
       if (result.status === 200) continue;
 
-      // 端末がアプリを消した / トークンが無効 → 掃除する。
-      // 残しておくと毎回 APNs を叩いて無駄に失敗し続ける
+      // The device deleted the app / the token is invalid → clean it up.
+      // If kept, every send would hit APNs and keep failing for nothing
       if (result.status === 410 || result.reason === "Unregistered" || result.reason === "BadDeviceToken") {
         await admin.from("user_push_tokens").delete().eq("token", row.token);
         console.log(`send-push: removed dead token (${result.reason ?? result.status})`);
@@ -358,7 +365,7 @@ Deno.serve(async (req) => {
 
     return new Response("ok", { status: 200 });
   } catch (e) {
-    // リトライの嵐を起こさないため、内部エラーは常に 200 で握りつぶす
+    // To avoid a retry storm, internal errors are always swallowed with 200
     console.error("send-push: unhandled error", e);
     return new Response("ok", { status: 200 });
   }

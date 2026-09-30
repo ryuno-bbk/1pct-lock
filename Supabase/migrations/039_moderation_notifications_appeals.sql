@@ -1,72 +1,72 @@
 -- ============================================================
 -- 039_moderation_notifications_appeals.sql
--- モデレーション結果の通知 + 異議申し立て (2026-07-20 実機FB #9)
+-- Moderation result notifications + appeals (2026-07-20 real-device feedback #9)
 -- ============================================================
--- 背景:
---   投稿/コメントが AI モデレーションで rejected/flagged になっても本人に
---   何も通知されず、異議申し立て手段もなかった (2026-07-20 実機FB #9)。
+-- Background:
+--   Even when a post/comment became rejected/flagged by AI moderation, the author was not
+--   notified at all, and there was no way to appeal (2026-07-20 real-device feedback #9).
 --
--- 設計判断 (ユーザー確定):
---   - システム生成通知 (モデレーション結果・異議申し立て結果) は「本人が自分自身への
---     通知の送り主になる」(recipient_user_id = actor_user_id) という自己参照方式で
---     実装する。新しい sentinel アカウントは作らない (public.users.id は
---     auth.users(id) への FK 制約があるため、実ユーザー行を伴わないダミーアカウントは
---     正規の Auth フローの外側になり複雑になりすぎる)。
---   - 自己参照は既存の 3 制約と整合する:
---       1. user_notifications.actor_user_id は NOT NULL + FK → 常に有効な user
---       2. fetch_notifications の JOIN public.users u ON u.id = n.actor_user_id は
---          INNER JOIN だが、自分自身の行は必ず存在するので問題なし
---       3. Swift 側 UserNotification.actorUserId は非オプショナル UUID のままデコード可能
---     → user_notifications_no_self CHECK と create_notification() の自己アクション
---       弾きガードだけ、システム系 kind の時に自己参照を許可するよう緩和する。
---   - user_appeals: 投稿者/コメント者が rejected/flagged コンテンツに異議申し立てできる
---     新規テーブル。file_appeal RPC 経由のみで作成 (直接 INSERT 不可)。解決 (承認/却下)
---     は運営が SQL Editor で手動 UPDATE する運用 (user_reports と同じ)。承認時は
---     resolve_user_appeal トリガーが元コンテンツの moderation_status を 'approved' に
---     戻す。
+-- Design decisions (confirmed by the user):
+--   - System-generated notifications (moderation results, appeal results) are implemented with a
+--     self-reference approach where "the user is the sender of the notification to themself"
+--     (recipient_user_id = actor_user_id). No new sentinel account is created (public.users.id has
+--     an FK constraint to auth.users(id), so a dummy account without a real user row would sit
+--     outside the normal Auth flow and become too complex).
+--   - Self-reference is consistent with the 3 existing constraints:
+--       1. user_notifications.actor_user_id is NOT NULL + FK → always a valid user
+--       2. The JOIN public.users u ON u.id = n.actor_user_id in fetch_notifications is an
+--          INNER JOIN, but your own row always exists, so there is no problem
+--       3. On the Swift side, UserNotification.actorUserId can still be decoded as a non-optional UUID
+--     → Only the user_notifications_no_self CHECK and the self-action rejection guard of
+--       create_notification() are relaxed to allow self-reference for system kinds.
+--   - user_appeals: a new table where the author of a post/comment can appeal rejected/flagged
+--     content. Created only via the file_appeal RPC (no direct INSERT). Resolution (approve/reject)
+--     is done by the operator with a manual UPDATE in the SQL Editor (same as user_reports). On
+--     approval, the resolve_user_appeal trigger sets the original content's moderation_status back
+--     to 'approved'.
 --
--- 現状確認 (このファイル作成前に 014/015/017/018/022/027 を Read して確認済み):
---   - user_notifications.kind の現行許可リスト (022 で 'new_post' 追加が最新):
+-- Current state check (confirmed by reading 014/015/017/018/022/027 before creating this file):
+--   - Current allowed list of user_notifications.kind (the latest is 022, which added 'new_post'):
 --       'like', 'follow', 'comment', 'reply', 'comment_like', 'new_post'
---     CHECK 制約名は無名 → Postgres デフォルト命名 user_notifications_kind_check
---     (022 が `DROP CONSTRAINT IF EXISTS user_notifications_kind_check` で明示的に
---     使っている名前そのもの。023〜038 はこの制約に触れていない)
---   - user_notifications_no_self は 014 定義のまま未変更 (015〜038 で DROP/RENAME なし)
+--     The CHECK constraint has no name → Postgres default naming user_notifications_kind_check
+--     (the exact name that 022 uses explicitly in
+--     `DROP CONSTRAINT IF EXISTS user_notifications_kind_check`. 023-038 do not touch this constraint)
+--   - user_notifications_no_self is unchanged from the 014 definition (no DROP/RENAME in 015-038)
 --   - create_notification(p_recipient_user_id, p_actor_user_id, p_kind,
 --     p_target_post_id DEFAULT NULL, p_target_quote_id DEFAULT NULL,
---     p_target_comment_id DEFAULT NULL, p_preview_text DEFAULT NULL) のシグネチャは
---     014 定義のまま不変 (015 の REVOKE 文が create_notification(uuid, uuid, text,
---     uuid, uuid, uuid, text) という型リストで確認できる。017/022 の呼び出し箇所の
---     引数名とも一致)
---   - user_comments の対象列: post_id (nullable、017 で NOT NULL 解除) / quote_id
---     (nullable、017 で追加)。user_comments_target_xor で常にどちらか一方だけが
---     非NULLになるよう強制されている。owner 列は author_user_id (014 定義のまま)。
---     → notify_on_comment_moderation は NEW.post_id と NEW.quote_id を両方
---     create_notification に渡す (xor 制約により常に一方だけが値を持つので分岐不要)。
---   - user_posts の owner 列は user_id (005 定義のまま)
---   - moderation_verdict の jsonb キーは Supabase/functions/moderate-post/index.ts で
---     safety_reason / ethos_reason と確認済み (層1 rejected 時は safety_reason、
---     層2 flagged 時は ethos_reason を読む)。同 Edge Function は user_posts と
---     user_comments の両方を webhook 対象にしているため、コメント側のモデレーション
---     結果 UPDATE も実際に発生する。
---   - protect_user_posts_moderation / protect_user_comments_moderation (027 定義) は
---     current_user の pg_roles.rolbypassrls を見て bypass 可否を判定する。
---     SECURITY DEFINER 関数は所有者 (postgres, rolbypassrls=true) で実行されるため、
---     resolve_user_appeal 内部の UPDATE はこれらのトリガーを素通りする
---     (delete_my_account 等、既存の SECURITY DEFINER RPC と同じ挙動)。
+--     p_target_comment_id DEFAULT NULL, p_preview_text DEFAULT NULL) signature is unchanged from
+--     the 014 definition (confirmed by the type list create_notification(uuid, uuid, text,
+--     uuid, uuid, uuid, text) in the REVOKE statement of 015. It also matches the argument names
+--     at the call sites in 017/022)
+--   - Target columns of user_comments: post_id (nullable, NOT NULL dropped in 017) / quote_id
+--     (nullable, added in 017). user_comments_target_xor forces exactly one of them to be
+--     non-NULL at all times. The owner column is author_user_id (unchanged from the 014 definition).
+--     → notify_on_comment_moderation passes both NEW.post_id and NEW.quote_id to
+--     create_notification (the xor constraint means only one ever has a value, so no branching).
+--   - The owner column of user_posts is user_id (unchanged from the 005 definition)
+--   - The jsonb keys of moderation_verdict were confirmed in Supabase/functions/moderate-post/index.ts
+--     as safety_reason / ethos_reason (read safety_reason when layer 1 rejected, and
+--     ethos_reason when layer 2 flagged). The same Edge Function has both user_posts and
+--     user_comments as webhook targets, so moderation result UPDATEs on the comment side
+--     really happen too.
+--   - protect_user_posts_moderation / protect_user_comments_moderation (027 definition) decide
+--     whether to bypass by looking at pg_roles.rolbypassrls of current_user.
+--     SECURITY DEFINER functions run as the owner (postgres, rolbypassrls=true), so the
+--     UPDATE inside resolve_user_appeal passes straight through these triggers
+--     (same behavior as existing SECURITY DEFINER RPCs such as delete_my_account).
 --
--- 実行順序: 014 (user_notifications/create_notification) と 027 (moderation列/
---   protect trigger) が適用済みの環境が前提。何度実行しても安全 (DROP IF EXISTS →
---   ADD / CREATE OR REPLACE / IF NOT EXISTS パターン)。適用/デプロイはユーザー側で
---   実施 (Supabase Dashboard → SQL Editor)。本ファイル単体では何も自動実行されない。
+-- Execution order: assumes an environment where 014 (user_notifications/create_notification) and
+--   027 (moderation columns/protect trigger) are already applied. Safe to run any number of times
+--   (DROP IF EXISTS → ADD / CREATE OR REPLACE / IF NOT EXISTS pattern). Applying/deploying is done
+--   by the user (Supabase Dashboard → SQL Editor). Nothing runs automatically from this file alone.
 -- ============================================================
 
 -- ============================================================
--- 1. user_notifications.kind の許可リストにシステム通知系4種を追加
+-- 1. Add 4 system notification kinds to the allowed list of user_notifications.kind
 -- ============================================================
--- 現行許可リスト (022 時点): like/follow/comment/reply/comment_like/new_post
--- 制約名は 022 で明示的に確認済みの user_notifications_kind_check (無名CHECKの
--- Postgres デフォルト命名規則どおり)
+-- Current allowed list (as of 022): like/follow/comment/reply/comment_like/new_post
+-- The constraint name is user_notifications_kind_check, explicitly confirmed in 022 (it follows the
+-- Postgres default naming rule for an unnamed CHECK)
 ALTER TABLE public.user_notifications
     DROP CONSTRAINT IF EXISTS user_notifications_kind_check;
 
@@ -84,11 +84,11 @@ COMMENT ON TABLE public.user_notifications IS
     '(システム通知、recipient_user_id = actor_user_id の自己参照)';
 
 -- ============================================================
--- 2. 自己参照を許可する (システム通知系 kind のみ)
+-- 2. Allow self-reference (system notification kinds only)
 -- ============================================================
--- 014 定義のまま変更されていない制約名 user_notifications_no_self を緩和。
--- recipient=actor の自己参照は content_rejected/content_flagged/appeal_approved/
--- appeal_rejected の 4 kind のみ許可 (それ以外の対人通知は引き続き自分発を禁止)。
+-- Relax the constraint user_notifications_no_self, which is unchanged since the 014 definition.
+-- Self-reference with recipient=actor is allowed only for the 4 kinds content_rejected/content_flagged/
+-- appeal_approved/appeal_rejected (other person-to-person notifications still cannot come from yourself).
 ALTER TABLE public.user_notifications
     DROP CONSTRAINT IF EXISTS user_notifications_no_self;
 
@@ -98,9 +98,9 @@ ALTER TABLE public.user_notifications
         OR kind IN ('content_rejected', 'content_flagged', 'appeal_approved', 'appeal_rejected')
     );
 
--- create_notification(): 自己アクション弾きガードにシステム系 kind の例外を追加。
--- シグネチャ・NULL チェック・INSERT 文・ON CONFLICT 句は 014 定義から完全に維持
--- (変更箇所は自己アクション判定の IF 条件のみ)。
+-- create_notification(): add an exception for system kinds to the self-action rejection guard.
+-- The signature, NULL checks, INSERT statement and ON CONFLICT clause are kept exactly as in the 014
+-- definition (the only change is the IF condition of the self-action check).
 CREATE OR REPLACE FUNCTION public.create_notification(
     p_recipient_user_id uuid,
     p_actor_user_id     uuid,
@@ -121,7 +121,7 @@ BEGIN
     END IF;
     IF p_recipient_user_id = p_actor_user_id
        AND p_kind NOT IN ('content_rejected', 'content_flagged', 'appeal_approved', 'appeal_rejected') THEN
-        RETURN;  -- 自分発は通知しない (システム通知系 kind は自己参照を許可)
+        RETURN;  -- Do not notify for your own actions (system notification kinds allow self-reference)
     END IF;
     INSERT INTO public.user_notifications (
         recipient_user_id, actor_user_id, kind,
@@ -133,12 +133,12 @@ BEGIN
     ON CONFLICT ON CONSTRAINT user_notifications_unique_like DO NOTHING;
 END;
 $$;
--- REVOKE/GRANT は 015 で PUBLIC/anon/authenticated 全てから REVOKE 済み (内部の
--- SECURITY DEFINER トリガー/RPC からのみ呼ばれる想定)。CREATE OR REPLACE は
--- シグネチャ不変な限り既存の ACL を保持するため、ここでの再設定は不要。
+-- REVOKE/GRANT: 015 already REVOKEd it from all of PUBLIC/anon/authenticated (it is expected to be
+-- called only from internal SECURITY DEFINER triggers/RPCs). CREATE OR REPLACE keeps the existing ACL
+-- as long as the signature is unchanged, so there is no need to set it again here.
 
 -- ============================================================
--- 3. user_posts モデレーション結果の自動通知
+-- 3. Automatic notification of user_posts moderation results
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.notify_on_post_moderation()
 RETURNS trigger
@@ -172,16 +172,16 @@ CREATE TRIGGER user_posts_notify_moderation
     FOR EACH ROW
     WHEN (OLD.moderation_status IS DISTINCT FROM NEW.moderation_status AND NEW.moderation_status IN ('rejected', 'flagged'))
     EXECUTE FUNCTION public.notify_on_post_moderation();
--- RETURNS trigger の関数は Postgres が直接呼び出しを拒否するため (トリガーとしてのみ
--- 実行可能)、014/017/022/027 の他の trigger 関数と同様に REVOKE/GRANT は不要。
+-- Postgres refuses direct calls to a function that RETURNS trigger (it can only run as a trigger), so
+-- like the other trigger functions in 014/017/022/027, REVOKE/GRANT is not needed.
 
 -- ============================================================
--- 4. user_comments モデレーション結果の自動通知
+-- 4. Automatic notification of user_comments moderation results
 -- ============================================================
--- user_comments は post_id / quote_id のどちらか一方のみ非NULL
--- (user_comments_target_xor、017 定義)。create_notification は target_post_id /
--- target_quote_id を独立した nullable 引数として受け付けるため、分岐せず
--- NEW.post_id と NEW.quote_id をそのまま渡せば良い (常にどちらか一方だけが値を持つ)。
+-- In user_comments only one of post_id / quote_id is non-NULL
+-- (user_comments_target_xor, 017 definition). create_notification accepts target_post_id /
+-- target_quote_id as independent nullable arguments, so no branching is needed; just pass
+-- NEW.post_id and NEW.quote_id as they are (only one of them ever has a value).
 CREATE OR REPLACE FUNCTION public.notify_on_comment_moderation()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -218,7 +218,7 @@ CREATE TRIGGER user_comments_notify_moderation
     EXECUTE FUNCTION public.notify_on_comment_moderation();
 
 -- ============================================================
--- 5. user_appeals テーブル (異議申し立て)
+-- 5. user_appeals table (appeals)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.user_appeals (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -255,13 +255,13 @@ CREATE POLICY "user_appeals_select_own"
     ON public.user_appeals FOR SELECT
     USING (auth.uid() = user_id);
 
--- INSERT/UPDATE/DELETE はクライアント直接不可 (ポリシー未定義 = デフォルト拒否)。
--- 作成は file_appeal RPC 経由のみ (SECURITY DEFINER が所有権/ステータスを検証してから
--- INSERT する)。解決 (承認/却下) は運営が SQL Editor で手動 UPDATE する運用
--- (user_reports の status 解決と同じ運用パターン)。
+-- INSERT/UPDATE/DELETE cannot be done directly by the client (no policy defined = denied by default).
+-- Creation is only via the file_appeal RPC (SECURITY DEFINER checks ownership/status before the
+-- INSERT). Resolution (approve/reject) is done by the operator with a manual UPDATE in the SQL Editor
+-- (same operating pattern as resolving the status of user_reports).
 
 -- ============================================================
--- 6. file_appeal RPC (異議申し立て送信)
+-- 6. file_appeal RPC (submit an appeal)
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.file_appeal(
     p_target_post_id    uuid,
@@ -318,13 +318,13 @@ COMMENT ON FUNCTION public.file_appeal(uuid, uuid, text) IS
     '投稿/コメント (post_id / comment_id のどちらか一方) の異議申し立てを送信。'
     '本人所有かつ moderation_status が rejected/flagged の場合のみ受理。1対象1件まで';
 
--- 015_security_audit.sql #4 の教訓 (「REVOKE FROM anon だけでは関数の暗黙 PUBLIC
--- grant が残るため anon を遮断しきれない」) を踏襲し、PUBLIC も明示的に剥奪する。
+-- Follows the lesson of 015_security_audit.sql #4 ("REVOKE FROM anon alone leaves the function's
+-- implicit PUBLIC grant, so anon is not fully blocked"), and revokes PUBLIC explicitly too.
 REVOKE EXECUTE ON FUNCTION public.file_appeal(uuid, uuid, text) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.file_appeal(uuid, uuid, text) TO authenticated;
 
 -- ============================================================
--- 7. 異議申し立て解決トリガー (承認時は元コンテンツを復活)
+-- 7. Appeal resolution trigger (restores the original content on approval)
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.resolve_user_appeal()
 RETURNS trigger
@@ -364,14 +364,14 @@ BEGIN
 END;
 $$;
 
--- 補足: この関数は SECURITY DEFINER (postgres 所有) で実行されるため、内部の
--- UPDATE user_posts/user_comments は protect_user_posts_moderation /
--- protect_user_comments_moderation トリガー (027 定義、current_user の
--- rolbypassrls を見て bypass 可否を判定) を自然に通過する。delete_my_account 等の
--- 既存 SECURITY DEFINER RPC と同じ仕組みなので、追加の回避処理は不要。
--- また 'approved' への遷移は user_posts_notify_moderation /
--- user_comments_notify_moderation トリガーの WHEN 句 (rejected/flagged のみ発火)
--- に該当しないため、二重通知やループは発生しない。
+-- Note: this function runs as SECURITY DEFINER (owned by postgres), so the inner
+-- UPDATE user_posts/user_comments naturally passes the protect_user_posts_moderation /
+-- protect_user_comments_moderation triggers (027 definition, which decide whether to bypass by
+-- looking at rolbypassrls of current_user). It is the same mechanism as existing SECURITY DEFINER
+-- RPCs such as delete_my_account, so no extra workaround is needed.
+-- Also, a transition to 'approved' does not match the WHEN clause of the
+-- user_posts_notify_moderation / user_comments_notify_moderation triggers (they fire only on
+-- rejected/flagged), so no double notification or loop happens.
 DROP TRIGGER IF EXISTS user_appeals_resolve ON public.user_appeals;
 CREATE TRIGGER user_appeals_resolve
     AFTER UPDATE ON public.user_appeals
@@ -380,18 +380,18 @@ CREATE TRIGGER user_appeals_resolve
     EXECUTE FUNCTION public.resolve_user_appeal();
 
 -- ============================================================
--- 8. 動作確認用クエリ (実行不要、コメント)
+-- 8. Queries for checking behavior (no need to run, comments only)
 -- ============================================================
--- モデレーション結果通知の確認 (投稿が flagged/rejected に変わった直後):
+-- Check the moderation result notification (right after a post changed to flagged/rejected):
 --   SELECT * FROM fetch_notifications(20) WHERE kind IN ('content_rejected', 'content_flagged');
--- 異議申し立て送信 (自分の rejected/flagged 投稿に対して):
---   SELECT file_appeal('<post_id>'::uuid, NULL, '誤判定だと思います');
--- 運営側の承認 (SQL Editor):
+-- Submit an appeal (for your own rejected/flagged post):
+--   SELECT file_appeal('<post_id>'::uuid, NULL, 'I think this was a misjudgment');
+-- Operator approval (SQL Editor):
 --   UPDATE user_appeals SET status = 'approved', resolved_at = now() WHERE id = '<appeal_id>';
--- 運営側の却下 (SQL Editor):
---   UPDATE user_appeals SET status = 'rejected', resolution_note = '規約違反のため却下', resolved_at = now()
+-- Operator rejection (SQL Editor):
+--   UPDATE user_appeals SET status = 'rejected', resolution_note = 'Rejected for violating the terms', resolved_at = now()
 --   WHERE id = '<appeal_id>';
--- 承認後、対象投稿の moderation_status が 'approved' に戻っていることの確認:
+-- After approval, check that the target post's moderation_status is back to 'approved':
 --   SELECT moderation_status FROM user_posts WHERE id = '<post_id>';
--- 承認/却下の通知が届いていることの確認:
+-- Check that the approval/rejection notification has arrived:
 --   SELECT * FROM fetch_notifications(20) WHERE kind IN ('appeal_approved', 'appeal_rejected');

@@ -2,10 +2,11 @@
 //  SearchView.swift
 //  AppBlocker
 //
-//  検索タブのルート View (2026-07-15 新設)。
-//  「アカウント / 投稿」2セグメント。アカウント側は旧アカウント検索画面の挙動を再現し
-//  (1%公式特別行 + UserSearchResult 行)、投稿側は SearchService.searchPosts の結果を
-//  簡易リスト行で表示してタップで FeedCardListView へ push する。
+//  Root view of the search tab (added 2026-07-15).
+//  2 segments, "アカウント / 投稿" ("Accounts / Posts"). The accounts side reproduces the behavior
+//  of the old account search screen (1% official special row + UserSearchResult rows), and the posts
+//  side shows the results of SearchService.searchPosts as simple list rows and pushes
+//  FeedCardListView on tap.
 //
 
 import SwiftUI
@@ -14,14 +15,14 @@ struct SearchView: View {
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
 
     @State private var query: String = ""
-    // 実機FB第7弾: 検索のデフォルトは投稿セグメント (2026-07-15)
+    // Real device feedback round 7: the default for search is the posts segment (2026-07-15)
     @State private var selectedTab: SearchTab = .posts
 
-    // アカウント検索の状態
+    // Account search state
     @State private var userResults: [UserSearchResult] = []
     @State private var isSearchingUsers: Bool = false
 
-    // 投稿検索の状態
+    // Post search state
     @State private var postResults: [FeedItem] = []
     @State private var isSearchingPosts: Bool = false
 
@@ -41,9 +42,10 @@ struct SearchView: View {
         var id: String { rawValue }
     }
 
-    /// 投稿詳細への遷移リクエスト (item 方式。isPresented + 別 @State だと
-    /// いいね後に selectedPostStartKey が変化しても showPostDetail が既に true のままだと
-    /// navigationDestination が更新されず開けなくなる regression があった、実機FB第7弾 2026-07-15)
+    /// Navigation request to post details (item style. With isPresented + a separate @State, there was a
+    /// regression where, if selectedPostStartKey changed after a like while showPostDetail was still true,
+    /// navigationDestination did not update and it could not be opened. Real device feedback round 7,
+    /// 2026-07-15)
     struct PostDetailRequest: Identifiable, Hashable {
         let startKey: String
         var id: String { startKey }
@@ -57,7 +59,8 @@ struct SearchView: View {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// 1%公式アカウントの特別行を出すか判定 (旧アカウント検索画面と同じロジック)。
+    /// Decides whether to show the special row for the 1% official account (same logic as the old account
+    /// search screen).
     private var showOfficialRow: Bool {
         let q = trimmedQuery.lowercased()
         if q.isEmpty { return true }
@@ -79,7 +82,8 @@ struct SearchView: View {
                 AppColors.background.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    // 実機FB第7弾 (2026-07-15): 「詰まりすぎ」対応で上下の余白を拡張
+                    // Real device feedback round 7 (2026-07-15): increased the top/bottom margins because it was "too
+                    // cramped"
                     SearchBarField(text: $query, placeholder: SearchTabStrings.placeholder(lang))
                         .padding(.horizontal, 16)
                         .padding(.top, 16)
@@ -114,10 +118,11 @@ struct SearchView: View {
             .navigationDestination(item: $postDetailRequest) { req in
                 FeedCardListView(
                     items: postResults,
-                    recordsViews: true,   // タップ=詳細を開く行為なので閲覧計上する
+                    recordsViews: true,   // A tap = opening details, so count it as a view
                     startItemKey: req.startKey,
                     onLikeToggled: { item, isLiked in
-                        // 検索結果リストにいいね数を反映する (実機FB第7弾: 反映されないバグ)
+                        // Reflect the like count in the search results list (real device feedback round 7: bug where it was
+                        // not reflected)
                         guard let idx = postResults.firstIndex(where: { $0.id == item.id }) else { return }
                         let old = postResults[idx]
                         postResults[idx] = FeedItem(
@@ -141,7 +146,8 @@ struct SearchView: View {
                         )
                     }
                 )
-                // 検索→投稿詳細のヘッダーがステータスバー領域に食い込む見切れ修正 (実機FB第7弾)
+                // Fix for the header of search → post details cutting into the status bar area (real device feedback
+                // round 7)
                 .navigationBarTitleDisplayMode(.inline)
             }
             .onChange(of: query) { _, newValue in
@@ -157,9 +163,10 @@ struct SearchView: View {
     }
 
     // MARK: - Segment Bar
-    // 2026-07-31 実機FB: 下線式の自前セグメントを廃止し、マイページの「投稿/いいね」と
-    // まったく同じ OS 標準セグメント (iOS 26 ではガラス質感で描かれる) に統一。
-    // MyProfileView.sectionPicker と同じ書き方・同じ水平パディング (20) を使う
+    // 2026-07-31 real device feedback: dropped the custom underline segment and unified on exactly the
+    // same OS standard segment as "投稿/いいね" ("Posts/Likes") on My Page (drawn with a glass look on
+    // iOS 26). Uses the same code style and the same horizontal padding (20) as
+    // MyProfileView.sectionPicker
 
     private var segmentBar: some View {
         Picker("", selection: $selectedTab) {
@@ -249,7 +256,7 @@ struct SearchView: View {
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundColor(AppColors.textPrimary)
                             .lineLimit(1)
-                        // 083: 検索結果だけ公式マークが出ていなかった (サーバーが返していなかった)
+                        // 083: only search results did not show the official badge (the server was not returning it)
                         if user.isOfficial {
                             Image(systemName: "checkmark.seal.fill")
                                 .font(.system(size: 13, weight: .bold))
@@ -433,7 +440,8 @@ struct SearchView: View {
     }
 }
 
-// MARK: - Search Bar Field (旧アカウント検索画面と同じパターン。タブルートなので自動フォーカスはしない)
+// MARK: - Search Bar Field (same pattern as the old account search screen. It is a tab root, so no
+// auto focus)
 
 private struct SearchBarField: View {
     @Binding var text: String
@@ -441,8 +449,9 @@ private struct SearchBarField: View {
 
     @FocusState private var isFocused: Bool
 
-    // 2026-07-25 実機FB: 見た目をコメント入力バー (CommentInputBar) と同じ
-    // ガラス質感カプセル (ultraThinMaterial + 薄い白ストローク) に統一。検索アイコンは左のまま
+    // 2026-07-25 real device feedback: the look was unified with the same glass capsule as the comment
+    // input bar (CommentInputBar) (ultraThinMaterial + thin white stroke). The search icon stays on the
+    // left
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
@@ -476,14 +485,14 @@ private struct SearchBarField: View {
         .background(Capsule().fill(.ultraThinMaterial))
         .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5))
         .environment(\.colorScheme, .dark)
-        // 選択中の検索タブを再タップ → キーボードを開く (MainTabView から通知)
+        // Tapping the selected search tab again → opens the keyboard (notification from MainTabView)
         .onReceive(NotificationCenter.default.publisher(for: .focusSearchField)) { _ in
             isFocused = true
         }
     }
 }
 
-// MARK: - Strings (このファイル限定。文言はユーザー添削待ち)
+// MARK: - Strings (this file only. Wording is waiting for the user's review)
 
 private enum SearchTabStrings {
     static func placeholder(_ lang: AppLanguage) -> String {

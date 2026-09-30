@@ -2,14 +2,15 @@
 //  AdTrackingConsent.swift
 //  AppBlocker
 //
-//  ATT (App Tracking Transparency) でパーソナライズ広告の可否を決める (2026-08-04)。
+//  Decide whether personalized ads are allowed with ATT (App Tracking Transparency) (2026-08-04).
 //
-//  背景: 広告は 2026-07-31 の導入時から「ATT を出さない = 全員が非パーソナライズ (NPA)」で
-//  固定してある。パーソナライズの方が eCPM は高い (パーソナライズ比で NPA は3〜5割減 [推測寄り])
-//  ため、ユーザー判断で ATT を入れられるように実装だけ先に用意した。
+//  Background: since ads were introduced on 2026-07-31, they have been fixed to "do not show ATT =
+//  everyone gets non-personalized (NPA)". Personalized ads have a higher eCPM (NPA is 30-50% lower
+//  than personalized [inferred]), so only the implementation was prepared ahead of time so that ATT
+//  can be added by the user's decision.
 //
-//  🔴 出荷スイッチは `isEnabled` ただ1つ。false の間は挙動が導入前と完全に同じ
-//  (ダイアログを出さない / NPA 固定のまま / ATTrackingManager を一度も呼ばない)。
+//  🔴 The only shipping switch is `isEnabled`. While it is false, behavior is exactly the same as
+//  before (no dialog / stays fixed to NPA / never calls ATTrackingManager).
 //
 
 import Foundation
@@ -20,57 +21,60 @@ final class AdTrackingConsent {
 
     static let shared = AdTrackingConsent()
 
-    /// 🔴 ATT を出荷するかどうかの唯一のスイッチ。
+    /// 🔴 The only switch for whether ATT ships.
     ///
-    /// **true にする前に、必ず以下4点を全部済ませること。コードだけでは完結しない。**
-    /// 申告と実装が食い違ったまま提出するとリジェクト事由になる。
+    /// **Before setting this to true, always finish all 4 items below. Code alone is not enough.**
+    /// Submitting while the declarations and the implementation disagree is a reason for rejection.
     ///
-    /// 1. `AppBlocker/Info.plist` に `NSUserTrackingUsageDescription` を追加
-    ///    (日本語/英語の両方。「なぜ許可が要るか」を具体的に書く。定型文は弾かれ得る)
-    /// 2. `AppBlocker/PrivacyInfo.xcprivacy` の `NSPrivacyTracking` を **true** に変更
-    ///    ⚠️ `NSPrivacyTrackingDomains` は現状 Google 側から提供されていない
-    ///       (GoogleMobileAds.framework の PrivacyInfo.xcprivacy を実測したところ
-    ///        `NSPrivacyTracking` / `NSPrivacyTrackingDomains` のキー自体が存在せず、
-    ///        全データ種別が `Tracking = false` だった。2026-08-04, SDK v12.14.0)。
-    ///       Apple の規則は「`NSPrivacyTrackingDomains` が空でないなら `NSPrivacyTracking` は true」
-    ///       であって逆は必須ではないため、**ドメインを列挙せず true だけ立てる形は成立する**。
-    ///       ただし ATT 未許可時に iOS がブロックするのは「どれかのマニフェストに列挙された
-    ///       ドメイン」なので、列挙しない = ブロックもされない。ここは提出前に要再確認
-    /// 3. App Store Connect の「App のプライバシー」で **トラッキング = はい** に変更し、
-    ///    追跡に使うデータ種別 (識別子/使用状況データ等) を申告する
-    /// 4. プライバシーポリシーを改訂 → `cd LegalSite && vercel deploy --prod`
+    /// 1. Add `NSUserTrackingUsageDescription` to `AppBlocker/Info.plist`
+    ///    (both Japanese/English. Write concretely "why permission is needed". Boilerplate text can be
+    ///    rejected)
+    /// 2. Change `NSPrivacyTracking` in `AppBlocker/PrivacyInfo.xcprivacy` to **true**
+    ///    ⚠️ `NSPrivacyTrackingDomains` is currently not provided by Google
+    ///       (measuring PrivacyInfo.xcprivacy in GoogleMobileAds.framework showed that
+    ///        the `NSPrivacyTracking` / `NSPrivacyTrackingDomains` keys themselves do not exist, and
+    ///        every data type was `Tracking = false`. 2026-08-04, SDK v12.14.0).
+    ///       Apple's rule is "if `NSPrivacyTrackingDomains` is not empty, `NSPrivacyTracking` is true",
+    ///       and the reverse is not required, so **setting only true without listing domains is valid**.
+    ///       However, what iOS blocks when ATT is not allowed is "domains listed in some manifest",
+    ///       so not listing = not blocked either. Re-check this before submitting
+    /// 3. In App Store Connect "App Privacy", change to **Tracking = Yes** and
+    ///    declare the data types used for tracking (identifiers/usage data etc.)
+    /// 4. Revise the privacy policy → `cd LegalSite && vercel deploy --prod`
     ///
-    /// ⚠️ 2026-07-30 に「ATT は導入しない」と決めた時の反対理由はまだ生きている:
-    ///   ①「スマホ依存を断つアプリ」がトラッキング許可を求めるブランド矛盾
-    ///   ② ダイアログが1枚増えてオンボ/初回体験の離脱が増える
-    /// 収益面の前提も確認すること — 広告収益は eCPM × インプレッション数なので、
-    /// **DAU が薄いローンチ直後は単価が上がっても金額差がほぼ出ない**。
+    /// ⚠️ The reasons against it from 2026-07-30, when "do not add ATT" was decided, still hold:
+    ///   ① Brand contradiction: "an app that breaks phone addiction" asking for tracking permission
+    ///   ② One more dialog increases drop-off in onboarding/the first experience
+    /// Also check the revenue premise: ad revenue is eCPM × impressions, so
+    /// **right after launch when DAU is thin, a higher unit price makes almost no difference in amount**.
     static let isEnabled = false
 
-    /// ダイアログ要求の多重実行ガード (フィードは何度でも再表示されるため)
+    /// Guard against requesting the dialog multiple times (the feed can be shown again any number of times)
     private var hasRequested = false
 
     private init() {}
 
-    /// パーソナライズ広告を出してよいか。
-    /// - `isEnabled == false` の間は常に false = NPA 固定 (導入前と同じ挙動)
-    /// - ATT が未許可/未決定/制限中でも false
+    /// Whether personalized ads may be shown.
+    /// - While `isEnabled == false`, always false = fixed to NPA (same behavior as before)
+    /// - Also false if ATT is not allowed/not determined/restricted
     var allowsPersonalizedAds: Bool {
         guard Self.isEnabled else { return false }
         return ATTrackingManager.trackingAuthorizationStatus == .authorized
     }
 
-    /// ATT ダイアログを出す。**広告を最初にリクエストする前に await すること**
-    /// (先にリクエストしてしまうと初回ぶんが非パーソナライズで確定する)。
+    /// Show the ATT dialog. **await this before requesting the first ad**
+    /// (if an ad is requested first, the first one is fixed as non-personalized).
     ///
-    /// 呼ぶ場所はフィード初表示時。⚠️ オンボ中には出さない — 作り込んだオンボに
-    /// システムダイアログを挟むと完了率が落ちる (2026-07-31 の検討時の結論)。
-    /// 2回目以降は OS が現在の状態を即返すだけなので副作用は無いが、念のためガードする。
+    /// Called when the feed is first shown. ⚠️ Do not show it during onboarding: inserting a
+    /// system dialog into the carefully built onboarding lowers the completion rate (conclusion from the
+    /// 2026-07-31 review).
+    /// From the 2nd time on, the OS just returns the current state immediately, so there are no side
+    /// effects, but guard just in case.
     func requestIfNeeded() async {
         guard Self.isEnabled, !hasRequested else { return }
         hasRequested = true
-        // .notDetermined 以外 (既に許可/拒否済み) なら OS はダイアログを出さない。
-        // 無駄な呼び出しを避けるため明示的に弾く
+        // For anything other than .notDetermined (already allowed/denied), the OS does not show the dialog.
+        // Reject explicitly to avoid useless calls
         guard ATTrackingManager.trackingAuthorizationStatus == .notDetermined else { return }
         _ = await ATTrackingManager.requestTrackingAuthorization()
     }

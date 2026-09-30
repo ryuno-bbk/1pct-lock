@@ -2,14 +2,14 @@
 //  QuoteService.swift
 //  AppBlocker
 //
-//  名言取得サービス（v1.0: ローカル、v2.0: Supabase対応）
+//  Quote fetching service (v1.0: local, v2.0: Supabase support)
 //
 
 import Foundation
 import Combine
 import Supabase
 
-/// v1.0 ローカル名言プロバイダー
+/// v1.0 local quote provider
 final class LocalQuoteProvider: QuoteProviding {
 
     private var cachedQuotes: [Quote] = []
@@ -49,7 +49,7 @@ final class LocalQuoteProvider: QuoteProviding {
     // MARK: - Private
 
     private func loadQuotesFromBundle() {
-        // まずバンドルのJSONを試す
+        // Try the bundled JSON first
         if let url = Bundle.main.url(forResource: "Quotes", withExtension: "json") {
             do {
                 let data = try Data(contentsOf: url)
@@ -61,15 +61,15 @@ final class LocalQuoteProvider: QuoteProviding {
             }
         }
 
-        // フォールバック: サンプルデータを使用
+        // Fallback: use sample data
         cachedQuotes = Quote.samples
     }
 }
 
 // MARK: - QuoteService (Facade)
 
-/// 名言サービスのファサード
-/// プロバイダーを切り替え可能（Local ↔ Supabase）
+/// Facade for the quote service
+/// The provider can be switched (Local ↔ Supabase)
 final class QuoteService: ObservableObject {
 
     static let shared = QuoteService()
@@ -87,17 +87,17 @@ final class QuoteService: ObservableObject {
         self.currentQuote = provider.getRandomQuote()
     }
 
-    /// プロバイダーを切り替え（Supabaseに切り替え時に使用）
+    /// Switch the provider (used when switching to Supabase)
     func setProvider(_ newProvider: QuoteProviding) {
         self.provider = newProvider
     }
 
-    /// Supabaseプロバイダーに切り替え
+    /// Switch to the Supabase provider
     func enableSupabase() {
         setProvider(SupabaseQuoteProvider())
     }
 
-    /// 名言を読み込み
+    /// Load quotes
     @MainActor
     func loadQuotes() async {
         isLoading = true
@@ -117,7 +117,7 @@ final class QuoteService: ObservableObject {
         isLoading = false
     }
 
-    /// 全著者を読み込み（Supabaseから）
+    /// Load all authors (from Supabase)
     @MainActor
     func loadAuthors() async {
         do {
@@ -135,19 +135,19 @@ final class QuoteService: ObservableObject {
         }
     }
 
-    /// 特定のAuthorの名言を取得
+    /// Get the quotes of a specific Author
     func fetchQuotesByAuthor(authorId: UUID) async throws -> [Quote] {
         return try await provider.fetchQuotes(byAuthor: authorId)
     }
 
-    /// ランダムな名言に切り替え
+    /// Switch to a random quote
     func shuffleQuote() {
         currentQuote = provider.getRandomQuote()
     }
 
-    /// Shield ローテーション用の名言プールを取得。
-    /// provider (Supabase は空を返す) → loaded quotes → Local バンドル の順にフォールバックし、
-    /// オフライン/フレッシュインストールでも必ず非空のプールを返す
+    /// Get the quote pool for Shield rotation.
+    /// Falls back in the order provider (Supabase returns empty) → loaded quotes → Local bundle,
+    /// so it always returns a non-empty pool, even offline / on a fresh install
     func randomPool(count: Int) -> [Quote] {
         let fromProvider = provider.getRandomPool(count: count)
         if !fromProvider.isEmpty { return fromProvider }
@@ -155,7 +155,7 @@ final class QuoteService: ObservableObject {
         return LocalQuoteProvider().getRandomPool(count: count)
     }
 
-    /// 特定の名言を選択
+    /// Select a specific quote
     func selectQuote(_ quote: Quote) {
         currentQuote = quote
     }

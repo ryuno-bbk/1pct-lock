@@ -2,8 +2,8 @@
 //  TimerManager.swift
 //  AppBlocker
 //
-//  タイマーブロック管理サービス
-//  指定時間だけブロックし、時間が来たら自動解除
+//  Timer block management service
+//  Blocks only for the specified time, and unlocks automatically when the time is up
 //
 
 import Foundation
@@ -13,28 +13,29 @@ import ManagedSettings
 import DeviceActivity
 import UIKit
 
-/// タイマーブロック管理サービス
+/// Timer block management service
 final class TimerManager: ObservableObject {
 
     @MainActor static let shared = TimerManager()
 
     // MARK: - Published Properties
 
-    /// 残り時間（秒）
+    /// Remaining time (seconds)
     @Published private(set) var remainingSeconds: Int = 0
 
-    /// タイマーが動作中か
+    /// Whether the timer is running
     @Published private(set) var isRunning: Bool = false
 
-    /// 現在の設定
+    /// Current settings
     @Published private(set) var currentConfig: TimerConfig?
 
-    /// タイマー自然終了時刻 (手動停止 stopTimer() では更新しない)。
-    /// 継続ロック中トースト等、「終了イベント」を監視したい View から onChange で購読する。
+    /// Time the timer ended naturally (not updated by a manual stop with stopTimer()).
+    /// Views that want to watch the "end event", such as the toast shown during a continued lock,
+    /// subscribe to it with onChange.
     @Published private(set) var didCompleteAt: Date?
 
-    /// 直近に自然完了したセッションの実ロック時間 (秒)。didCompleteAt と同時に更新される。
-    /// SessionCompleteView がメイン数字の表示に使う。手動停止では更新しない。
+    /// Actual lock time (seconds) of the most recent naturally completed session. Updated together with
+    /// didCompleteAt. SessionCompleteView uses it for the main number. Not updated by a manual stop.
     @Published private(set) var lastCompletedDuration: TimeInterval?
 
     // MARK: - Private Properties
@@ -48,25 +49,26 @@ final class TimerManager: ObservableObject {
     private let appGroupID = AppGroupConstants.identifier
     private let selectionKey = AppGroupConstants.Keys.timerSelection
 
-    // MARK: - H5: OS バックストップ (プロセス死亡中の期限切れ対策)
+    // MARK: - H5: OS backstop (for expiry while the process is dead)
 
-    /// タイマー専用の単発 (repeats: false) DeviceActivity 監視。
-    /// アプリが起動していない間に期限が来ても、Extension の intervalDidEnd (タイマー named store
-    /// クリア分岐) が OS 側で shield を解除できるようにするための保険。
-    /// ⚠️ この文字列は DeviceActivityMonitorExtension.swift 側でハードコードして同期させること
-    /// (Extension は別ターゲットでこの定数に直接アクセスできない)
+    /// One-shot (repeats: false) DeviceActivity monitoring only for the timer.
+    /// A safety net so that even if the time expires while the app is not running, the Extension's
+    /// intervalDidEnd (the branch that clears the timer named store) can remove the shield on the OS side.
+    /// ⚠️ This string must be hardcoded and kept in sync in DeviceActivityMonitorExtension.swift
+    /// (the Extension is a separate target and cannot access this constant directly)
     private static let timerActivityName = DeviceActivityName("AppBlocker.Timer")
     private let activityCenter = DeviceActivityCenter()
 
-    /// フォアグラウンド復帰を検知して、次の Timer tick を待たずに即座に endTime と突き合わせる。
-    /// バックグラウンドで RunLoop が長時間止まっていた場合でも、復帰直後に期限超過を検出できる (H4)
+    /// Detect returning to the foreground and compare with endTime immediately, without waiting for the
+    /// next Timer tick. Even if the RunLoop was stopped for a long time in the background, expiry can be
+    /// detected right after returning (H4)
     private var foregroundObserver: NSObjectProtocol?
 
     // MARK: - Init
 
     @MainActor
     private init() {
-        // 保存されているタイマーを復元
+        // Restore the saved timer
         restoreTimerState()
 
         foregroundObserver = NotificationCenter.default.addObserver(
@@ -80,55 +82,56 @@ final class TimerManager: ObservableObject {
 
     // MARK: - Public Methods
 
-    /// タイマーを開始
+    /// Start the timer
     func startTimer(
         durationMinutes: Int,
         apps: FamilyActivitySelection,
         onComplete: (() -> Void)? = nil
     ) {
-        // アプリ選択を保存
+        // Save the app selection
         saveSelectionToAppGroup(apps)
 
-        // セッション開始時刻を記録 (累計ロック時間集計用)
+        // Record the session start time (for the total lock time aggregation)
         sessionStartedAt = Date()
 
-        // 終了時刻を計算 (H4: 残り時間は常にこの endTime から壁時計で導出する。tick 減算はしない)
+        // Compute the end time (H4: the remaining time is always derived from this endTime with the wall
+        // clock. No tick subtraction)
         let plannedEndTime = Date().addingTimeInterval(TimeInterval(durationMinutes * 60))
         endTime = plannedEndTime
         remainingSeconds = durationMinutes * 60
 
-        // 設定を保存
+        // Save the settings
         let config = TimerConfig(durationMinutes: durationMinutes)
         currentConfig = config
         saveTimerConfig(config)
 
-        // シールドを適用
+        // Apply the shield
         applyShield(apps: apps)
 
-        // H5: プロセス死亡中の期限切れに備え、OS 側にも単発の監視を登録する
+        // H5: also register a one-shot monitor on the OS side, in case the time expires while the process is dead
         registerOSBackstop(endTime: plannedEndTime)
 
-        // タイマーを開始
+        // Start the timer
         isRunning = true
         startCountdownTimer(onComplete: onComplete)
 
         print("⏱️ Timer started: \(durationMinutes) minutes")
     }
 
-    /// タイマーを停止（手動停止）
+    /// Stop the timer (manual stop)
     func stopTimer() {
         timer?.invalidate()
         timer = nil
 
-        // H5: OS バックストップの監視も掃除する (残しても repeats:false で自然失効するが、
-        // 早期停止した分だけ無駄に生き続けるのを避ける)
+        // H5: also clean up the OS backstop monitor (if left, it expires naturally with repeats:false, but this
+        // avoids it staying alive uselessly for the time cut short by the early stop)
         clearOSBackstop()
 
-        // シールドを解除
+        // Remove the shield
         removeShield()
 
-        // セッションを「aborted」として記録
-        // plannedSeconds はリセット前 (currentConfig が生きている) の今のうちに取る
+        // Record the session as "aborted".
+        // Take plannedSeconds now, before the reset (while currentConfig is still alive)
         if let startedAt = sessionStartedAt {
             BlockSessionTracker.enqueueSession(
                 mode: "timer",
@@ -140,26 +143,26 @@ final class TimerManager: ObservableObject {
             sessionStartedAt = nil
         }
 
-        // 状態をリセット
+        // Reset the state
         isRunning = false
         remainingSeconds = 0
         endTime = nil
         currentConfig = nil
 
-        // 保存データを削除
+        // Delete the saved data
         clearTimerConfig()
 
         print("⏱️ Timer stopped manually")
     }
 
-    /// 残り時間をフォーマット（MM:SS）
+    /// Format the remaining time (MM:SS)
     func formattedRemainingTime() -> String {
         let minutes = remainingSeconds / 60
         let seconds = remainingSeconds % 60
         return String(format: "%02d:%02d", minutes, seconds)
     }
 
-    /// 残り時間をフォーマット（HH:MM:SS）
+    /// Format the remaining time (HH:MM:SS)
     func formattedRemainingTimeLong() -> String {
         let hours = remainingSeconds / 3600
         let minutes = (remainingSeconds % 3600) / 60
@@ -174,11 +177,13 @@ final class TimerManager: ObservableObject {
 
     // MARK: - Private Methods
 
-    /// カウントダウンタイマーを開始
+    /// Start the countdown timer
     ///
-    /// H4: tick は表示更新のためだけに使い、残り時間の"真実"は endTime (壁時計) から毎回導出する。
-    /// 旧実装は tick ごとに remainingSeconds を 1 ずつ減算していたため、バックグラウンドで
-    /// RunLoop/Timer が止まっている間は減らず、その分だけ実際の解除時刻が予定より後ろにズレていた。
+    /// H4: the tick is used only to update the display; the "truth" of the remaining time is derived from
+    /// endTime (wall clock) every time.
+    /// The old implementation subtracted 1 from remainingSeconds on every tick, so while RunLoop/Timer were
+    /// stopped in the background it did not decrease, and the actual unlock time drifted later than planned
+    /// by that amount.
     private func startCountdownTimer(onComplete: (() -> Void)? = nil) {
         timer?.invalidate()
 
@@ -190,13 +195,14 @@ final class TimerManager: ObservableObject {
             RunLoop.main.add(timer, forMode: .common)
         }
 
-        // 開始/復帰直後の表示を即座に endTime 基準へ合わせる (次の 1 秒 tick を待たない)
+        // Align the display to endTime right after start/return (do not wait for the next 1-second tick)
         syncRemainingFromEndTime(onComplete: onComplete)
     }
 
-    /// H4: 残り時間を endTime からの壁時計計算で同期する。
-    /// - 通常 tick からも、フォアグラウンド復帰通知からも呼ばれる共通経路。
-    /// - endTime を過ぎていれば (バックグラウンドで tick が止まっていた分も含めて) 即座に完了処理へ進む。
+    /// H4: sync the remaining time with a wall-clock calculation from endTime.
+    /// - Shared path, called both from the normal tick and from the return-to-foreground notification.
+    /// - If endTime has passed (including the time the tick was stopped in the background), go straight to
+    ///   completion.
     private func syncRemainingFromEndTime(onComplete: (() -> Void)? = nil) {
         guard isRunning, let endTime = endTime else { return }
 
@@ -209,24 +215,24 @@ final class TimerManager: ObservableObject {
         }
     }
 
-    /// タイマー終了時の処理
+    /// Handling when the timer ends
     private func timerCompleted(onComplete: (() -> Void)? = nil) {
         timer?.invalidate()
         timer = nil
 
-        // H5: 自然完了なので OS 側の単発監視も明示的に掃除する
+        // H5: it completed naturally, so also explicitly clean up the one-shot monitor on the OS side
         clearOSBackstop()
 
-        // シールドを解除
+        // Remove the shield
         removeShield()
 
-        // セッションを「completed」として記録
-        // H4: endedAt は検出時刻 (Date()) ではなく確定済みの endTime (予定終了時刻) を使う。
-        // バックグラウンドで検出がずれ込んでも、記録される duration がその分だけ水増しされない
-        // (restoreTimerState の期限切れ復元分岐と同じ考え方: endedAt: config.endTime)
+        // Record the session as "completed".
+        // H4: endedAt uses the fixed endTime (planned end time), not the detection time (Date()).
+        // Even if detection is delayed in the background, the recorded duration is not inflated by that amount
+        // (same idea as the expired-restore branch of restoreTimerState: endedAt: config.endTime)
         if let startedAt = sessionStartedAt {
             let endedAt = endTime ?? Date()
-            // SessionCompleteView 用に実ロック時間を確定 (didCompleteAt 発火前にセット)
+            // Fix the actual lock time for SessionCompleteView (set before didCompleteAt fires)
             lastCompletedDuration = endedAt.timeIntervalSince(startedAt)
             BlockSessionTracker.enqueueSession(
                 mode: "timer",
@@ -238,21 +244,21 @@ final class TimerManager: ObservableObject {
             sessionStartedAt = nil
         }
 
-        // 状態をリセット
+        // Reset the state
         isRunning = false
         remainingSeconds = 0
         endTime = nil
         currentConfig = nil
 
-        // 保存データを削除
+        // Delete the saved data
         clearTimerConfig()
 
-        // BlockingService 側の timerSession キーも消す。
-        // ここを残すと、次回起動時に BlockingService.restoreState が
-        // 「タイマーは動いていないのにアクティブセッションが存在する」幽霊状態を復元してしまう。
+        // Also delete the timerSession key on the BlockingService side.
+        // If it is left, on the next launch BlockingService.restoreState restores a ghost state where
+        // "the timer is not running but an active session exists".
         storage.saveTimerSession(nil)
 
-        // 自然終了イベントを発火 (手動停止とは区別する)
+        // Fire the natural end event (kept separate from a manual stop)
         didCompleteAt = Date()
 
         onComplete?()
@@ -260,17 +266,17 @@ final class TimerManager: ObservableObject {
         print("⏱️ Timer completed - Shield removed")
     }
 
-    /// シールドを適用
+    /// Apply the shield
     private func applyShield(apps: FamilyActivitySelection) {
-        // カテゴリと個別アプリは併用可能 (和集合)。旧「カテゴリ優先」分岐は
-        // 両方選んだ時に個別アプリが遮断されない穴だった (2026-07-16 Fableレビュー)
+        // Categories and individual apps can be used together (union). The old "category first" branch was a
+        // hole where individual apps were not blocked when both were selected (2026-07-16 Fable review)
         store.shield.applications = apps.applicationTokens.isEmpty ? nil : apps.applicationTokens
         store.shield.applicationCategories = apps.categoryTokens.isEmpty ? nil : .specific(apps.categoryTokens)
 
         print("✅ Shield applied: \(apps.applicationTokens.count) apps, \(apps.categoryTokens.count) categories")
     }
 
-    /// シールドを解除
+    /// Remove the shield
     private func removeShield() {
         store.shield.applications = nil
         store.shield.applicationCategories = nil
@@ -278,13 +284,13 @@ final class TimerManager: ObservableObject {
         print("✅ Timer shield removed")
     }
 
-    /// H5: プロセス死亡中の期限切れに備えた OS 側バックストップを登録する。
-    /// DeviceActivityCenter に単発 (repeats: false) の監視を登録し、Extension の
-    /// intervalDidEnd (タイマー named store をクリアする分岐) がアプリの生死に関わらず
-    /// 期限どおりに shield を解除できるようにする。
-    /// iOS の DeviceActivity 監視には最短間隔 (15分) の制約があり、それ未満のタイマーでは
-    /// 登録が throw しうる。その場合は握りつぶしログのみとし、アプリ内の壁時計処理 (H4) を
-    /// 主経路として許容する (現状と同等の保護レベルであり退行ではない)。
+    /// H5: register the OS-side backstop for expiry while the process is dead.
+    /// Register a one-shot (repeats: false) monitor with DeviceActivityCenter, so that the Extension's
+    /// intervalDidEnd (the branch that clears the timer named store) can remove the shield on time whether
+    /// the app is alive or not.
+    /// iOS DeviceActivity monitoring has a minimum interval (15 minutes), and registration can throw for
+    /// shorter timers. In that case we only swallow it with a log, and accept the in-app wall-clock
+    /// handling (H4) as the main path (the same protection level as now, not a regression).
     private func registerOSBackstop(endTime: Date) {
         let calendar = Calendar.current
         let now = Date()
@@ -311,24 +317,26 @@ final class TimerManager: ObservableObject {
         }
     }
 
-    /// H5: OS バックストップの監視を掃除する。タイマーの手動停止・自然完了・期限切れ復元のいずれでも呼ぶこと
+    /// H5: clean up the OS backstop monitor. Call this on every manual stop, natural completion and expired
+    /// restore of the timer
     private func clearOSBackstop() {
         activityCenter.stopMonitoring([Self.timerActivityName])
     }
 
-    /// タイマー状態を復元（アプリ再起動時）
+    /// Restore the timer state (on app relaunch)
     private func restoreTimerState() {
         guard let config = loadTimerConfig() else {
             clearTimerConfig()
             return
         }
 
-        // アプリがキル/サスペンド中にタイマーが終了したケース:
-        // shield は OS 設定として残り続けるため、ここで解除しないと永久ブロックになる
+        // Case where the timer ended while the app was killed/suspended:
+        // the shield stays as an OS setting, so if we do not remove it here, it becomes a permanent block
         if config.isExpired {
             removeShield()
-            // H5: 期限切れ復元パス (= H4 の壁時計 or OS バックストップのどちらかが既に処理済み得るケース) でも、
-            // OS 側の単発監視が残っていれば掃除する (二重登録を防ぐ)
+            // H5: even on the expired-restore path (= a case where either H4's wall clock or the OS backstop may
+            // already have handled it), clean up the one-shot monitor on the OS side if it remains (prevents
+            // double registration)
             clearOSBackstop()
             let startedAt = config.endTime.addingTimeInterval(-TimeInterval(config.durationMinutes * 60))
             BlockSessionTracker.enqueueSession(
@@ -339,22 +347,22 @@ final class TimerManager: ObservableObject {
                 plannedSeconds: config.durationMinutes * 60
             )
             clearTimerConfig()
-            // timerCompleted() と同様、BlockingService 側の timerSession キーも消す。
-            // 期限切れ復元パスでこれを怠ると、BlockingService.restoreState が
-            // 「実際には動いていないタイマー」のセッションを幽霊復元してしまう。
+            // Like timerCompleted(), also delete the timerSession key on the BlockingService side.
+            // If this is skipped on the expired-restore path, BlockingService.restoreState restores the session of
+            // "a timer that is not actually running" as a ghost.
             storage.saveTimerSession(nil)
             return
         }
 
-        // タイマーを再開
+        // Resume the timer
         currentConfig = config
         endTime = config.endTime
         remainingSeconds = config.remainingSeconds
-        // 累計記録用 startedAt を復元 (endTime から duration を引く)
+        // Restore startedAt for the total record (endTime minus duration)
         sessionStartedAt = config.endTime.addingTimeInterval(-TimeInterval(config.durationMinutes * 60))
 
         if remainingSeconds > 0 {
-            // 保存されたアプリ選択でシールドを再適用
+            // Re-apply the shield with the saved app selection
             if let apps = loadSelectionFromAppGroup() {
                 applyShield(apps: apps)
             }

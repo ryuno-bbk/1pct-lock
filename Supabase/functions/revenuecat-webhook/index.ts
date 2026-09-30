@@ -1,70 +1,72 @@
 // ============================================================
 // revenuecat-webhook / index.ts
-// RevenueCat Webhook → users.is_pro 同期 Edge Function (Deno)
+// RevenueCat Webhook → Edge Function (Deno) that syncs users.is_pro
 // ============================================================
-// 設計: Fable 5 (2026-07-16 統合設計メモ → 2026-07-18 実装)
-// 2026-08-01: TRANSFER 分岐の監査ブロッカー対応。L23 で「誤剥奪の方が to 付与漏れより
-//   重大」としていた判断が、実際には entitlement を一切確認せず is_pro=true を書く穴
-//   だったため修正 (詳細は下記 TRANSFER の項と本文コメント参照)
+// Design: Fable 5 (2026-07-16 integrated design memo → 2026-07-18 implementation)
+// 2026-08-01: fix for the audit blocker in the TRANSFER branch. The judgment in L23 that "a wrong
+//   revoke is worse than missing a grant to `to`" was in fact a hole that wrote is_pro=true without
+//   checking the entitlement at all, so it was fixed (details in the TRANSFER item below and in the
+//   comments in the body)
 //
-// 役割:
-//   RevenueCat の Webhook イベントを受けて public.users.is_pro を更新する。
-//   is_pro は 015/016 の protect trigger でクライアント直 UPDATE 禁止のため、
-//   ここ (service_role = rolbypassrls) が唯一の書き込み経路。
+// Role:
+//   Receives RevenueCat Webhook events and updates public.users.is_pro.
+//   is_pro cannot be UPDATEd directly by clients because of the protect trigger in 015/016,
+//   so this (service_role = rolbypassrls) is the only write path.
 //
-// 前提:
-//   - クライアントは Purchases.logIn(<Supabase user UUID>) を呼ぶため、
-//     app_user_id = users.id (UUID) になる。匿名ID ($RCAnonymousID:...) は
-//     ログイン前のイベントなので何もしない (ログイン時に TRANSFER が来る)
-//   - entitlement は "pro" 1本 (monthly / yearly / lifetime 全てが付与する)
+// Assumptions:
+//   - The client calls Purchases.logIn(<Supabase user UUID>), so
+//     app_user_id = users.id (UUID). Anonymous IDs ($RCAnonymousID:...) are events from
+//     before login, so nothing is done (a TRANSFER arrives on login)
+//   - There is one entitlement, "pro" (monthly / yearly / lifetime all grant it)
 //
-// イベント → is_pro の対応:
+// Mapping of event → is_pro:
 //   true  : INITIAL_PURCHASE / RENEWAL / UNCANCELLATION / NON_RENEWING_PURCHASE
-//           (買い切り) / PRODUCT_CHANGE (ただし entitlement_ids に PRO_ENTITLEMENT を
-//           含む場合のみ付与。L22 監査対応)
-//   false : EXPIRATION (アクセス権が実際に切れた時のみ)
-//   無視  : CANCELLATION (自動更新オフにしただけ。期限まで pro 継続)、
-//           BILLING_ISSUE (猶予期間中は pro 継続。切れれば EXPIRATION が来る)、TEST
-//   TRANSFER: transferred_to / transferred_from の両方が対象。TRANSFER の payload には
-//             entitlement_ids も expiration も含まれないため
-//             (出典: https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields)、
-//             RevenueCat REST API (GET /v1/subscribers/{id}, 出典:
-//             https://www.revenuecat.com/docs/api-v1) で実際の entitlement 状態を
-//             都度確認してから is_pro を true/false に反映する。判定不能なら is_pro を
-//             書かずに 500 でリトライさせる (fail-closed)。詳細は TRANSFER 分岐本文の
-//             コメント参照
+//           (one-time purchase) / PRODUCT_CHANGE (granted only if entitlement_ids contains
+//           PRO_ENTITLEMENT. L22 audit fix)
+//   false : EXPIRATION (only when access has actually ended)
+//   ignore: CANCELLATION (only turned off auto-renew. Stays pro until the end of the period),
+//           BILLING_ISSUE (stays pro during the grace period. If it lapses, EXPIRATION arrives), TEST
+//   TRANSFER: both transferred_to and transferred_from are handled. The TRANSFER payload contains
+//             neither entitlement_ids nor expiration
+//             (source: https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields),
+//             so the actual entitlement state is checked each time with the RevenueCat REST API
+//             (GET /v1/subscribers/{id}, source:
+//             https://www.revenuecat.com/docs/api-v1) before writing is_pro as true/false. If it
+//             cannot be determined, is_pro is not written and 500 is returned so it is retried
+//             (fail-closed). See the comments in the TRANSFER branch body for details
 //
-// イベント順序保証 (L24 監査対応):
-//   webhook の到着順序は保証されない。event_timestamp_ms を rc_last_event_ms
-//   (040 migration) と突き合わせ、古いイベントによる is_pro の巻き戻りを防ぐ
+// Event order guarantee (L24 audit fix):
+//   The arrival order of webhooks is not guaranteed. event_timestamp_ms is compared with
+//   rc_last_event_ms (040 migration) to prevent is_pro from being rolled back by an old event
 //
-// エラー処理:
-//   認証失敗のみ 401 (RevenueCat 側でリトライされる)。それ以外の内部エラーは
-//   ログを残して 200 (moderate-post と同じ「リトライの嵐を起こさない」方針。
-//   ただし DB 更新失敗と TRANSFER の entitlement 判定不能 (API未設定/取得失敗) は
-//   500 を返してリトライに乗せる — 前者は is_pro の同期漏れ、後者は誤った is_pro の
-//   反映のリスクが、それぞれ「リトライの嵐」より重大なため)
+// Error handling:
+//   Only authentication failures return 401 (RevenueCat retries them). Other internal errors are
+//   logged and return 200 (same policy as moderate-post: "do not cause a retry storm".
+//   However, a DB update failure and an undeterminable TRANSFER entitlement (API not configured / fetch
+//   failed) return 500 so they are retried. The risk of the former (is_pro not synced) and the latter
+//   (a wrong is_pro written) is each worse than a "retry storm")
 //
-// 環境変数:
-//   REVENUECAT_WEBHOOK_AUTH   - `supabase secrets set` で設定 (ユーザー作業)。
-//                               RevenueCat Dashboard → Integrations → Webhooks の
-//                               Authorization header value と同じ文字列にする
-//   REVENUECAT_SECRET_API_KEY - (optional) TRANSFER イベントで entitlement の実状態を
-//                               RevenueCat REST API から確認するために使う。
-//                               RevenueCat Dashboard → Project Settings → API keys の
-//                               secret key を
+// Environment variables:
+//   REVENUECAT_WEBHOOK_AUTH   - set with `supabase secrets set` (user task).
+//                               Must be the same string as the Authorization header value in
+//                               RevenueCat Dashboard → Integrations → Webhooks
+//   REVENUECAT_SECRET_API_KEY - (optional) used for TRANSFER events to check the actual
+//                               entitlement state via the RevenueCat REST API.
+//                               Set the secret key from RevenueCat Dashboard → Project
+//                               Settings → API keys with
 //                               `supabase secrets set REVENUECAT_SECRET_API_KEY=...`
-//                               で設定する (ユーザー作業)。未設定の間は TRANSFER
-//                               イベントを 500 で保留し続ける (fail-closed。上記
-//                               TRANSFER の項と本文コメント参照)
-//   RC_ALLOW_SANDBOX          - "true" の時のみ SANDBOX イベントも処理する
-//                               (課金導線のサンドボックス検証用。テスト後は必ず unset。
-//                               未設定/それ以外の値なら非本番イベントは全て無視)
-//   SUPABASE_URL              - ランタイム自動注入
-//   SUPABASE_SERVICE_ROLE_KEY - ランタイム自動注入
+//                               (user task). While it is not set, TRANSFER events keep being
+//                               held with 500 (fail-closed. See the TRANSFER item above and
+//                               the comments in the body)
+//   RC_ALLOW_SANDBOX          - SANDBOX events are processed only when this is "true"
+//                               (for sandbox testing of the purchase flow. Always unset it after
+//                               testing. If unset or any other value, all non-production events
+//                               are ignored)
+//   SUPABASE_URL              - injected automatically by the runtime
+//   SUPABASE_SERVICE_ROLE_KEY - injected automatically by the runtime
 //
-// デプロイ: `supabase functions deploy revenuecat-webhook --no-verify-jwt`
-//   (--no-verify-jwt 必須: RevenueCat は Supabase の JWT を持たないため)
+// Deploy: `supabase functions deploy revenuecat-webhook --no-verify-jwt`
+//   (--no-verify-jwt is required: RevenueCat does not have a Supabase JWT)
 // ============================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -72,19 +74,21 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const WEBHOOK_AUTH = Deno.env.get("REVENUECAT_WEBHOOK_AUTH")!;
-// H12: SANDBOX/TestFlight の無料購入が本番 is_pro=true を立てる課金バイパス防止。
-// サンドボックス検証時のみ `supabase secrets set RC_ALLOW_SANDBOX=true` で一時的に通す
+// H12: prevents a purchase bypass where free SANDBOX/TestFlight purchases set is_pro=true in production.
+// Only during sandbox testing, let them through temporarily with
+// `supabase secrets set RC_ALLOW_SANDBOX=true`
 const ALLOW_SANDBOX = Deno.env.get("RC_ALLOW_SANDBOX") === "true";
-// 2026-08-01: TRANSFER の entitlement 実状態確認用 (optional)。WEBHOOK_AUTH と違い `!`
-// を付けない — 未設定でも起動時に落とさず、TRANSFER 処理側で fail-closed (500 で
-// リトライさせる) にするため、ここでは "" にフォールバックするだけに留める
+// 2026-08-01: for checking the actual TRANSFER entitlement state (optional). Unlike WEBHOOK_AUTH, no `!`
+// is added. Even if unset, it should not crash at startup; the TRANSFER handling is fail-closed (returns
+// 500 to trigger a retry), so here it only falls back to ""
 const REVENUECAT_SECRET_API_KEY = Deno.env.get("REVENUECAT_SECRET_API_KEY") ?? "";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
-// RevenueCat ダッシュボードの実識別子 (作成後変更不可)。RevenueCatConfig.swift と一致させること
+// The real identifier in the RevenueCat dashboard (cannot be changed after creation). Must match
+// RevenueCatConfig.swift
 const PRO_ENTITLEMENT = "1% Pro";
 
 const GRANT_EVENTS = new Set([
@@ -102,17 +106,17 @@ const UUID_RE =
 
 interface RCEvent {
   type: string;
-  event_timestamp_ms?: number; // イベント発生時刻 (ms epoch)。順序保証用 (L24 監査対応)
-  environment?: string; // "PRODUCTION" | "SANDBOX" (RevenueCat が全イベントに付与)
+  event_timestamp_ms?: number; // Time the event occurred (ms epoch). Used for ordering (L24 audit fix)
+  environment?: string; // "PRODUCTION" | "SANDBOX" (RevenueCat attaches it to every event)
   app_user_id?: string;
   entitlement_ids?: string[] | null;
   transferred_to?: string[] | null;
   transferred_from?: string[] | null;
 }
 
-// RevenueCat REST API `GET /v1/subscribers/{app_user_id}` のレスポンス形。
-// 出典: https://www.revenuecat.com/docs/api-v1
-// (買い切り/lifetime では expires_date が null になる)
+// Response shape of the RevenueCat REST API `GET /v1/subscribers/{app_user_id}`.
+// Source: https://www.revenuecat.com/docs/api-v1
+// (for one-time purchase/lifetime, expires_date is null)
 interface RCEntitlement {
   expires_date?: string | null;
   grace_period_expires_date?: string | null;
@@ -127,8 +131,8 @@ interface RCSubscriberResponse {
 }
 
 async function setIsPro(userId: string, isPro: boolean, eventTimestampMs?: number): Promise<boolean> {
-  // L24: is_pro の更新は set_is_pro_guarded RPC (040 migration) 経由に一本化。
-  // event_timestamp_ms が rc_last_event_ms より古い場合は DB 側で更新をスキップする
+  // L24: all is_pro updates go through the set_is_pro_guarded RPC (040 migration).
+  // If event_timestamp_ms is older than rc_last_event_ms, the DB side skips the update
   const { data, error } = await supabase.rpc("set_is_pro_guarded", {
     p_user_id: userId,
     p_is_pro: isPro,
@@ -143,15 +147,14 @@ async function setIsPro(userId: string, isPro: boolean, eventTimestampMs?: numbe
   } else {
     console.log(`✅ is_pro = ${isPro} (${userId})`);
   }
-  return true; // 古いイベントによるスキップは「正しく無視できた」ので成功(200)として扱う。errorの時だけfalse
+  return true; // A skip due to an old event was "correctly ignored", so it counts as success (200). false only on error
 }
 
-// 2026-08-01: TRANSFER イベント対応。payload に entitlement_ids も expiration も
-// 含まれないため
-// (出典: https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields)、
-// RevenueCat REST API (出典: https://www.revenuecat.com/docs/api-v1) から現在の
-// PRO_ENTITLEMENT ("1% Pro") entitlement の実状態を都度取得する。
-// 戻り値: true=有効 / false=無効 / null=判定不能（ネットワーク・認証・パースの失敗）
+// 2026-08-01: TRANSFER event support. The payload contains neither entitlement_ids nor expiration
+// (source: https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields),
+// so the actual state of the PRO_ENTITLEMENT ("1% Pro") entitlement is fetched each time from the
+// RevenueCat REST API (source: https://www.revenuecat.com/docs/api-v1).
+// Return value: true=active / false=inactive / null=cannot determine (network, auth or parse failure)
 async function fetchProStateFromRevenueCat(appUserId: string): Promise<boolean | null> {
   let res: Response;
   try {
@@ -159,14 +162,14 @@ async function fetchProStateFromRevenueCat(appUserId: string): Promise<boolean |
       `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`,
       {
         headers: { Authorization: `Bearer ${REVENUECAT_SECRET_API_KEY}` },
-        // RevenueCat は webhook レスポンスを60秒でタイムアウト扱いにする
-        // (出典: https://www.revenuecat.com/docs/integrations/webhooks)。
-        // それより十分短い期限で自ら諦めて null (判定不能) を返す
+        // RevenueCat treats a webhook response as timed out after 60 seconds
+        // (source: https://www.revenuecat.com/docs/integrations/webhooks).
+        // Give up on our own with a much shorter deadline and return null (cannot determine)
         signal: AbortSignal.timeout(10_000),
       },
     );
   } catch (e) {
-    // API キーそのものはログに出さない。ネットワークエラー/タイムアウトのみ記録
+    // Never log the API key itself. Only record network errors/timeouts
     console.error(`❌ RevenueCat API fetch failed (${appUserId}):`, e);
     return null;
   }
@@ -194,7 +197,7 @@ async function fetchProStateFromRevenueCat(appUserId: string): Promise<boolean |
 
   const expiresDateRaw = ent.expires_date;
   if (expiresDateRaw === null || expiresDateRaw === undefined) {
-    // 買い切り (lifetime) は expires_date が null → 無期限で有効
+    // One-time purchase (lifetime) has expires_date null → active with no end date
     return true;
   }
 
@@ -218,7 +221,7 @@ async function fetchProStateFromRevenueCat(appUserId: string): Promise<boolean |
   return effectiveExpiresMs > Date.now();
 }
 
-// L25: webhook 認証の定数時間比較 (タイミング攻撃対策)
+// L25: constant-time comparison for webhook authentication (protects against timing attacks)
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let result = 0;
@@ -232,12 +235,13 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") {
     return new Response("method not allowed", { status: 405 });
   }
-  // RevenueCat Dashboard で設定した Authorization header と突き合わせる (定数時間比較)。
-  // WEBHOOK_AUTH が空文字列 (未設定/設定ミス) の場合は無条件に fail-closed する —
-  // でないと timingSafeEqual("", "") が true になり誤って認証成功してしまう
+  // Compare with the Authorization header set in the RevenueCat Dashboard (constant-time comparison).
+  // If WEBHOOK_AUTH is an empty string (not set / misconfigured), fail closed unconditionally.
+  // Otherwise timingSafeEqual("", "") would be true and authentication would wrongly succeed
   const gotAuth = req.headers.get("Authorization");
   if (WEBHOOK_AUTH.length === 0 || !timingSafeEqual(gotAuth ?? "", WEBHOOK_AUTH)) {
-    // 値そのものはログに残さない (秘密)。長さと Bearer 前置の有無だけで原因を切り分ける
+    // Do not log the value itself (secret). Narrow down the cause using only the length and whether it has
+    // a Bearer prefix
     console.error(
       `❌ auth mismatch: got len=${gotAuth?.length ?? 0} expected len=${WEBHOOK_AUTH.length} bearerPrefix=${gotAuth?.startsWith("Bearer ") ?? false}`,
     );
@@ -250,11 +254,11 @@ Deno.serve(async (req) => {
     event = body?.event ?? {};
   } catch (e) {
     console.error("❌ payload parse failed:", e);
-    return new Response("ok", { status: 200 }); // 壊れた payload はリトライしても直らない
+    return new Response("ok", { status: 200 }); // A broken payload will not be fixed by retrying
   }
 
-  // H12: 非本番イベントは本番 DB に反映しない。environment が欠けている場合も
-  // 安全側 (無視) に倒す。RC_ALLOW_SANDBOX=true の時だけ検証用に通す
+  // H12: do not apply non-production events to the production DB. If environment is missing, also fall
+  // to the safe side (ignore). Let them through for testing only when RC_ALLOW_SANDBOX=true
   if (event.environment !== "PRODUCTION") {
     if (!ALLOW_SANDBOX) {
       console.log(
@@ -268,33 +272,33 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // TRANSFER: 匿名ID→ログインID等の付け替え、または別 Apple ID への引き継ぎ。
-    // payload には transferred_from/transferred_to の UUID 一覧しか入っておらず、
-    // entitlement_ids も expiration も含まれない
-    // (出典: https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields)。
-    // そのため to/from 双方について RevenueCat REST API で実際の entitlement 状態を
-    // 確認してから is_pro を反映する (fetchProStateFromRevenueCat 参照)。
+    // TRANSFER: reassignment such as anonymous ID → login ID, or a handover to another Apple ID.
+    // The payload only contains the UUID lists transferred_from/transferred_to, and contains neither
+    // entitlement_ids nor expiration
+    // (source: https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields).
+    // So for both to and from, the actual entitlement state is checked with the RevenueCat REST API before
+    // writing is_pro (see fetchProStateFromRevenueCat).
     //
-    // 旧実装は transferred_to に無条件で is_pro=true を書き、
-    // 「transferred_from は誤剥奪が怖いので EXPIRATION に一任する」としていた (L23)。
-    // だが RevenueCat 公式ドキュメントいわく "The webhook is sent only for the
-    // destination user" — EXPIRATION は移転先 (to 側の app_user_id) にしか届かず、
-    // 転出元 (from) 目線では永久に来ないため、その一任は最初から成立していなかった
-    // (出典は上記 URL)。今回 API で実状態を都度確認するようになったので、
-    // from 側も安全に剥奪できるようになった。
+    // The old implementation wrote is_pro=true to transferred_to unconditionally, and said
+    // "leave transferred_from to EXPIRATION because a wrong revoke is scary" (L23).
+    // But the official RevenueCat docs say "The webhook is sent only for the
+    // destination user": EXPIRATION only reaches the destination (the `to` app_user_id), and from the
+    // point of view of the source (from) it never arrives, so that delegation never worked from the start
+    // (source: the URL above). Now that the real state is checked through the API each time,
+    // the `from` side can also be revoked safely.
     if (event.type === "TRANSFER") {
       if (REVENUECAT_SECRET_API_KEY.length === 0) {
-        // fail-closed: シークレット未設定のまま憶測で is_pro を書き換えるくらいなら
-        // 何もせず 500 を返してリトライさせる方が安全。RevenueCat は最大 5 回
-        // (5/10/20/40/80分の増加ディレイ、合計約2.5時間) リトライするので
-        // (出典: https://www.revenuecat.com/docs/integrations/webhooks)、
-        // その間に `supabase secrets set REVENUECAT_SECRET_API_KEY=...` を設定すれば
-        // 次のリトライで自動的に正しく処理される
+        // fail-closed: rather than rewriting is_pro based on a guess while the secret is not set,
+        // it is safer to do nothing and return 500 so it is retried. RevenueCat retries up to 5 times
+        // (increasing delays of 5/10/20/40/80 minutes, about 2.5 hours in total)
+        // (source: https://www.revenuecat.com/docs/integrations/webhooks),
+        // so if `supabase secrets set REVENUECAT_SECRET_API_KEY=...` is set during that time,
+        // the next retry processes it correctly automatically
         console.error("❌ REVENUECAT_SECRET_API_KEY が未設定のため TRANSFER を保留した");
         return new Response("ok", { status: 500 });
       }
 
-      // 同じ UUID が to/from 両方に現れても二重処理しないよう Set で重複排除
+      // Deduplicate with a Set so the same UUID is not processed twice even if it appears in both to/from
       const targetIds = new Set<string>();
       for (const id of event.transferred_to ?? []) {
         if (UUID_RE.test(id)) targetIds.add(id);
@@ -307,7 +311,7 @@ Deno.serve(async (req) => {
       for (const id of targetIds) {
         const state = await fetchProStateFromRevenueCat(id);
         if (state === null) {
-          // 判定不能: 憶測で is_pro を書かず、500 でリトライに回す (fail-closed)
+          // Cannot determine: do not write is_pro based on a guess, return 500 to trigger a retry (fail-closed)
           console.error(`❌ RevenueCat entitlement 判定不能のため is_pro を書かなかった (${id})`);
           allOk = false;
           continue;
@@ -319,7 +323,7 @@ Deno.serve(async (req) => {
 
     const userId = event.app_user_id ?? "";
     if (!UUID_RE.test(userId)) {
-      // 匿名ID ($RCAnonymousID:...) など。ログイン後の TRANSFER で拾う
+      // Anonymous IDs ($RCAnonymousID:...) etc. Picked up by the TRANSFER after login
       console.log(`↩️ skip non-uuid app_user_id (${event.type})`);
       return new Response("ok", { status: 200 });
     }
@@ -327,8 +331,8 @@ Deno.serve(async (req) => {
     const ents = event.entitlement_ids;
 
     if (GRANT_EVENTS.has(event.type)) {
-      // L22: ents が配列で PRO_ENTITLEMENT を含む場合のみ付与する
-      // (以前は ents が NULL/空の GRANT イベントでも無条件に true にしていた)
+      // L22: grant only if ents is an array that contains PRO_ENTITLEMENT
+      // (before, even GRANT events with NULL/empty ents unconditionally set true)
       if (!Array.isArray(ents) || !ents.includes(PRO_ENTITLEMENT)) {
         console.log(`↩️ skip GRANT without ${PRO_ENTITLEMENT} entitlement (type=${event.type}, ents=${JSON.stringify(ents)})`);
         return new Response("ok", { status: 200 });
@@ -337,8 +341,8 @@ Deno.serve(async (req) => {
       return new Response("ok", { status: ok ? 200 : 500 });
     }
     if (REVOKE_EVENTS.has(event.type)) {
-      // EXPIRATION も pro 以外の entitlement の失効では剥奪しない (将来 entitlement を
-      // 追加した時の誤剥奪防止)。ents が欠落/空の場合は安全側 = 剥奪を実行する
+      // EXPIRATION also does not revoke when an entitlement other than pro expires (prevents a wrong revoke
+      // if entitlements are added in the future). If ents is missing/empty, take the safe side = revoke
       if (Array.isArray(ents) && ents.length > 0 && !ents.includes(PRO_ENTITLEMENT)) {
         console.log(`↩️ skip REVOKE without ${PRO_ENTITLEMENT} entitlement (type=${event.type}, ents=${JSON.stringify(ents)})`);
         return new Response("ok", { status: 200 });

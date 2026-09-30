@@ -1,31 +1,32 @@
 -- ============================================================
 -- 052_feed_author_cap_appeal_ai_review.sql
--- フィード多様性 + 投稿上限引き下げ + 申し立てAI再審査の下地 (2026-07-29)
+-- Feed diversity + lower post limit + groundwork for AI re-review of appeals (2026-07-29)
 -- ============================================================
--- 背景 (ユーザー起票 2026-07-29):
---   1. おすすめフィードは author 多様性の制御が無く、1人が連投すると limit 50 の
---      大半を占有できる (投稿母数が少ない今は特に顕著)。TikTok 等の「連投が伸びない」
---      挙動の実体はランキング側の per-author キャップ。
---   2. 投稿上限 100/24h (046) は荒らし対策の位置づけだったが、AI モデレーションの
---      コスト天井としては高すぎる (100件×0.7〜1.4円 = 最大140円/日/人)。
---      10/24h へ引き下げ (BeReal=1〜2本/日、IG平均<1本/日。実ユーザーには見えない天井)。
---      クライアント文言は 046 の時点で数字を含まないため変更不要。
---   3. review-appeal Edge Function (申し立てAI再審査) が所見を書き込む ai_review 列を追加。
+-- Background (filed by the user 2026-07-29):
+--   1. The recommended feed has no control over author diversity, so one person posting repeatedly can
+--      take most of limit 50 (especially visible now with few posts in total). What makes "repeated
+--      posts not spread" on TikTok etc. is actually a per-author cap on the ranking side.
+--   2. The post limit of 100/24h (046) was meant as anti-abuse, but as a cost ceiling for AI moderation
+--      it is too high (100 posts × 0.7 to 1.4 yen = up to 140 yen/day/person).
+--      Lowered to 10/24h (BeReal = 1 to 2 posts/day, IG average < 1 post/day. A ceiling real users
+--      will not see). The client wording has contained no number since 046, so no change is needed.
+--   3. Add the ai_review column where the review-appeal Edge Function (AI re-review of appeals) writes
+--      its findings.
 --
--- 適用: Supabase Dashboard → SQL Editor で本ファイル全文を実行 (ユーザー作業)。
--- 冪等: CREATE OR REPLACE / ADD COLUMN IF NOT EXISTS のみ。何度実行しても安全。
--- ロールバック: author_cap を 999 にして再実行すればキャップ実質無効化。
---   投稿上限を戻す場合は 10 を 100 に書き換えて再実行。
+-- Apply: run the full text of this file in Supabase Dashboard → SQL Editor (user task).
+-- Idempotent: only CREATE OR REPLACE / ADD COLUMN IF NOT EXISTS. Safe to run any number of times.
+-- Rollback: set author_cap to 999 and run again to effectively disable the cap.
+--   To restore the post limit, change 10 back to 100 and run again.
 -- ============================================================
 
 -- ============================================================
--- 1. fetch_mixed_feed_random: per-author キャップ追加
+-- 1. fetch_mixed_feed_random: add a per-author cap
 -- ============================================================
--- 041 の全文をベースに、posts のみ「同一投稿者は1回のフィードで最大 author_cap 件」を
--- 追加 (row_number() で score 上位のみ残す)。quotes (公式名言) は偉人ごとに author が
--- 異なりキュレーション済みのため対象外。
--- ⚠️ RETURNS TABLE の列は 029/041 から増減していない (M33 の教訓どおり列変更は
---    DROP→再作成が必要になるため、キャップは WHERE 句の追加のみで実現)
+-- Based on the full text of 041, add "at most author_cap items from the same author per feed" for
+-- posts only (row_number() keeps only the top by score). quotes (official quotes) are excluded because
+-- each great figure has a different author and they are curated.
+-- ⚠️ The RETURNS TABLE columns are unchanged from 029/041 (as learned in M33, changing columns
+--    requires DROP→recreate, so the cap is done only by adding to the WHERE clause)
 
 CREATE OR REPLACE FUNCTION public.fetch_mixed_feed_random(limit_count integer DEFAULT 50)
 RETURNS TABLE (
@@ -51,17 +52,17 @@ LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = public
 AS $$
     WITH params AS (
-        -- ============ チューニング用重み (ここだけ書き換えて CREATE OR REPLACE すれば調整可) ============
+        -- ============ Tuning weights (to adjust, change only this part and run CREATE OR REPLACE) ============
         SELECT
-            3.0  ::double precision AS w_recency,          -- 投稿の新しさの最大点 (投稿直後)
-            24.0 ::double precision AS recency_half_hours, -- この時間経過で新しさ点が半減
-            0.5  ::double precision AS w_like,             -- ln(1+like_count) の係数
-            0.7  ::double precision AS w_comment,          -- ln(1+comment_count) の係数 (コメントはいいねより強い関心)
-            1.2  ::double precision AS w_follow,           -- フォロー中の投稿者へのボーナス
-            1.0  ::double precision AS w_seen,             -- ln(1+自分の閲覧回数) の既読ペナルティ係数 (減点)
-            1.5  ::double precision AS w_jitter,           -- ランダムジッターの最大値 (探索性)
-            0.8  ::double precision AS quote_base,         -- 名言の固定ベース点 (新しさ減衰の代替)
-            2    ::integer          AS author_cap          -- 052: 1フィードあたり同一投稿者の最大件数 (postsのみ)
+            3.0  ::double precision AS w_recency,          -- max recency score of a post (right after posting)
+            24.0 ::double precision AS recency_half_hours, -- the recency score halves after this much time
+            0.5  ::double precision AS w_like,             -- coefficient of ln(1+like_count)
+            0.7  ::double precision AS w_comment,          -- coefficient of ln(1+comment_count) (a comment shows stronger interest than a like)
+            1.2  ::double precision AS w_follow,           -- bonus for authors you follow
+            1.0  ::double precision AS w_seen,             -- read penalty coefficient on ln(1+own view count) (subtracted)
+            1.5  ::double precision AS w_jitter,           -- max random jitter (for exploration)
+            0.8  ::double precision AS quote_base,         -- fixed base score for quotes (instead of recency decay)
+            2    ::integer          AS author_cap          -- 052: max items from the same author per feed (posts only)
     ),
     scored AS (
         SELECT
@@ -147,8 +148,8 @@ AS $$
           AND up.created_at > now() - interval '30 days'
     ),
     ranked AS (
-        -- 052: 同一投稿者の連投キャップ。score 上位 author_cap 件だけ残す (postsのみ)。
-        -- jitter が random() なため毎回のフィードで「どの2件が残るか」も入れ替わる
+        -- 052: cap on consecutive posts from the same author. Keep only the top author_cap items by score
+        -- (posts only). jitter is random(), so "which 2 items remain" also changes on every feed
         SELECT s.*,
                row_number() OVER (PARTITION BY s.kind, s.author_id ORDER BY s.score DESC) AS author_rank
         FROM scored s
@@ -169,10 +170,10 @@ COMMENT ON FUNCTION public.fetch_mixed_feed_random(integer) IS
     '052: 同一投稿者は1フィードあたり author_cap 件まで (params CTE で調整可)';
 
 -- ============================================================
--- 2. 投稿レート制限 100 → 10 / 24h
+-- 2. Post rate limit 100 → 10 / 24h
 -- ============================================================
--- コメント側 (enforce_comment_rate_limit, 300/24h) は変更しない。
--- クライアント文言は数字を含まないため変更不要 (046 で撤去済み)
+-- The comment side (enforce_comment_rate_limit, 300/24h) is not changed.
+-- The client wording contains no number, so no change is needed (removed in 046)
 
 CREATE OR REPLACE FUNCTION public.enforce_post_rate_limit()
 RETURNS trigger
@@ -187,7 +188,7 @@ BEGIN
     FROM public.user_posts
     WHERE user_id = NEW.user_id
       AND created_at > now() - interval '24 hours';
-    -- 052: 100 → 10 (AI判定コストの1人あたり天井。最大 140円/日 → 14円/日)
+    -- 052: 100 → 10 (per-person ceiling on AI moderation cost. Max 140 yen/day → 14 yen/day)
     IF recent_count >= 10 THEN
         RAISE EXCEPTION 'daily post limit reached';
     END IF;
@@ -195,8 +196,8 @@ BEGIN
 END;
 $$;
 
--- トリガー自体は 046 で作成済み (関数の CREATE OR REPLACE だけで反映される)。
--- 046 未適用環境でも壊れないよう IF NOT EXISTS 相当の再作成を添える
+-- The trigger itself was created in 046 (CREATE OR REPLACE of the function alone applies it).
+-- Add an IF NOT EXISTS-style recreate so it does not break in an environment without 046
 DROP TRIGGER IF EXISTS user_posts_rate_limit ON public.user_posts;
 CREATE TRIGGER user_posts_rate_limit
     BEFORE INSERT ON public.user_posts
@@ -204,17 +205,18 @@ CREATE TRIGGER user_posts_rate_limit
     EXECUTE FUNCTION public.enforce_post_rate_limit();
 
 -- ============================================================
--- 3. user_appeals.ai_review (申し立てAI再審査の所見)
+-- 3. user_appeals.ai_review (findings of the AI re-review of appeals)
 -- ============================================================
--- review-appeal Edge Function (service_role) が書き込む:
+-- Written by the review-appeal Edge Function (service_role):
 --   { analysis, overturn, user_note, model, reviewed_at }
--- overturn=true の場合は同 Function が status='approved' へ更新し、既存の
--- user_appeals_resolve トリガー (039) が投稿復活+appeal_approved 通知まで面倒を見る。
--- overturn=false は status='pending' のまま = 人間 (運営) の最終裁定キューに残る。
--- 運営キューの SQL (Docs/moderation_ops_guide.md) では ai_review->>'analysis' が
--- 二次所見として読める。RLS: SELECT ポリシーは本人のみ (039) のまま —
--- ai_review はクライアント UI では使わないが、本人が読めても差し支えない内容
--- (analysis の内部用語は本人向け文言ではないが機密ではない。043 の許容判断と同じ)
+-- When overturn=true, the same Function updates status to 'approved', and the existing
+-- user_appeals_resolve trigger (039) takes care of restoring the post + the appeal_approved notification.
+-- overturn=false keeps status='pending' = stays in the queue for the final ruling by a human (operator).
+-- In the operator queue SQL (Docs/moderation_ops_guide.md), ai_review->>'analysis' can be read
+-- as a secondary finding. RLS: the SELECT policy stays owner-only (039).
+-- ai_review is not used in the client UI, but it is fine if the owner can read it
+-- (the internal terms in analysis are not wording meant for the user but are not secret. Same judgment
+-- as allowed in 043)
 
 ALTER TABLE public.user_appeals
     ADD COLUMN IF NOT EXISTS ai_review jsonb;

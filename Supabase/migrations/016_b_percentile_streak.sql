@@ -1,30 +1,30 @@
 -- ============================================================
 -- 016_b_percentile_streak.sql
--- 順序3: 「上位◯%」表示 + ストリーク (連続ロック日数) の DB 基盤
+-- Step 3: DB base for the "上位◯%" ("Top ◯%") display + streak (consecutive lock days)
 -- ============================================================
--- 設計判断 (2026-07-04 Fable5):
---   1. 改ざん根本対策 (RPC でのサーバー側タイムスタンプ化) は【不採用】
---      理由: S8 確定の「active セッションを DB に持たない・App Group キューに
---      溜めて次回起動時に一括 flush」というオフラインファースト設計と非互換。
---      schedule モードは Extension がオフラインで記録するためサーバー打刻不可能。
---      v1 は 015 の妥当性 trigger (未来時刻拒否 / duration 整合 / 7日上限) で
---      露骨な不正だけ弾き、スケール後に再検討する
---   2. users.total_block_seconds を trigger で非正規化
---      パーセンタイル計算が block_sessions 全走査ではなく users 1 テーブルの
---      インデックススキャンで済む。get_total_block_seconds もこれを読む形に置換
---   3. 上位% の定義: 母数 = ロック実績のあるユーザー (total > 0)、
---      上位X% = (自分より合計が多い人数 + 1) / 母数 × 100。
---      ロック実績ゼロのユーザーは has_data=false を返しアプリ側で非表示
---   4. ストリーク = 「その日に 1 秒でもロックした日」の連続数。
---      タイムゾーンは引数 (デフォルト Asia/Tokyo、クライアントは
---      TimeZone.current.identifier を渡す)。今日まだロックしていなくても
---      昨日までの連続が生きていれば継続扱い (一般的なストリーク UX)
+-- Design decisions (2026-07-04 Fable5):
+--   1. The root fix for tampering (server-side timestamps via RPC) is [NOT ADOPTED]
+--      Reason: it is incompatible with the offline-first design finalized in S8: "do not keep
+--      active sessions in the DB; queue them in the App Group and flush them all on next launch".
+--      schedule mode is recorded offline by the Extension, so server timestamps are impossible.
+--      v1 only rejects obvious cheating with the validity trigger from 015 (reject future times /
+--      duration consistency / 7-day cap), and it will be revisited after scaling
+--   2. Denormalize users.total_block_seconds with a trigger
+--      The percentile calculation becomes an index scan on the users table alone instead of a
+--      full scan of block_sessions. get_total_block_seconds is replaced to read it too
+--   3. Definition of top percentile: pool = users with a lock record (total > 0),
+--      top X% = (number of people with a larger total than you + 1) / pool × 100.
+--      Users with no lock record get has_data=false and the app hides it
+--   4. Streak = number of consecutive "days with at least 1 second of lock".
+--      The time zone is a parameter (default Asia/Tokyo, the client passes
+--      TimeZone.current.identifier). Even if you have not locked yet today,
+--      the streak continues if it was alive through yesterday (common streak UX)
 --
--- 実行順序: 015 完了後。何度実行しても安全
+-- Run order: after 015. Safe to run any number of times
 -- ============================================
 
 -- ============================================
--- 1. users.total_block_seconds 非正規化列
+-- 1. users.total_block_seconds denormalized column
 -- ============================================
 ALTER TABLE public.users
     ADD COLUMN IF NOT EXISTS total_block_seconds bigint NOT NULL DEFAULT 0;
@@ -37,7 +37,7 @@ COMMENT ON COLUMN public.users.total_block_seconds
     IS '累計ロック秒数 (block_sessions から trigger で同期。直接更新禁止)';
 
 -- ============================================
--- 2. block_sessions → users.total_block_seconds 同期 trigger
+-- 2. block_sessions → users.total_block_seconds sync trigger
 -- ============================================
 CREATE OR REPLACE FUNCTION public.sync_user_total_block_seconds()
 RETURNS trigger
@@ -75,7 +75,7 @@ CREATE TRIGGER block_sessions_sync_total
     FOR EACH ROW
     EXECUTE FUNCTION public.sync_user_total_block_seconds();
 
--- 既存データからバックフィル
+-- Backfill from existing data
 UPDATE public.users u
     SET total_block_seconds = COALESCE((
         SELECT SUM(s.duration_seconds)
@@ -84,10 +84,10 @@ UPDATE public.users u
     ), 0);
 
 -- ============================================
--- 3. users の読み取り専用列保護を total_block_seconds にも拡張
+-- 3. Extend the read-only column protection on users to total_block_seconds
 -- ============================================
--- 015 の protect_users_is_pro を上書き (trigger 配線はそのまま流用)。
--- is_pro に加えて total_block_seconds もユーザー直 UPDATE を拒否する
+-- Overwrites protect_users_is_pro from 015 (the trigger wiring is reused as is).
+-- In addition to is_pro, direct user UPDATE of total_block_seconds is also rejected
 CREATE OR REPLACE FUNCTION public.protect_users_is_pro()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -110,7 +110,7 @@ END;
 $$;
 
 -- ============================================
--- 4. get_total_block_seconds を非正規化列読みに置換 (シグネチャ不変)
+-- 4. Replace get_total_block_seconds to read the denormalized column (signature unchanged)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.get_total_block_seconds(target_user_id uuid)
 RETURNS integer
@@ -126,7 +126,7 @@ REVOKE EXECUTE ON FUNCTION public.get_total_block_seconds(uuid) FROM PUBLIC, ano
 GRANT  EXECUTE ON FUNCTION public.get_total_block_seconds(uuid) TO authenticated;
 
 -- ============================================
--- 5. get_block_percentile RPC (目玉機能「あなたは上位◯%」)
+-- 5. get_block_percentile RPC (headline feature "あなたは上位◯%" ("You are in the top ◯%"))
 -- ============================================
 CREATE OR REPLACE FUNCTION public.get_block_percentile(target_user_id uuid)
 RETURNS jsonb
@@ -167,7 +167,7 @@ COMMENT ON FUNCTION public.get_block_percentile(uuid)
     IS '累計ロック時間の全ユーザー内順位。top_percent は「上位X%」表示にそのまま使う (アプリ側で max(1, round) 推奨)';
 
 -- ============================================
--- 6. get_streak_days RPC (連続ロック日数)
+-- 6. get_streak_days RPC (consecutive lock days)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.get_streak_days(
     target_user_id uuid,
@@ -183,7 +183,7 @@ DECLARE
     streak   integer := 0;
     d        record;
 BEGIN
-    -- 不正なタイムゾーン名は UTC にフォールバック
+    -- An invalid time zone name falls back to UTC
     BEGIN
         PERFORM now() AT TIME ZONE tz;
     EXCEPTION WHEN OTHERS THEN
@@ -205,7 +205,7 @@ BEGIN
             streak := streak + 1;
             expected := expected - 1;
         ELSIF streak = 0 AND d.day = today - 1 THEN
-            -- 今日まだロックしていないが昨日までの連続が生きているケース
+            -- Case where you have not locked yet today but the streak through yesterday is still alive
             streak := 1;
             expected := d.day - 1;
         ELSE
@@ -224,10 +224,10 @@ COMMENT ON FUNCTION public.get_streak_days(uuid, text)
     IS '連続ロック日数。今日未ロックでも昨日までの連続は継続扱い。tz はクライアントの TimeZone.current.identifier';
 
 -- ============================================
--- 7. 動作確認用クエリ (実行不要、コメント)
+-- 7. Queries for checking behavior (no need to run, comments)
 -- ============================================
 -- SELECT get_block_percentile(auth.uid());
 -- SELECT get_streak_days(auth.uid(), 'Asia/Tokyo');
 -- SELECT get_total_block_seconds(auth.uid());
--- 直接更新が拒否されることの確認 (authenticated で実行 → エラー):
+-- Check that direct updates are rejected (run as authenticated → error):
 --   UPDATE users SET total_block_seconds = 99999999 WHERE id = auth.uid();

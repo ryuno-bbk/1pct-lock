@@ -2,21 +2,23 @@
 //  FeedListCard.swift
 //  AppBlocker
 //
-//  ホーム/タグ/詳細フィード用の BeReal/IG 風カード (2026-07-10 確定仕様)。
-//    - ヘッダ: アバター + 名前(+バッジ) / フォローピル / … メニュー
-//    - タイトル行: 1行省略「…」→ タップで展開 (#タグも同領域、展開時にボタン化)
-//    - メディア(4:5): fit+同画像ぼかし埋め / カルーセル / 名言=背景+テキスト
-//        右下: いいね♥・コメント💬ボタン (BeReal式オーバーレイ、アイコンのみ)
-//        左下: いいねした人アバター ≤3 + 「+N」(FeedExtras)
-//    - カード下部: 「N件のコメントをすべて表示」+ コメント3件プレビュー (FeedExtras)
-//  名言 (quote) も投稿と完全に同じ扱い (ユーザー確定)。
+//  BeReal/IG-style card for the home / tag / detail feeds (spec finalized 2026-07-10).
+//    - Header: avatar + name (+badge) / follow pill / ... menu
+//    - Title row: truncated to 1 line with "..." → expands on tap (#tags share the same area and
+//      become buttons when expanded)
+//    - Media (4:5): fit + blurred fill of the same image / carousel / quote = background + text
+//        Bottom right: like ♥ and comment 💬 buttons (BeReal-style overlay, icons only)
+//        Bottom left: avatars of users who liked ≤3 + "+N" (FeedExtras)
+//    - Card bottom: "N件のコメントをすべて表示" ("View all N comments") + preview of 3 comments
+//      (FeedExtras)
+//  Quotes are handled exactly the same as posts (confirmed by the user).
 //
 
 import SwiftUI
 
-/// カード内の media (4:5 画像) の枠を親 (FeedCardListView) へ通知する。
-/// 制限オーバーレイのゴミ箱を「画像の右上」に位置合わせするために使う (カード単位の
-/// overlayPreferenceValue で読むため、リスト内の他カードと混ざらない)
+/// Reports the frame of the media (4:5 image) inside the card to the parent (FeedCardListView).
+/// Used to position the trash button of the restriction overlay at "the top right of the image" (it is
+/// read with overlayPreferenceValue per card, so it does not mix with other cards in the list)
 struct FeedMediaBoundsKey: PreferenceKey {
     static var defaultValue: Anchor<CGRect>? = nil
     static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
@@ -31,38 +33,41 @@ struct FeedListCard: View {
     let showOriginal: Bool
     let isLiked: Bool
     let isFollowing: Bool
-    /// いいねした人 + コメントプレビュー (FeedExtrasService から親が渡す。nil なら非表示)
+    /// Users who liked + comment preview (the parent passes it from FeedExtrasService. Hidden if nil)
     var extras: FeedExtras? = nil
     let onLikeTap: () -> Void
     let onFollowTap: () -> Void
-    /// アバター/名前行タップ。quote 時は 1% 公式アカウント、post 時は投稿者本人へ
+    /// Tap on the avatar/name row. For a quote, goes to the 1% official account; for a post, to the author
     let onAuthorTap: () -> Void
     let onTagTap: (String) -> Void
-    /// 名言の「— 著者名」タップ (quote のみ)。著者トピックフィードへ
+    /// Tap on the "- author name" line of a quote (quote only). Goes to the author topic feed
     var onTopicTap: (() -> Void)? = nil
-    /// … メニュー (共有 / 保存 / 通報 など)。ヘッダ右に表示
+    /// ... menu (share / save / report etc.). Shown at the right of the header
     var menuContent: AnyView? = nil
-    /// コメントボタン / プレビュー領域タップ → コメントページへ
+    /// Tap on the comment button / preview area → comment page
     var onCommentTap: (() -> Void)? = nil
-    /// 画像左下のいいねした人スタックタップ → いいねした人一覧へ
+    /// Tap on the stack of users who liked at the bottom left of the image → list of users who liked
     var onLikersTap: (() -> Void)? = nil
 
     @ObservedObject private var auth = UserAuthService.shared
     @ObservedObject private var commentService = CommentService.shared
     @State private var heartBursts: [HeartBurstToken] = []
     @State private var titleExpanded = false
-    /// フォロータップ演出: チェックマークを 0.9 秒表示してからピルを消す (即消えだと演出が見えない)
+    /// Follow tap effect: show a check mark for 0.9 seconds, then hide the pill (if it disappears
+    /// immediately, the effect cannot be seen)
     @State private var followTapped = false
     @State private var followLingering = false
 
-    /// いいね数の二重加算防止用ベースライン (Fix1 参照)。
-    /// item.likeCount は「サーバーが最後に返した時点の集計値」で、toggle_quote_like/toggle_post_like や
-    /// 再 fetch の後は既に自分のいいねを含んでいる。ここで単純に + (isLiked ? 1 : 0) すると
-    /// 「読み込み時点で既にいいね済みだった」ケースで +1 過剰表示になるため、
-    /// マウント時の isLiked を基準点として記録し、以後は基準点からの差分だけを足す。
-    /// item.likeCount 自体が変化した (= 新しいサーバー確定値が届いた) タイミングで基準点を isLiked に再同期する。
+    /// Baseline to prevent double-counting of the like count (see Fix1).
+    /// item.likeCount is "the aggregate at the time the server last returned it", and after
+    /// toggle_quote_like/toggle_post_like or a re-fetch it already includes your own like. Simply adding
+    /// + (isLiked ? 1 : 0) here shows +1 too many in the case "it was already liked at load time", so we
+    /// record isLiked at mount time as the reference point, and afterwards only add the difference from
+    /// that reference point.
+    /// When item.likeCount itself changes (= a new confirmed server value arrived), the reference point is
+    /// re-synced to isLiked.
     @State private var baselineLiked: Bool?
-    /// コメント数の二重加算防止用ベースライン (Fix2 参照。displayCommentCount の項に詳細)
+    /// Baseline to prevent double-counting of the comment count (see Fix2. Details under displayCommentCount)
     @State private var baselineCommentDelta: Int?
 
     private var isOwnPost: Bool {
@@ -74,8 +79,8 @@ struct FeedListCard: View {
         max(0, item.likeCount + (isLiked ? 1 : 0) - (baselineLiked == true ? 1 : 0))
     }
 
-    /// CommentService が持つローカル差分 (quote/post 別)。
-    /// このカードが CommentPageView へ push された「その場」で comment_count を動かすための値
+    /// Local delta held by CommentService (per quote/post).
+    /// Value used to move comment_count "in place" when this card is pushed to CommentPageView
     private var currentCommentDelta: Int {
         switch item.kind {
         case .quote: return commentService.commentCountDelta(forQuote: item.itemId)
@@ -83,26 +88,28 @@ struct FeedListCard: View {
         }
     }
 
-    /// 表示用コメント数。exactly-once 二重加算防止の要点:
-    /// - ホームフィード (FeedService.recommendedFeed/followingFeed) や自分の投稿一覧
-    ///   (UserPostService.myPosts/viewingPostsByUser) は @Published 配列で、
-    ///   CommentService.bumpLocalCommentCount がコメント投稿/削除の度に item.commentCount 自体を直接 patch する。
-    ///   このケースでは delta も同時に動くため、そのまま足すと二重加算になる。
-    /// - 著者トピック/タグ/いいね名言などの静的スナップショット (quotes: [Quote] を毎回 map) は
-    ///   item.commentCount がその場では動かないため、delta が唯一の更新経路になる。
-    /// この2つを両立させるため「item.commentCount が変化した瞬間 (= 直接 patch か、真の再 fetch)」に
-    /// baselineCommentDelta をその時点の delta で再同期し、以後は "その基準点からの新規差分" だけを足す。
-    /// → 直接 patch されたぶんは baseline に吸収されて相殺され (ホームフィード = ちょうど1回反映)、
-    ///   静的スナップショットでは baseline が動かないので delta がフルに乗る (唯一の更新経路 = ちょうど1回反映)。
+    /// Comment count for display. Key points of the exactly-once double-count prevention:
+    /// - The home feed (FeedService.recommendedFeed/followingFeed) and your own post list
+    ///   (UserPostService.myPosts/viewingPostsByUser) are @Published arrays, and
+    ///   CommentService.bumpLocalCommentCount patches item.commentCount itself directly on every comment
+    ///   post/delete. In this case the delta moves at the same time, so adding it as is would double-count.
+    /// - For static snapshots such as author topic / tag / liked quotes (quotes: [Quote] mapped every
+    ///   time), item.commentCount does not move in place, so the delta is the only update path.
+    /// To support both, "at the moment item.commentCount changes (= a direct patch, or a real re-fetch)"
+    /// we re-sync baselineCommentDelta to the delta at that time, and afterwards only add "the new delta
+    /// from that reference point".
+    /// → The directly patched amount is absorbed into the baseline and cancels out (home feed = applied
+    ///   exactly once), and in static snapshots the baseline does not move, so the full delta is applied
+    ///   (the only update path = applied exactly once).
     private var displayCommentCount: Int {
         max(0, item.commentCount + (currentCommentDelta - (baselineCommentDelta ?? 0)))
     }
 
     private var showFollowPill: Bool { (!isFollowing && !isOwnPost) || followLingering }
 
-    // カードレス構成 (BeReal 準拠、2026-07-10 ユーザー指定):
-    // カード背景/枠線は持たず、角丸の画像だけが黒背景に直接載る。
-    // ヘッダー/タイトル/コメントプレビューは境界線なしで黒背景に直書き
+    // Cardless layout (follows BeReal, user-specified 2026-07-10):
+    // no card background/border; only the rounded image sits directly on the black background.
+    // Header/title/comment preview are drawn directly on the black background with no borders
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -211,7 +218,7 @@ struct FeedListCard: View {
         }
     }
 
-    // MARK: - Title Row (ヘッダ下: タイトル + #タグ。1行省略 → タップで展開)
+    // MARK: - Title Row (under the header: title + #tags. Truncated to 1 line → expands on tap)
 
     @ViewBuilder
     private var titleRow: some View {
@@ -230,7 +237,7 @@ struct FeedListCard: View {
                         }
                         if !tags.isEmpty { tagButtons(tags) }
                     } else {
-                        // 折りたたみ: タイトル + タグを 1 行にまとめ「…」省略。タップで展開
+                        // Collapsed: title + tags on 1 line, truncated with "...". Expands on tap
                         (Text(title)
                          + Text(tags.isEmpty ? "" : "  " + tags.map { "#\(Quote.categoryDisplay($0, lang: lang))" }.joined(separator: " "))
                             .foregroundColor(AppColors.textTertiary))
@@ -248,7 +255,8 @@ struct FeedListCard: View {
                 .padding(.bottom, 9)
             }
         } else {
-            // 名言: タグのみ (著者名は 2026-07-30 名言監査で全廃 — 匿名著者は行ごと非表示)
+            // Quote: tags only (author names were removed entirely in the 2026-07-30 quote audit; for anonymous
+            // authors the whole line is hidden)
             HStack(spacing: 10) {
                 if let authorName = item.authorName, !Quote.isAnonymousAuthor(authorName) {
                     if let onTopicTap {
@@ -287,15 +295,17 @@ struct FeedListCard: View {
         }
     }
 
-    // MARK: - Media (4:5 + オーバーレイ)
+    // MARK: - Media (4:5 + overlay)
 
     private var media: some View {
         FeedCardMediaView(item: item, lang: lang, showOriginal: showOriginal)
             .aspectRatio(4.0 / 5.0, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 18))  // 角丸は画像だけが持つ (カードレス)
+            .clipShape(RoundedRectangle(cornerRadius: 18))  // Only the image has rounded corners (cardless)
             .contentShape(Rectangle())
-            // 制限オーバーレイ (FeedCardListView) がゴミ箱を「画像の右上」に合わせるための枠通知
-            // (2026-07-25 実機FB: カード右上=ヘッダー横に浮いていたのを画像内右上へ)
+            // Frame notification so the restriction overlay (FeedCardListView) can align the trash button with
+            // "the top right of the image"
+            // (2026-07-25 real-device feedback: it floated at the card's top right = next to the header; moved to
+            // the top right inside the image)
             .anchorPreference(key: FeedMediaBoundsKey.self, value: .bounds) { $0 }
             .overlay(alignment: .bottomLeading) { likerStack }
             .overlay(alignment: .bottomTrailing) { imageActionButtons }
@@ -313,15 +323,15 @@ struct FeedListCard: View {
             )
     }
 
-    /// 画像左下: いいねした人アバター ≤3 + 「+N」(BeReal RealMoji スタック風)。
-    /// タップでいいねした人一覧へ (onLikersTap)
-    /// アバターに出すいいねした人。
+    /// Bottom left of the image: avatars of users who liked ≤3 + "+N" (BeReal RealMoji stack style).
+    /// Tap → list of users who liked (onLikersTap)
+    /// Users who liked, shown as avatars.
     ///
-    /// 🔴 自分がいいね済みなのにサーバー由来の一覧に自分がまだ入っていない場合、
-    ///    先頭に自分を足して母数を揃える。displayLikeCount は自分の分を楽観的に +1
-    ///    しているので、アバター側だけ古い一覧のままだと引き算の左右がズレて
-    ///    「アバターが無いのに +1 が出る」「1人しかいないのに2人に見える」になる
-    ///    (2026-08-29 実機報告)。サーバー側は ≤3 件なので同じく3件で打ち切る
+    /// 🔴 If you have liked it but you are not yet in the list that came from the server,
+    ///    add yourself at the front so the counts match. displayLikeCount optimistically adds +1
+    ///    for you, so if only the avatar side keeps the old list, the two sides of the subtraction
+    ///    do not match, and you get "+1 shown with no avatar" or "only 1 person but it looks like 2"
+    ///    (reported on a real device 2026-08-29). The server side returns ≤3 items, so we also cut at 3
     private var displayLikers: [FeedLiker] {
         let base = extras?.likers ?? []
         guard isLiked,
@@ -375,12 +385,13 @@ struct FeedListCard: View {
         }
     }
 
-    /// 画像右下: いいね + コメント (BeReal 式の縦積みオーバーレイ、アイコンのみ)。
-    /// ボタン間の余白 = コメントと下端の余白 = 右端の余白 を揃えて均等リズムにする
+    /// Bottom right of the image: like + comment (BeReal-style vertical overlay, icons only).
+    /// Make the space between buttons = space between the comment and the bottom edge = space to the right
+    /// edge, for an even rhythm
     private var imageActionButtons: some View {
-        // 縦リズムの統一 (2026-07-25 実機FB): 「いいね数字→コメントアイコン」の間隔 (spacing 10) と
-        // 「コメント数字→画像下端」(bottom 10) を同値にする。アイコンと数字は密着 (spacing 0 +
-        // アイコン枠 32→28) でグループ感を出す
+        // Unified vertical rhythm (2026-07-25 real-device feedback): the gap "like count → comment icon"
+        // (spacing 10) is made equal to "comment count → image bottom edge" (bottom 10). Icon and number sit
+        // tight (spacing 0 + icon frame 32→28) so they read as a group
         VStack(spacing: 10) {
             Button {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -392,10 +403,10 @@ struct FeedListCard: View {
                         .foregroundColor(isLiked ? .red : .white)
                         .shadow(color: .black.opacity(0.5), radius: 4, y: 1)
                         .frame(width: 40, height: 28)
-                        // 沈み込み→スプリング+パーティクル (LikePopEffect.swift、旧 symbolEffect.bounce は却下)
+                        // Sink → spring + particles (LikePopEffect.swift; the old symbolEffect.bounce was rejected)
                         .likePopEffect(isLiked: isLiked, particleRadius: 24)
-                    // 0→1 で数字が出現すると下のコメントボタンごと位置がズレる (実機FB 2026-07-15)。
-                    // 数字スロットを常時確保し、0 のときは透明にして高さを固定する
+                    // When the number appears on 0→1, the comment button below shifts with it (real-device feedback
+                    // 2026-07-15). Always reserve the number slot, and make it transparent at 0 to fix the height
                     actionCountLabel(displayLikeCount)
                         .opacity(displayLikeCount > 0 ? 1 : 0)
                 }
@@ -412,7 +423,7 @@ struct FeedListCard: View {
                             .foregroundColor(.white)
                             .shadow(color: .black.opacity(0.5), radius: 4, y: 1)
                             .frame(width: 40, height: 28)
-                        // いいね側と同じ理由で数字スロットを常時確保
+                        // Always reserve the number slot, for the same reason as the like side
                         actionCountLabel(displayCommentCount)
                             .opacity(displayCommentCount > 0 ? 1 : 0)
                     }
@@ -426,7 +437,7 @@ struct FeedListCard: View {
         .padding(.bottom, 10)
     }
 
-    /// ♥/💬 アイコン下の小さなカウント数字 (画像上で読めるよう白文字 + シャドウ)
+    /// Small count number under the ♥/💬 icons (white text + shadow so it is readable on the image)
     private func actionCountLabel(_ count: Int) -> some View {
         Text(count.abbreviatedCount(lang))
             .font(.system(size: 11, weight: .bold))
@@ -443,7 +454,7 @@ struct FeedListCard: View {
         }
     }
 
-    // MARK: - Comment Preview (画像の下に境界線なしで直書き。0 件なら何も出さない = 余白も作らない)
+    // MARK: - Comment Preview (drawn directly under the image with no border. Shows nothing at 0 comments = no space either)
 
     @ViewBuilder
     private var commentPreview: some View {
@@ -481,10 +492,10 @@ struct FeedListCard: View {
     }
 }
 
-// MARK: - FeedCardMediaView (メディア描画の共通部品)
+// MARK: - FeedCardMediaView (shared part for drawing media)
 //
-// カード本体とコメントページのヘッダーで共用する。オーバーレイ/ジェスチャは含まない。
-// 呼び出し側で frame / aspectRatio を確定させてから使うこと。
+// Shared by the card body and the header of the comment page. Contains no overlays/gestures.
+// Callers must fix frame / aspectRatio before using it.
 
 struct FeedCardMediaView: View {
     let item: FeedItem
@@ -498,25 +509,25 @@ struct FeedCardMediaView: View {
             ZStack(alignment: .bottom) {
                 TabView(selection: $currentPage) {
                     ForEach(Array(item.imageUrls.enumerated()), id: \.offset) { idx, url in
-                        // 選択中ページの前後1枚だけ実ロードする
-                        // (非表示ページの一斉ロードで Storage egress が最大4倍化していた問題 = M19)
+                        // Actually load only the one page before and after the selected page
+                        // (fix for loading all hidden pages at once, which increased Storage egress up to 4x = M19)
                         //
-                        // 🔴 ここで if/else で「別の型の View」を出し分けてはいけない。
-                        //    currentPage は ForEach の中で読まれるので、ページが動くたびに
-                        //    全ページが再構築される。そのとき型が入れ替わるとページの identity が
-                        //    変わり、TabView (内部は UIPageViewController) がスワイプ中に子を
-                        //    作り直してジェスチャーが打ち切られる
-                        //    = 指が半分まで来たところで次ページへ飛ぶ (2026-08-27 実機報告)。
-                        //    2枚組までは abs(idx-currentPage) <= 1 が常に真で入れ替えが起きず
-                        //    潜伏していたが、077 で5枚投稿を可能にしたことで顕在化した。
-                        //    → 常に FeedFitBlurImage を描画し、ロードするか否かだけを切り替える。
+                        // 🔴 Do not use if/else here to switch between "Views of different types".
+                        //    currentPage is read inside the ForEach, so every time the page moves,
+                        //    all pages are rebuilt. If the type changes at that point, the page identity
+                        //    changes, and the TabView (a UIPageViewController inside) recreates its children
+                        //    during the swipe and the gesture is cut off
+                        //    = it jumps to the next page when the finger is only halfway (reported on a real device 2026-08-27).
+                        //    Up to 2 images, abs(idx-currentPage) <= 1 was always true, so no swap happened and
+                        //    the bug stayed hidden; it showed up once 077 allowed 5-image posts.
+                        //    → Always draw FeedFitBlurImage, and switch only whether it loads or not.
                         imageFitBlur(url: url, shouldLoad: abs(idx - currentPage) <= 1)
                             .tag(idx)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
 
-                // ページドット (中央下)
+                // Page dots (bottom center)
                 HStack(spacing: 6) {
                     ForEach(0..<item.imageCount, id: \.self) { idx in
                         Circle()
@@ -535,22 +546,23 @@ struct FeedCardMediaView: View {
         }
     }
 
-    /// 枠に画像全体を見せ (scaledToFit)、余白は同じ画像のぼかしで埋める IG/BeReal 式。
-    /// 本体は絶対にクロップしない (ユーザー絶対要件 2026-07-11)。
+    /// IG/BeReal style: show the whole image in the frame (scaledToFit) and fill the remaining space with a
+    /// blur of the same image. The image itself is never cropped (absolute user requirement 2026-07-11).
     ///
-    /// 重要: GeometryReader で「実際に与えられた枠」を確定し、fill (ぼかし背景) と
-    /// fit (本体) の両方にその枠を明示 frame する。ZStack のサイズ決定に任せると
-    /// fill レイヤーが ZStack を押し広げ、fit が広がった枠に効いて本体がクロップされる
-    /// (コメントページの 34% ヘッダーで実発生したバグ。フィードは枠=4:5 だったため潜伏)
+    /// Important: fix "the frame actually given" with GeometryReader, and give that frame explicitly to
+    /// both fill (blurred background) and fit (the image). If the sizing is left to the ZStack, the fill
+    /// layer pushes the ZStack wider, fit applies to the widened frame, and the image gets cropped
+    /// (a bug that really happened in the 34% header of the comment page. In the feed the frame was 4:5,
+    /// so it stayed hidden)
     private func imageFitBlur(url: URL, shouldLoad: Bool = true) -> some View {
         FeedFitBlurImage(url: url, shouldLoad: shouldLoad)
     }
 
-    /// ⚠️ 2026-08-28 以降どこからも呼ばれていない (ロールバック用に残置)。
-    /// カルーセルの非選択ページはこれに差し替えるのではなく、FeedFitBlurImage を
-    /// 常に描画して shouldLoad=false でロードだけ止める形に変更した。
-    /// View の型を出し分けるとページの identity が変わり、TabView のスワイプが
-    /// 途中で打ち切られるため (上の ForEach のコメント参照)
+    /// ⚠️ Not called from anywhere since 2026-08-28 (kept for rollback).
+    /// Non-selected carousel pages are no longer swapped to this; instead FeedFitBlurImage is always
+    /// drawn and only loading is stopped with shouldLoad=false.
+    /// Switching the View type changes the page identity, and the TabView swipe is cut off halfway
+    /// (see the ForEach comment above)
     private func mediaPlaceholder() -> some View {
         GeometryReader { geo in
             Color.black
@@ -559,9 +571,10 @@ struct FeedCardMediaView: View {
         }
     }
 
-    /// 名言 / 画像なし投稿: 中央テキスト
-    /// 2026-07-30 大転換: 公式名言=写真背景を全廃し「紙×タイポ」の10テンプレート
-    /// (QuoteCardView)。UGC の画像なし投稿は従来どおり選択済み背景 (QuoteBackgroundView)
+    /// Quote / post without an image: centered text
+    /// 2026-07-30 major change: all photo backgrounds for official quotes were removed and replaced with
+    /// 10 "paper × typography" templates (QuoteCardView). UGC posts without images keep the selected
+    /// background as before (QuoteBackgroundView)
     @ViewBuilder
     private var quoteMedia: some View {
         if item.kind == .quote {
@@ -575,7 +588,7 @@ struct FeedCardMediaView: View {
         }
     }
 
-    /// UGC の画像なし投稿 (ユーザーが背景を選んでいる) — 旧レンダリングを維持
+    /// UGC posts without images (the user has chosen a background): the old rendering is kept
     private var legacyTextMedia: some View {
         let primary = item.displayPrimary(lang: lang, showOriginal: showOriginal)
         return ZStack {
@@ -608,29 +621,30 @@ struct FeedCardMediaView: View {
     }
 }
 
-// MARK: - FeedFitBlurImage (fit+ぼかし埋めの実描画)
+// MARK: - FeedFitBlurImage (actual drawing of fit + blurred fill)
 
-/// fit+同画像ぼかし埋めの実描画。AsyncImage からの置き換え (2026-08-09):
-/// AsyncImage はスクロール中のキャンセルでも .failure に固着し (リトライ機構なし)、
-/// 従来はそこから quoteMedia に落ちて「画像投稿が森背景＋引用符に化ける」バグになっていた
-/// (プロフィールグリッド UserPostGridCell で対策済みだった同型バグの取り残し)。
-/// - キャンセル: phase を書かず .loading のまま → 再出現時の .task 再実行で自然リトライ
-/// - 本当の失敗: 中立プレースホルダ (黒+photo)。quoteMedia には絶対に落とさない
-///   (画像投稿である事実を偽って別コンテンツに見せるのは無表示より悪い)
+/// Actual drawing of fit + blurred fill of the same image. Replaces AsyncImage (2026-08-09):
+/// AsyncImage gets stuck in .failure even on a cancel during scrolling (no retry mechanism), and
+/// previously it fell from there into quoteMedia, which caused the bug "an image post turns into a
+/// forest background + quotation marks"
+/// (a leftover of the same kind of bug that was already fixed in the profile grid UserPostGridCell).
+/// - Cancel: do not write phase, stay in .loading → the .task runs again on reappearance, a natural retry
+/// - Real failure: neutral placeholder (black + photo). Never fall into quoteMedia
+///   (presenting an image post as different content is worse than showing nothing)
 private struct FeedFitBlurImage: View {
     let url: URL
 
-    /// false の間はネットワーク取得を開始せず、ロード中と同じ見た目 (Color.black) に留める。
-    /// カルーセルの非表示ページ (選択中の ±1 の範囲外) を止めるため = M19 の egress 対策。
+    /// While false, no network fetch is started and it keeps the same look as loading (Color.black).
+    /// Used to stop hidden carousel pages (outside ±1 of the selected one) = egress fix for M19.
     ///
-    /// 🔴 この「読み込むか否か」は View の出し分けではなくフラグで表現すること。
-    ///    以前は呼び出し側が if/else で別型のプレースホルダに差し替えていたが、それだと
-    ///    ページの identity が変わって TabView がスワイプ中に子を作り直し、ジェスチャーが
-    ///    打ち切られていた (2026-08-27 実機報告のスワイプバグ)。
+    /// 🔴 Express "load or not" with this flag, not by switching Views.
+    ///    Previously the caller used if/else to swap in a placeholder of a different type, but then
+    ///    the page identity changed and the TabView recreated its children during the swipe, and the
+    ///    gesture was cut off (the swipe bug reported on a real device 2026-08-27).
     var shouldLoad: Bool = true
 
-    /// .task の再実行キー。url だけでなく shouldLoad も含めることで、
-    /// 範囲内に入った瞬間にロードが始まり、範囲外に出た瞬間に画像を解放できる
+    /// Re-run key for .task. Including shouldLoad, not just url, makes loading start the moment the page
+    /// enters the range, and frees the image the moment it leaves the range
     private struct LoadKey: Equatable {
         let url: URL
         let shouldLoad: Bool
@@ -642,7 +656,7 @@ private struct FeedFitBlurImage: View {
         case failure
     }
     @State private var phase: Phase = .loading
-    /// .success の画像がどの url のものかを持つ (下の .task のガードで照合する)
+    /// Holds which url the .success image belongs to (checked by the guard in the .task below)
     @State private var loadedURL: URL?
 
     var body: some View {
@@ -656,8 +670,8 @@ private struct FeedFitBlurImage: View {
                             .clipped()
                             .blur(radius: 18)
                             .opacity(0.55)
-                            // (既存コメントを移設) ぼかしはスクロール中に毎フレーム再計算される
-                            // GPU コストが大きいため、このレイヤーだけ一度だけラスタライズする
+                            // (moved existing comment) The blur is recomputed every frame during scrolling and its GPU cost is
+                            // high, so only this layer is rasterized once
                             .drawingGroup()
                         Image(uiImage: uiImage).resizable().scaledToFit()
                             .frame(width: geo.size.width, height: geo.size.height)
@@ -677,10 +691,10 @@ private struct FeedFitBlurImage: View {
             .clipped()
         }
         .task(id: LoadKey(url: url, shouldLoad: shouldLoad)) {
-            // 範囲外に出たら画像を手放す。以前は View ごと破棄していたので、そのときと
-            // 同じメモリ挙動を保つ (1枚 ≈ 5.8MB。5枚組で View が持ち続けると
-            // FeedImageLoader の NSCache が追い出せず純増する)。
-            // 戻ってきたときは NSCache から即復帰するので通信は発生しない
+            // Release the image when it leaves the range. Previously the whole View was discarded, so this keeps
+            // the same memory behavior as then (1 image ≈ 5.8MB. If the View keeps holding them in a 5-image post,
+            // the NSCache of FeedImageLoader cannot evict them and memory only grows).
+            // When it comes back, it returns from NSCache immediately, so no network traffic happens
             guard shouldLoad else {
                 if case .success = phase {
                     phase = .loading
@@ -688,17 +702,19 @@ private struct FeedFitBlurImage: View {
                 }
                 return
             }
-            // 再出現のたびに走る。同じ url で取得済みなら何もしない (再デコード・ちらつき防止)。
-            // .failure から再出現した場合はここを通ってリトライになる。
-            // loadedURL の照合が無いと、view identity が維持されたまま url だけ変わった場合に
-            // 古い画像が残り続ける (現状その経路は無いが、将来 ForEach のキー変更等で踏むと
-            // 「別投稿の画像が表示される」事故になるため先に潰しておく)
+            // Runs every time it reappears. If already fetched for the same url, do nothing (prevents re-decoding
+            // and flicker).
+            // When it reappears from .failure, it passes here and retries.
+            // Without the loadedURL check, if only the url changed while the view identity was kept, the old
+            // image would keep showing (that path does not exist now, but if something like a future change of
+            // the ForEach key hits it, it would cause the accident "another post's image is shown", so we block
+            // it in advance)
             if case .success = phase, loadedURL == url { return }
             phase = .loading
             let image = await FeedImageLoader.shared.image(for: url)
-            // キャンセル済みなら書かない (UserPostGridCell と同じ真因対策)。
-            // await 復帰後のコードは協調的キャンセルでは止まらないため、この guard が無いと
-            // nil を「本当の失敗」として恒久固定してしまう
+            // Do not write if already canceled (the same root-cause fix as in UserPostGridCell).
+            // Code after returning from await is not stopped by cooperative cancellation, so without this guard
+            // nil would be permanently fixed as a "real failure"
             if Task.isCancelled { return }
             if let image {
                 loadedURL = url

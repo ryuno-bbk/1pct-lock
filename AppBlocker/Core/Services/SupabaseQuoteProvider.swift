@@ -2,20 +2,20 @@
 //  SupabaseQuoteProvider.swift
 //  AppBlocker
 //
-//  Supabase経由の名言プロバイダー（v2.0）
+//  Quote provider through Supabase (v2.0)
 //
 
 import Foundation
 import Supabase
 
-/// Supabaseから名言を取得するプロバイダー
+/// Provider that fetches quotes from Supabase
 final class SupabaseQuoteProvider: QuoteProviding {
 
     private let client: SupabaseClient
     private let fallback: LocalQuoteProvider
     private var cachedQuotes: [Quote] = []
 
-    /// Supabaseから取得した生データ（author JOIN済み）
+    /// Raw data fetched from Supabase (author already JOINed)
     private struct SupabaseQuoteRow: Decodable {
         let id: UUID
         let authorId: UUID

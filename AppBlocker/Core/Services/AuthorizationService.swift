@@ -2,21 +2,21 @@
 //  AuthorizationService.swift
 //  AppBlocker
 //
-//  FamilyControls権限管理サービス
+//  FamilyControls permission management service
 //
 
 import Foundation
 import Combine
 import FamilyControls
 
-/// FamilyControls認証状態
+/// FamilyControls authorization status
 enum AuthorizationStatus {
     case notDetermined
     case denied
     case approved
 }
 
-/// FamilyControls権限管理
+/// FamilyControls permission management
 final class AuthorizationService: ObservableObject {
 
     @MainActor static let shared = AuthorizationService()
@@ -34,7 +34,7 @@ final class AuthorizationService: ObservableObject {
 
     // MARK: - Public Methods
 
-    /// 現在の認証状態を確認
+    /// Check the current authorization status
     @MainActor
     func checkCurrentStatus() {
         let status = center.authorizationStatus
@@ -49,7 +49,7 @@ final class AuthorizationService: ObservableObject {
         }
     }
 
-    /// FamilyControls権限をリクエスト
+    /// Request the FamilyControls permission
     @MainActor
     func requestAuthorization() async {
         guard !isAuthorizing else { return }
@@ -67,7 +67,7 @@ final class AuthorizationService: ObservableObject {
         isAuthorizing = false
     }
 
-    /// 認証が完了しているか
+    /// Whether authorization is complete
     var isAuthorized: Bool {
         authorizationStatus == .approved
     }

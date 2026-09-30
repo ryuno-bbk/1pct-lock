@@ -2,9 +2,9 @@
 //  FilteredQuoteFeedView.swift
 //  AppBlocker
 //
-//  カテゴリ別・いいね欄などフィルタされた名言のフィード。
-//  2026-07-10 BeReal 風改修で全画面 TikTok スクロール → FeedCardListView (4:5 カードリスト) に。
-//  (旧 InfiniteQuoteBuffer による無限再シャッフルは廃止、有限リスト表示)
+//  Feed of filtered quotes, e.g. by category or the likes section.
+//  In the 2026-07-10 BeReal-style rework, the full-screen TikTok scroll → FeedCardListView (4:5 card
+//  list). (The endless reshuffle with the old InfiniteQuoteBuffer was removed. It shows a finite list)
 //
 
 import SwiftUI
@@ -30,10 +30,10 @@ struct FilteredQuoteFeedView: View {
         let items = self.items
         FeedCardListView(
             items: items,
-            recordsViews: false,  // 名言のみのフィルタ済みフィード (いいね一覧等)、投稿詳細タップではない
+            recordsViews: false,  // Filtered quote-only feed (likes list etc.), not a tap into post detail
             startItemKey: items.indices.contains(startIndex) ? items[startIndex].id : nil,
             onLikeToggled: { item, nowLiked in
-                // いいね一覧グリッドとの同期 (旧 FilteredFeedCard の onLikeTap と同じ)
+                // Sync with the likes list grid (same as onLikeTap of the old FilteredFeedCard)
                 guard let quote = quotes.first(where: { $0.id == item.itemId }) else { return }
                 if nowLiked {
                     likeService.addToLikedQuotes(quote)
@@ -44,12 +44,14 @@ struct FilteredQuoteFeedView: View {
         )
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        // 実機FB#6: MyProfileView から push される仲間 (いいね一覧) にも同じ補正を常駐
+        // Real device feedback #6: keep the same fix on the sibling screens pushed from MyProfileView (likes
+        // list)
         .safeAreaCollapseFix()
     }
 }
 
-// MARK: - Quote → FeedItem 変換 (カード表示 / 画像保存 / 共有用、AuthorQuoteFeedView と共用)
+// MARK: - Quote → FeedItem conversion (for card display / image save / share, shared with
+// AuthorQuoteFeedView)
 
 extension Quote {
     func toFilteredFeedItem(isOfficial: Bool) -> FeedItem {

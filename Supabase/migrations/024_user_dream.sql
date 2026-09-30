@@ -1,25 +1,27 @@
 -- ============================================================
--- 024_user_dream.sql (v2: 独立テーブル + RLS 方式)
--- プロフィールに「夢」(なりたい自分の一言宣言) を追加
+-- 024_user_dream.sql (v2: separate table + RLS approach)
+-- Adds a "dream" (a one-line declaration of the person you want to become) to the profile
 -- ============================================================
--- 目的:
---   オンボーディング DreamStepView で入力させ、ProfileEditView で編集可能にする。
---   120文字以内、任意。is_public で「他人のプロフィールに公開するか」を制御 (既定 false)。
+-- Purpose:
+--   Entered in the onboarding DreamStepView, editable in ProfileEditView.
+--   120 characters max, optional. is_public controls "whether to show it on your profile to others"
+--   (default false).
 --
--- v1 からの設計変更 (2026-07-07 Fable レビュー指摘):
---   v1 は users.dream + users.dream_is_public 列を追加し、非公開制御を
---   「アプリ側の表示出し分けのみ」で行う設計だった。しかし users の SELECT
---   ポリシーは全員可のため、非公開の夢も PostgREST 経由で誰でも読めてしまい、
---   「非公開」トグルの約束を DB レベルで守れない。
---   → 夢を独立テーブル user_dreams に分離し、RLS の行レベル制御
---     「is_public = true の行 or 自分の行だけ SELECT 可」で守る方式に変更。
---   ※ v1 は未適用のまま差し替え (2026-07-07 時点で本番に dream 列は存在しない)
+-- Design change from v1 (2026-07-07 Fable review finding):
+--   v1 added users.dream + users.dream_is_public columns and handled privacy
+--   "only by choosing what to display in the app". But the users SELECT
+--   policy allows everyone, so even private dreams could be read by anyone through PostgREST,
+--   and the promise of the "private" toggle could not be kept at the DB level.
+--   → Moved dreams to a separate table user_dreams, protected by RLS row-level control:
+--     "only rows with is_public = true or your own rows can be SELECTed".
+--   * v1 was replaced without ever being applied (as of 2026-07-07 there is no dream column in
+--     production)
 --
--- 適用方法:
---   019〜023 適用済みの環境に対し、Supabase Dashboard の SQL Editor で貼り付け実行、
---   または `NEW_DB_URL=... bash apply_sql.sh Supabase/migrations/024_user_dream.sql`
+-- How to apply:
+--   On an environment with 019 to 023 applied, paste and run it in the SQL Editor of the Supabase
+--   Dashboard, or `NEW_DB_URL=... bash apply_sql.sh Supabase/migrations/024_user_dream.sql`
 --
--- 実行順序: 023 の後。冪等 (IF NOT EXISTS / DROP ... IF EXISTS)
+-- Run order: after 023. Idempotent (IF NOT EXISTS / DROP ... IF EXISTS)
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS public.user_dreams (
@@ -41,7 +43,7 @@ COMMENT ON TABLE public.user_dreams IS
     'なりたい自分を一言で表す宣言。120文字以内、任意。非公開 (is_public=false) の行は RLS で本人以外から見えない';
 
 -- ============================================
--- RLS: 公開行 or 自分の行のみ SELECT 可。書き込みは自分の行のみ
+-- RLS: only public rows or your own rows can be SELECTed. Writes only to your own row
 -- ============================================
 ALTER TABLE public.user_dreams ENABLE ROW LEVEL SECURITY;
 
@@ -68,11 +70,11 @@ CREATE POLICY "user_dreams_delete_own"
     USING (auth.uid() = user_id);
 
 -- ============================================
--- 動作確認用クエリ (実行不要、コメント)
+-- Queries for checking behavior (no need to run, comments only)
 -- ============================================
--- 自分の夢の upsert:
+-- upsert your own dream:
 --   INSERT INTO user_dreams (user_id, dream, is_public)
---   VALUES (auth.uid(), 'テスト', false)
+--   VALUES (auth.uid(), 'test', false)
 --   ON CONFLICT (user_id) DO UPDATE SET dream = EXCLUDED.dream, is_public = EXCLUDED.is_public;
--- 他人の非公開行が見えないこと (別アカウントで):
---   SELECT * FROM user_dreams WHERE user_id = '<相手のuid>';  -- 0 行になる
+-- Other people's private rows must not be visible (with another account):
+--   SELECT * FROM user_dreams WHERE user_id = '<other user uid>';  -- returns 0 rows

@@ -1,29 +1,31 @@
 -- ============================================================
 -- 019_post_v2.sql
--- 投稿v2: 背景 + 自由配置テキストを1枚のJPEGに焼き込む方式
+-- Post v2: bake the background + freely placed text into one JPEG
 -- ============================================================
--- 目的:
---   1. user_posts に title / image_path / overlays を追加
---      - title:      任意のタイトル文字列 (# タグを含みうる、60文字以内)
---      - image_path: Storage `post-images` バケット内のパス (焼き込み済みJPEG)
---      - overlays:   再編集/検索/モデレ用の生テキスト+配置情報 (jsonb 配列)
---      旧投稿 (text_jp/text_en のみ) はそのまま共存。2言語入力の新規UIは廃止。
---   2. Storage バケット `post-images` を新設 (avatars と同じ RLS パターン)
---   3. fetch_mixed_feed_random / fetch_following_feed / fetch_tag_feed の戻り値に
---      title text, image_path text を追加 (012 の全カラムを維持したまま末尾に追加)
---      - 公式 quotes 側は両方 NULL
---      - UGC user_posts 側は p.title / p.image_path をそのまま返す
+-- Purpose:
+--   1. Add title / image_path / overlays to user_posts
+--      - title:      optional title string (may contain # tags, 60 characters max)
+--      - image_path: path in the Storage `post-images` bucket (baked JPEG)
+--      - overlays:   raw text + placement info for re-editing/search/moderation (jsonb array)
+--      Old posts (text_jp/text_en only) stay as they are side by side. The new bilingual input UI was
+--      dropped.
+--   2. Create a new Storage bucket `post-images` (same RLS pattern as avatars)
+--   3. Add title text, image_path text to the return values of fetch_mixed_feed_random /
+--      fetch_following_feed / fetch_tag_feed (appended at the end, keeping all columns from 012)
+--      - both are NULL on the official quotes side
+--      - the UGC user_posts side returns p.title / p.image_path as is
 --
--- 適用方法:
---   このプロジェクトは Supabase Dashboard の SQL Editor で貼り付け実行、
---   または `NEW_DB_URL=... bash apply_sql.sh supabase/migrations/019_post_v2.sql`
---   のいずれか。まだ未適用 (2026-07-05 時点)。
+-- How to apply:
+--   In this project, either paste and run it in the SQL Editor of the Supabase Dashboard,
+--   or `NEW_DB_URL=... bash apply_sql.sh supabase/migrations/019_post_v2.sql`.
+--   Not applied yet (as of 2026-07-05).
 --
--- 実行順序: 018 完了後。何度実行しても安全 (IF NOT EXISTS / DROP IF EXISTS で冪等)
+-- Run order: after 018 is done. Safe to run any number of times (idempotent with IF NOT EXISTS /
+-- DROP IF EXISTS)
 -- ============================================================
 
 -- ============================================
--- 1. user_posts へ title / image_path / overlays 追加
+-- 1. Add title / image_path / overlays to user_posts
 -- ============================================
 ALTER TABLE public.user_posts
     ADD COLUMN IF NOT EXISTS title      text,
@@ -43,7 +45,7 @@ COMMENT ON COLUMN public.user_posts.image_path IS '投稿v2: Storage post-images
 COMMENT ON COLUMN public.user_posts.overlays   IS '投稿v2: 焼き込み前の生テキスト+配置情報 (jsonb 配列)。検索/モデレ/将来の再編集用、表示には使わない';
 
 -- ============================================
--- 2. text_jp / text_en / image_path のいずれか必須 (旧制約を差し替え)
+-- 2. One of text_jp / text_en / image_path is required (replaces the old constraint)
 -- ============================================
 ALTER TABLE public.user_posts
     DROP CONSTRAINT IF EXISTS user_posts_text_required;
@@ -54,14 +56,14 @@ ALTER TABLE public.user_posts
     );
 
 -- ============================================
--- 3. Storage バケット `post-images` 作成 (public, 10MB 上限, jpeg固定)
+-- 3. Create the Storage bucket `post-images` (public, 10MB limit, jpeg only)
 -- ============================================
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
     'post-images',
     'post-images',
     true,
-    10485760,                                               -- 10 MB (焼き込み済み1080x1920 JPEG 想定)
+    10485760,                                               -- 10 MB (assumes a baked 1080x1920 JPEG)
     ARRAY['image/jpeg']
 )
 ON CONFLICT (id) DO UPDATE SET
@@ -70,21 +72,21 @@ ON CONFLICT (id) DO UPDATE SET
     allowed_mime_types  = EXCLUDED.allowed_mime_types;
 
 -- ============================================
--- 4. Storage RLS ポリシー (013 の avatars パターンを踏襲)
+-- 4. Storage RLS policies (follows the avatars pattern in 013)
 -- ============================================
 DROP POLICY IF EXISTS "post_images_public_read"  ON storage.objects;
 DROP POLICY IF EXISTS "post_images_owner_insert" ON storage.objects;
 DROP POLICY IF EXISTS "post_images_owner_update" ON storage.objects;
 DROP POLICY IF EXISTS "post_images_owner_delete" ON storage.objects;
 
--- 4-1. 誰でも read 可 (public バケット、フィード表示用)
+-- 4-1. Anyone can read (public bucket, for showing the feed)
 CREATE POLICY "post_images_public_read"
     ON storage.objects
     FOR SELECT
     USING (bucket_id = 'post-images');
 
--- 4-2. 自分の uid フォルダ配下のみ INSERT 可
--- パス例: "{uid}/{post_id}.jpg" → (storage.foldername(name))[1] が uid
+-- 4-2. INSERT allowed only under your own uid folder
+-- Path example: "{uid}/{post_id}.jpg" → (storage.foldername(name))[1] is the uid
 CREATE POLICY "post_images_owner_insert"
     ON storage.objects
     FOR INSERT
@@ -93,7 +95,7 @@ CREATE POLICY "post_images_owner_insert"
         AND auth.uid()::text = (storage.foldername(name))[1]
     );
 
--- 4-3. 自分の uid フォルダ配下のみ UPDATE 可 (upsert 上書き用)
+-- 4-3. UPDATE allowed only under your own uid folder (for upsert overwrite)
 CREATE POLICY "post_images_owner_update"
     ON storage.objects
     FOR UPDATE
@@ -102,7 +104,7 @@ CREATE POLICY "post_images_owner_update"
         AND auth.uid()::text = (storage.foldername(name))[1]
     );
 
--- 4-4. 自分の uid フォルダ配下のみ DELETE 可 (投稿削除 / insert失敗時のロールバック用)
+-- 4-4. DELETE allowed only under your own uid folder (for post deletion / rollback when insert fails)
 CREATE POLICY "post_images_owner_delete"
     ON storage.objects
     FOR DELETE
@@ -112,9 +114,9 @@ CREATE POLICY "post_images_owner_delete"
     );
 
 -- ============================================
--- 5. フィード RPC v3: title / image_path を末尾に追加
+-- 5. Feed RPC v3: append title / image_path at the end
 -- ============================================
--- RETURNS TABLE 列追加は CREATE OR REPLACE 不可なので DROP → CREATE (012 に倣う)
+-- Adding columns to RETURNS TABLE is not possible with CREATE OR REPLACE, so DROP → CREATE (same as 012)
 
 -- ---- 5-1. fetch_mixed_feed_random ----
 DROP FUNCTION IF EXISTS public.fetch_mixed_feed_random(integer);

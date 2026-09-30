@@ -2,8 +2,8 @@
 //  FollowedAccountsView.swift
 //  AppBlocker
 //
-//  フォロー中のアカウント一覧 (公式偉人 + 一般ユーザー)
-//  マイページのヘッダー「フォロー中: N」をタップで遷移
+//  List of followed accounts (official great figures + regular users)
+//  Opened by tapping "フォロー中: N" ("Following: N") in the My Page header
 //
 
 import SwiftUI
@@ -20,8 +20,9 @@ struct FollowedAccountsView: View {
         AppLanguage(rawValue: mainLanguageRaw) ?? .english
     }
 
-    /// 偉人実名アカウント廃止に伴い、著者フォローは 1% 公式アカウント1本に集約される。
-    /// sentinel 以外の著者フォロー行 (旧データ) は UI 上無視する。
+    /// With the removal of real-name great figure accounts, author follows are consolidated into the
+    /// single 1% official account. Author follow rows other than the sentinel (old data) are ignored in
+    /// the UI.
     private var isFollowingOfficial: Bool {
         followService.isFollowing(authorId: OnePercentAccount.authorId)
     }
@@ -32,7 +33,7 @@ struct FollowedAccountsView: View {
 
             ScrollView {
                 LazyVStack(spacing: 12) {
-                    // 1% 公式アカウント (フォロー中の場合のみ1行表示)
+                    // 1% official account (shown as 1 row only if followed)
                     if isFollowingOfficial {
                         NavigationLink {
                             OfficialProfileView()
@@ -46,7 +47,7 @@ struct FollowedAccountsView: View {
                         .buttonStyle(PlainButtonStyle())
                     }
 
-                    // 一般ユーザー
+                    // Regular users
                     ForEach(followedUsers) { user in
                         NavigationLink {
                             UserProfileView(
@@ -132,7 +133,7 @@ struct FollowedAccountsView: View {
     }
 }
 
-// MARK: - FollowedUser モデル (このファイル限定)
+// MARK: - FollowedUser model (this file only)
 
 struct FollowedUser: Identifiable, Decodable, Equatable {
     let id: UUID

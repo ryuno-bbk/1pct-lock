@@ -4,11 +4,11 @@
 //
 //  Created by Ryunosuke Ishigami on 2026/01/31.
 //
-//  Shield画面のボタンアクション処理
+//  Button actions of the Shield screen
 //
-//  Q7 確定 (2026-05-14): secondaryButton は廃止
-//  → ShieldConfigurationExtension で secondaryButtonLabel: nil 設定済み（UI に出ない）
-//  → secondaryButtonPressed ケースは switch 網羅のために残すが、何もしない
+//  Q7 finalized (2026-05-14): secondaryButton removed
+//  → secondaryButtonLabel: nil already set in ShieldConfigurationExtension (not shown in the UI)
+//  → the secondaryButtonPressed case stays for switch exhaustiveness, but does nothing
 //
 
 import Foundation
@@ -27,7 +27,7 @@ class ShieldActionExtension: ShieldActionDelegate {
         case .primaryButtonPressed:
             completionHandler(.close)
         case .secondaryButtonPressed:
-            // 廃止済み: 表示されない
+            // Removed: never shown
             completionHandler(.close)
         @unknown default:
             completionHandler(.close)

@@ -1,11 +1,16 @@
 -- 060_quote_audit_anonymize.sql
--- 名言全件監査の反映 (2026-07-30 ユーザー全件判定: Docs/quote_audit_verdicts_2026_07_30.txt + v2文言編集)
---   1) 削除109件 (実名リスク/重複。quote_likes等はFK CASCADEで自動削除)
---   2) 文言修正20件 (ユーザー添削済み)
---   3) 残存全件を匿名著者 Anonymous (0c606f06) へ付け替え = 実名表示の全廃
---   4) 新規2件 (ユーザー支給)
--- 冪等: 再実行しても安全 (DELETE/UPDATEは自然に冪等、INSERTはON CONFLICT DO NOTHING)
--- ロールバック: 削除の復元はダンプからのみ。適用前にダンプ推奨 (無料枠でもTable Editor→CSV)
+-- Apply the full quote audit (2026-07-30 the user judged every quote:
+-- Docs/quote_audit_verdicts_2026_07_30.txt + v2 wording edits)
+--   1) Delete 109 (real-name risk/duplicates. quote_likes etc. are deleted automatically by FK
+--      CASCADE)
+--   2) Wording fixes for 20 (already reviewed by the user)
+--   3) Reassign all remaining ones to the anonymous author Anonymous (0c606f06) = remove all
+--      real-name display
+--   4) 2 new ones (provided by the user)
+-- Idempotent: safe to rerun (DELETE/UPDATE are naturally idempotent, INSERT uses ON CONFLICT DO
+-- NOTHING)
+-- Rollback: deletions can only be restored from a dump. Dumping before applying is recommended (even
+-- on the free tier: Table Editor → CSV)
 BEGIN;
 
 DELETE FROM public.quotes WHERE id IN (
@@ -141,7 +146,8 @@ UPDATE public.quotes SET text_jp = '継続が「成功」を保証するわけ�
 UPDATE public.quotes SET text_jp = '今の友人関係を卒業しつつあるあのもどかしさは孤独じゃない。お前の野心が、平凡なグループに対する所属欲求より大きな声で語り始めただけだ。', text_en = 'That annoying feeling when you realize you''ve outgrown your social circle isn''t loneliness — it''s your ambition finally speaking louder than your need to belong.' WHERE id = 'dc77bebb-38fb-422b-9776-e7898ba2c120';
 UPDATE public.quotes SET text_jp = '疲れた時に止まるんじゃない。終わった時に止まれ。', text_en = 'Don''t stop when you''re tired. Stop when you''re done.' WHERE id = 'f0f175c6-1658-42d8-97f8-1dc9b4400ff6';
 
--- 残存名言を全て匿名著者へ (実名全廃)。celebrities の authors 行は残置 (どこからも参照されず不可視)
+-- Move all remaining quotes to the anonymous author (remove all real names). The authors rows for
+-- celebrities are left in place (not referenced anywhere, invisible)
 UPDATE public.quotes SET author_id = '0c606f06-0722-46f8-a8e0-f2f906411120';
 
 INSERT INTO public.quotes (id, author_id, text_en, text_jp, category)

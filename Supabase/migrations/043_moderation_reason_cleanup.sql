@@ -1,32 +1,37 @@
 -- ============================================================
 -- 043_moderation_reason_cleanup.sql
--- 判定理由文の浄化 (B-full、2026-07-23)
+-- Cleaning up the verdict reason text (B-full, 2026-07-23)
 -- ============================================================
--- 背景 (実機FB 2026-07-22/23): moderation_verdict の safety_reason/ethos_reason に
--- モデルが分析全文を書いてしまい、本人向けの「判定理由」表示 (AppealSheetView) に
--- 「エトス上は fail」「シャドー判定とする」等の内部用語・判定プロセスがそのまま出ていた。
+-- Background (real-device feedback 2026-07-22/23): the model wrote its full analysis into
+-- safety_reason/ethos_reason of moderation_verdict, and internal terms and the judging process such as
+-- "fail on ethos" and "treat as a shadow verdict" appeared as is in the "verdict reason" shown to the
+-- user (AppealSheetView).
 --
--- 対応 (moderate-post Edge Function の同時デプロイとワンセット):
---   1. Edge Function 側: 出力スキーマ先頭に内部用 analysis フィールドを追加
---      (reasoning-first を維持 = 精度を落とさずに分析の書き場所を reason から移す)
---   2. この SQL: ルーブリック末尾に【本人向け理由文のルール】を追記し、
---      safety_rubric 内の「(本文で理由を明記)」を analysis 行きに書き換える
+-- Fix (one set with the simultaneous deploy of the moderate-post Edge Function):
+--   1. Edge Function side: add an internal analysis field at the start of the output schema
+--      (keeps reasoning-first = moves where the analysis is written away from reason, without losing
+--      accuracy)
+--   2. This SQL: append "【本人向け理由文のルール】" ("[Rules for the reason text shown to the
+--      user]") at the end of the rubric, and rewrite "(本文で理由を明記)" ("(state the reason in the
+--      body)") in safety_rubric so that it goes to analysis
 --
--- 順序: この SQL と Edge Function デプロイはどちらが先でも壊れない
---   (SQL のみ先行 = ルールが analysis に言及するがスキーマに無い間も reason は浄化される /
---    デプロイのみ先行 = analysis は生成されるがルール未追記の間は reason の文体が従来のまま)。
+-- Order: nothing breaks whichever of this SQL and the Edge Function deploy comes first
+--   (SQL first = the rules mention analysis while it is not yet in the schema, but reason is still
+--    cleaned / deploy first = analysis is generated, but until the rules are appended, reason keeps
+--    its old style).
 -- ============================================================
 
 UPDATE public.moderation_config
 SET
-    -- 「迷ったら reason 本文に理由を明記」だった逃し先を analysis へ変更
+    -- The fallback that was "if unsure, state the reason in the reason body" is changed to go to analysis
     safety_rubric = replace(
         safety_rubric,
         '(本文で理由を明記)',
         '(迷った点は analysis フィールドに明記)'
     ),
-    -- 出力ルールはプロンプト末尾 (= ethos_rubric の後ろ) に1箇所だけ追記する。
-    -- buildSystemPrompt は safety_rubric + ethos_rubric を連結するため層1/層2の両方に効く
+    -- The output rules are appended in only one place, at the end of the prompt (= after ethos_rubric).
+    -- buildSystemPrompt concatenates safety_rubric + ethos_rubric, so it applies to both layer 1 and
+    -- layer 2
     ethos_rubric = ethos_rubric || $rules$
 
 【本人向け理由文のルール】(層1・層2共通 / safety_reason・ethos_reason の書き方)
@@ -43,5 +48,5 @@ SET
   合わないため表示が制限されました」
 $rules$
 WHERE id = true
-  -- 冪等ガード: 再実行しても二重追記しない
+  -- Idempotency guard: running again does not append twice
   AND position('【本人向け理由文のルール】' in ethos_rubric) = 0;

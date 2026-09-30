@@ -1,13 +1,13 @@
 -- ============================================
 -- 030_likers_list.sql
--- いいねした人の一覧 RPC (2026-07-10 ユーザー指定)
+-- RPC for the list of users who liked (2026-07-10, user-specified)
 --
--- フィードカード左下のいいねアバタースタックをタップ → いいねした人一覧を表示する。
--- user_likes は RLS で本人の行しか読めないため、SECURITY DEFINER の RPC で
--- 「その投稿/名言にいいねした人」の公開プロフィール (名前/アバター) だけを返す。
--- 028 fetch_feed_extras の likers (≤3) のフルリスト版。
+-- Tap the like avatar stack at the bottom left of a feed card → show the list of users who liked.
+-- Under RLS, user_likes can only be read for your own rows, so a SECURITY DEFINER RPC returns
+-- only the public profiles (name/avatar) of "the users who liked that post/quote".
+-- Full-list version of the likers (≤3) of 028 fetch_feed_extras.
 --
--- 何度実行しても安全 (CREATE OR REPLACE)。
+-- Safe to run any number of times (CREATE OR REPLACE).
 -- ============================================
 
 CREATE OR REPLACE FUNCTION public.fetch_likers(
@@ -37,7 +37,7 @@ AS $$
             (target_kind = 'post'  AND l.post_id  = target_id)
          OR (target_kind = 'quote' AND l.quote_id = target_id)
         )
-        -- 自分がブロックした相手は出さない (fetch_feed_extras と同じ方針)
+        -- Do not show users you have blocked (same policy as fetch_feed_extras)
         AND l.user_id NOT IN (
             SELECT blocked_user_id FROM public.user_blocks
             WHERE blocker_id = auth.uid()

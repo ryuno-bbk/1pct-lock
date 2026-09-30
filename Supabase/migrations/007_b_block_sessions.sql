@@ -1,25 +1,25 @@
 -- ============================================================
--- Phase B-5: block_sessions テーブル（累計ロック時間）
+-- Phase B-5: block_sessions table (total lock time)
 -- ============================================================
--- 目的:
---   3 モード（timer / schedule / location）のロックセッションを
---   サーバー側に記録 → MyProfile で累計時間表示
+-- Purpose:
+--   Record lock sessions of the 3 modes (timer / schedule / location)
+--   on the server → show the total time on MyProfile
 --
--- 設計判断:
---   - 累計は status 関係なく duration_seconds を SUM（途中停止も含む）
---   - status は「active / completed / aborted」を将来分析用に保持
+-- Design decisions:
+--   - The total is SUM(duration_seconds) regardless of status (includes sessions stopped midway)
+--   - status keeps "active / completed / aborted" for future analysis
 --
--- 記録タイミング（実装時の作業）:
---   - timer:    TimerManager.timerCompleted / stopTimerBlocking で insert
---   - schedule: DeviceActivityMonitorExtension.intervalDidStart/End で insert
---   - location: LocationManager.didEnterRegion/didExitRegion で insert
+-- When to record (work for the implementation):
+--   - timer:    insert in TimerManager.timerCompleted / stopTimerBlocking
+--   - schedule: insert in DeviceActivityMonitorExtension.intervalDidStart/End
+--   - location: insert in LocationManager.didEnterRegion/didExitRegion
 --
--- 実行順序:
---   Phase A 完了後（users 参照のため）。B フェーズ内では任意順
+-- Execution order:
+--   After Phase A is done (because it references users). Any order within phase B
 -- ============================================================
 
 -- ============================================
--- 1. block_sessions テーブル
+-- 1. block_sessions table
 -- ============================================
 CREATE TABLE IF NOT EXISTS public.block_sessions (
     id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -32,8 +32,8 @@ CREATE TABLE IF NOT EXISTS public.block_sessions (
                        CHECK (status IN ('active', 'completed', 'aborted')),
     created_at       timestamptz NOT NULL DEFAULT now(),
 
-    -- active なら ended_at / duration_seconds NULL
-    -- 完了/中断なら両方 NOT NULL
+    -- If active, ended_at / duration_seconds are NULL
+    -- If completed/aborted, both are NOT NULL
     CONSTRAINT block_sessions_ended_consistency CHECK (
         (status = 'active'  AND ended_at IS NULL AND duration_seconds IS NULL)
         OR
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS public.block_sessions (
 CREATE INDEX IF NOT EXISTS idx_block_sessions_user_created
     ON public.block_sessions(user_id, created_at DESC);
 
--- 累計集計用（MyProfile で SUM(duration_seconds) を高速化）
+-- For the total (speeds up SUM(duration_seconds) on MyProfile)
 CREATE INDEX IF NOT EXISTS idx_block_sessions_user_duration
     ON public.block_sessions(user_id) WHERE duration_seconds IS NOT NULL;
 
@@ -56,23 +56,23 @@ COMMENT ON COLUMN public.block_sessions.duration_seconds IS 'status 関係なく
 -- ============================================
 ALTER TABLE public.block_sessions ENABLE ROW LEVEL SECURITY;
 
--- SELECT: 自分のセッションのみ
+-- SELECT: only your own sessions
 CREATE POLICY "block_sessions_select_own"
     ON public.block_sessions FOR SELECT
     USING (auth.uid() = user_id);
 
--- INSERT: 自分の user_id で
+-- INSERT: with your own user_id
 CREATE POLICY "block_sessions_insert_own"
     ON public.block_sessions FOR INSERT
     WITH CHECK (auth.uid() = user_id);
 
--- UPDATE: 自分の active セッションを完了/中断時に変更可
+-- UPDATE: you can change your own active session when it completes/aborts
 CREATE POLICY "block_sessions_update_own"
     ON public.block_sessions FOR UPDATE
     USING (auth.uid() = user_id)
     WITH CHECK (auth.uid() = user_id);
 
--- DELETE: 自分のセッションのみ（アカウント削除時 ON DELETE CASCADE）
+-- DELETE: only your own sessions (ON DELETE CASCADE on account deletion)
 CREATE POLICY "block_sessions_delete_own"
     ON public.block_sessions FOR DELETE
     USING (auth.uid() = user_id);

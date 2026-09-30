@@ -2,7 +2,7 @@
 //  SearchService.swift
 //  AppBlocker
 //
-//  ユーザー検索 (search_users RPC)。ステートレスなので ObservableObject は不要。
+//  User search (search_users RPC). Stateless, so no ObservableObject is needed.
 //
 
 import Foundation
@@ -14,7 +14,7 @@ struct UserSearchResult: Identifiable, Decodable, Equatable {
     let handle: String?
     let avatarUrl: String?
     let isPro: Bool
-    /// 083 で追加。旧サーバー (083 未適用) では欠けるので decodeIfPresent で受ける
+    /// Added in 083. Missing on older servers (083 not applied), so it is read with decodeIfPresent
     let isOfficial: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -47,8 +47,9 @@ final class SearchService {
         self.client = client
     }
 
-    /// ユーザー検索 (@handle 前方一致優先 + display_name 部分一致)。
-    /// 2 文字未満のクエリはサーバーを叩かずに空配列を返す (無駄な RPC 呼び出し防止)。
+    /// User search (@handle prefix match first + display_name partial match).
+    /// Queries shorter than 2 characters return an empty array without hitting the server (prevents useless
+    /// RPC calls).
     func searchUsers(query: String, limit: Int = 30) async -> [UserSearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 2 else { return [] }
@@ -70,10 +71,11 @@ final class SearchService {
         }
     }
 
-    /// 投稿検索 (タイトル部分一致 + タグ前方一致)。032_search_posts.sql の search_posts RPC。
-    /// 戻り値は fetch_mixed_feed_random と同じ17列なので FeedItem をそのままデコードできる。
-    /// 1文字未満のクエリはサーバーを叩かずに空配列を返す (日本語の1文字検索は許容する)。
-    /// 先頭の '#' 除去はサーバー側 (search_posts 内) で行うのでクライアントは trim のみ。
+    /// Post search (title partial match + tag prefix match). The search_posts RPC in 032_search_posts.sql.
+    /// The return value has the same 17 columns as fetch_mixed_feed_random, so it decodes as FeedItem as is.
+    /// Queries shorter than 1 character return an empty array without hitting the server (1-character
+    /// Japanese searches are allowed).
+    /// Stripping a leading '#' is done on the server side (inside search_posts), so the client only trims.
     func searchPosts(query: String, limit: Int = 30) async -> [FeedItem] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 1 else { return [] }

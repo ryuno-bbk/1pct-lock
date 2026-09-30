@@ -2,12 +2,15 @@
 //  ProPaywallView.swift
 //  AppBlocker
 //
-//  Pro 機能ペイウォール v4 (2026-07-19 Retro参照のユーザー指定で全面改装)。
-//  - 白黒基調 (金ベースは「かっこよくない」で廃止)
-//  - ヒーロー: 夢画像を大きく流し、下部を暗くして見出しを被せる
-//  - プランは Retro 式の大きいスワイプカード (機能リスト内蔵、無料/Pro 比較表は廃止)
-//  - 「無制限」等の誇張はしない (正直表示: 実請求額主表示+自動更新の開示文)
-//  価格は RevenueCat Offerings の実価格のみ。購入/復元は PurchaseService 経由。
+//  Paywall for Pro features v4 (fully redesigned 2026-07-19 per user spec, with Retro as reference).
+//  - Black-and-white base (the gold base was dropped as "not cool")
+//  - Hero: dream images scroll large, the bottom is darkened and the headline sits on top
+//  - Plans are big Retro-style swipe cards (feature list built in, the free/Pro comparison table was
+//    removed)
+//  - No exaggeration like "unlimited" (honest display: the actual charge as the main figure +
+//    auto-renew disclosure)
+//  Prices come only from the real prices in RevenueCat Offerings. Purchase/restore go through
+//  PurchaseService.
 //
 
 import SwiftUI
@@ -18,17 +21,18 @@ struct ProPaywallView: View {
     @ObservedObject private var purchaseService = PurchaseService.shared
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
 
-    /// 表示のきっかけになった機能（ヘッダーに表示）
+    /// The feature that triggered the display (shown in the header)
     let triggeredBy: BlockMode
 
-    /// オンボーディング等、シートではない文脈に埋め込む場合の「閉じる」動作。
-    /// nil (既定) なら通常どおり dismiss する
+    /// The "close" action when embedded in a non-sheet context such as onboarding.
+    /// If nil (default), dismiss as usual
     var onClose: (() -> Void)? = nil
 
-    /// スワイプカードの現在ページ = 選択中プラン (viewAligned ページングと連動)。
-    /// 初期値は一番左の月額 (2026-07-19 ユーザー決定)。年額を初期にすると、カードが
-    /// 価格ロード後に生成される都合で初期スクロールが効かず「表示ページと選択がズレる」
-    /// バグの温床になる + 左に月額が見切れて怪しく見えるため
+    /// Current page of the swipe cards = selected plan (linked with viewAligned paging).
+    /// The initial value is monthly, the leftmost (user decision 2026-07-19). If yearly were the initial
+    /// value, the cards are created after prices load, so the initial scroll does not take effect and it
+    /// becomes a breeding ground for the bug "shown page and selection don't match" + monthly is cut off on
+    /// the left, which looks suspicious
     @State private var scrolledPlan: PlanOption? = .monthly
     @State private var alertMessage: String = ""
     @State private var showAlert = false
@@ -45,7 +49,7 @@ struct ProPaywallView: View {
 
     var body: some View {
         ZStack {
-            // 真っ黒 + 白のかすかなグロウ (白黒基調、2026-07-19 ユーザー指定)
+            // Pure black + a faint white glow (black-and-white base, user specified 2026-07-19)
             AppColors.background
                 .ignoresSafeArea()
             RadialGradient(
@@ -58,20 +62,21 @@ struct ProPaywallView: View {
 
             ScrollView {
                 VStack(spacing: 18) {
-                    // 小タイトル (アイコンなし、2026-07-19 ユーザー決定)。
-                    // プラン名は「1% エリート / 1% Elite」で確定 (ASCのサブスク表示名と統一)。
-                    // 内部ID (entitlement "1% Pro" / ProAccess等) は表示名と別物なので変更しない
+                    // Small title (no icon, user decision 2026-07-19).
+                    // The plan name is finalized as "1% エリート" ("1% Elite") / "1% Elite" (same as the subscription display
+                    // name in ASC). Internal IDs (entitlement "1% Pro" / ProAccess etc.) are separate from the display
+                    // name, so do not change them
                     Text(lang == .japanese ? "1% エリート" : "1% Elite")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundColor(AppColors.textPrimary)
                         .tracking(0.5)
                         .padding(.top, 10)
 
-                    // ヒーロー: 写真を大きく流し、下部を暗くして見出しを被せる
+                    // Hero: the photos scroll large, the bottom is darkened and the headline sits on top
                     heroSection
                         .padding(.horizontal, -24)
 
-                    // 一番大事な訴求 (2026-07-19 ユーザー口述。文言は添削待ち)
+                    // The most important pitch (dictated by the user 2026-07-19. Wording pending review)
                     Text(lang == .japanese
                         ? "事前に決めたスケジュールと場所で、意思と関係なく自動ロック。本気で人生を変えたい人へ。"
                         : "Auto-lock by schedule and location — no willpower required. For people serious about changing their life.")
@@ -81,13 +86,13 @@ struct ProPaywallView: View {
                         .lineSpacing(4)
                         .padding(.horizontal, 8)
 
-                    // プラン: Retro 式の大きいスワイプカード
+                    // Plans: big Retro-style swipe cards
                     planCarousel
                         .padding(.horizontal, -24)
 
                     pageDots
 
-                    // CTA + 開示文 + リンク行 (隙間は詰める、2026-07-19 ユーザー指定)
+                    // CTA + disclosure + link row (tighten the gaps, user specified 2026-07-19)
                     footerSection
                 }
                 .padding(.horizontal, 24)
@@ -95,7 +100,7 @@ struct ProPaywallView: View {
                 .padding(.bottom, 28)
             }
 
-            // 閉じるボタン
+            // Close button
             VStack {
                 HStack {
                     Spacer()
@@ -127,13 +132,13 @@ struct ProPaywallView: View {
         }
     }
 
-    // MARK: - Hero (写真マルキー + 暗幕 + 見出し被せ)
+    // MARK: - Hero (photo marquee + dark overlay + headline on top)
 
     private var heroSection: some View {
         ZStack(alignment: .bottom) {
             DreamImageMarquee(cardWidth: 190, cardHeight: 250)
 
-            // 下部を暗くして文字を載せる (背景色へ溶かすことでページと一体化)
+            // Darken the bottom to put text on it (blends into the background color so it is one with the page)
             LinearGradient(
                 stops: [
                     .init(color: .clear, location: 0),
@@ -146,7 +151,7 @@ struct ProPaywallView: View {
             .frame(height: 170)
             .allowsHitTesting(false)
 
-            // 文言は添削待ち
+            // Wording pending review
             Text(lang == .japanese ? "未来の理想の自分になる" : "Become your future self")
                 .font(.system(size: 28, weight: .bold))
                 .foregroundColor(AppColors.textPrimary)
@@ -156,9 +161,9 @@ struct ProPaywallView: View {
         }
     }
 
-    // MARK: - Plan Carousel (Retro式スワイプカード)
+    // MARK: - Plan Carousel (Retro-style swipe cards)
 
-    /// 表示順: 月額 → 年額 (初期表示・バッジ) → 買い切り
+    /// Display order: monthly → yearly (initial display, badge) → lifetime
     private var availablePlans: [(plan: PlanOption, package: Package)] {
         var result: [(PlanOption, Package)] = []
         if let monthly = purchaseService.monthlyPackage { result.append((.monthly, monthly)) }
@@ -194,7 +199,7 @@ struct ProPaywallView: View {
                     ForEach(availablePlans, id: \.plan) { item in
                         planCard(for: item.package, plan: item.plan)
                             .containerRelativeFrame(.horizontal) { length, _ in
-                                length * 0.78   // 次のカードを覗かせる (Retro式)
+                                length * 0.78   // let the next card peek in (Retro style)
                             }
                     }
                 }
@@ -207,8 +212,8 @@ struct ProPaywallView: View {
     }
 
     private func planCard(for package: Package, plan: PlanOption) -> some View {
-        // 中央 (選択中) のカードを明確に見せる: 明るい枠+チェック、脇のカードは減光。
-        // 「年額のつもりが買い切りを買った」事故の防止 (2026-07-19 ユーザーFB)
+        // Make the center (selected) card clearly visible: bright border + check, side cards dimmed.
+        // Prevents the accident "meant to buy yearly but bought lifetime" (user feedback 2026-07-19)
         let isSelected = plan == selectedPlan
 
         return VStack(alignment: .leading, spacing: 0) {
@@ -232,7 +237,8 @@ struct ProPaywallView: View {
                     .foregroundColor(isSelected ? Color.white : Color.white.opacity(0.2))
             }
 
-            // プラン別の対象者一言 (2026-07-19 ユーザー口述ベース。文言は添削待ち)
+            // One line per plan about who it is for (based on what the user dictated 2026-07-19. Wording pending
+            // review)
             Text(planTagline(plan))
                 .font(.system(size: 12))
                 .foregroundColor(AppColors.textSecondary)
@@ -244,19 +250,21 @@ struct ProPaywallView: View {
                 featureLine(icon: "location.fill",
                             text: lang == .japanese ? "位置情報ロック" : "Location lock")
                 featureLine(icon: "lock.fill",
-                            text: lang == .japanese ? "意志に頼らない自動ロック" : "Auto-lock, no willpower needed") // 文言は添削待ち
-                // 2026-09-09 追加。🔴 アイコンは lock.fill と被らないよう nosign
-                //    (ハードモードの本質は「解除の手段が無い」ことなので、盾や炎より正確)
+                            text: lang == .japanese ? "意志に頼らない自動ロック" : "Auto-lock, no willpower needed") // Wording pending review
+                // Added 2026-09-09. 🔴 The icon is nosign so it does not clash with lock.fill
+                //    (the essence of hard mode is "there is no way to unlock", so this is more accurate than a shield
+                //    or flame)
                 featureLine(icon: "nosign",
-                            text: lang == .japanese ? "解除できないハードロックモード" : "Hard lock mode you can't undo") // 英語は添削待ち
+                            text: lang == .japanese ? "解除できないハードロックモード" : "Hard lock mode you can't undo") // English pending review
             }
             .padding(.top, 14)
 
             Spacer(minLength: 12)
 
-            // 🔴 2026-09-09 実機FB: 「月あたり◯円」を価格の下に積むと縦が詰まる
-            //    (特典が4行になったので余計に)。同じ行の右側へ、下端を揃えて置く。
-            //    lastTextBaseline なので小さい文字が大きい価格の足元に来る = 「右下」
+            // 🔴 2026-09-09 real device feedback: stacking "月あたり◯円" ("◯ yen per month") under the price makes it
+            //    too tight vertically (even more so now that the perks are 4 lines). Put it on the right side of
+            //    the same line, bottom-aligned. With lastTextBaseline the small text sits at the foot of the big
+            //    price = "bottom right"
             HStack(alignment: .lastTextBaseline, spacing: 8) {
                 Text(priceMainText(for: package, plan: plan))
                     .font(.system(size: 26, weight: .bold))
@@ -273,7 +281,7 @@ struct ProPaywallView: View {
                 Spacer(minLength: 0)
             }
 
-            // トライアル資格がある場合は価格の直下でも明示 (バッジだけだと見落とされる)
+            // If eligible for the trial, also state it right below the price (the badge alone gets missed)
             if plan == .yearly && purchaseService.yearlyTrialEligible {
                 Text(lang == .japanese ? "3日間の無料トライアル付き" : "Includes a 3-day free trial")
                     .font(.system(size: 12, weight: .semibold))
@@ -282,7 +290,7 @@ struct ProPaywallView: View {
             }
         }
         .padding(18)
-        // 特典が3行→4行になった分だけ伸ばす (2026-09-09)
+        // Taller by the amount the perks grew from 3 lines → 4 lines (2026-09-09)
         .frame(height: 288)
         .background(
             RoundedRectangle(cornerRadius: 20)
@@ -309,7 +317,8 @@ struct ProPaywallView: View {
         }
     }
 
-    /// 年額カードのバッジ。トライアル資格ありなら「3日間無料」、なければ「おすすめ」(文言は添削待ち)
+    /// Badge on the yearly card. "3日間無料" ("3 days free") if eligible for the trial, otherwise "おすすめ"
+    /// ("Recommended") (wording pending review)
     private var yearlyBadgeText: String? {
         if purchaseService.yearlyTrialEligible {
             return lang == .japanese ? "3日間無料" : "3 days free"
@@ -317,7 +326,8 @@ struct ProPaywallView: View {
         return lang == .japanese ? "おすすめ" : "Best value"
     }
 
-    /// プラン別の対象者一言 (月額=お試し / 年額=1年間の覚悟 / 買い切り=一生の覚悟)
+    /// One line per plan about who it is for (monthly = trying it out / yearly = commitment for 1 year /
+    /// lifetime = commitment for life)
     private func planTagline(_ plan: PlanOption) -> String {
         switch plan {
         case .monthly:
@@ -337,7 +347,8 @@ struct ProPaywallView: View {
         }
     }
 
-    /// 実請求額の主表示 (正直表示: 週割り等で安く見せない)
+    /// Main display of the actual charge (honest display: do not make it look cheaper with per-week splits
+    /// etc.)
     private func priceMainText(for package: Package, plan: PlanOption) -> String {
         switch plan {
         case .yearly:   return "\(package.localizedPriceString)\(lang == .japanese ? "/年" : "/yr")"
@@ -360,7 +371,8 @@ struct ProPaywallView: View {
         }
     }
 
-    /// 年額プランの「月あたり換算」。実請求額 (年額) が主役で、これは副表示
+    /// "Per-month equivalent" of the yearly plan. The actual charge (yearly) is the main figure; this is
+    /// secondary
     private func monthlyEquivalentString(for package: Package) -> String? {
         let product = package.storeProduct
         guard let formatter = product.priceFormatter else { return nil }
@@ -383,13 +395,13 @@ struct ProPaywallView: View {
         }
     }
 
-    // MARK: - Footer (CTA + 開示文 + リンク行、ビチビチに詰める)
+    // MARK: - Footer (CTA + disclosure + link row, packed tightly)
 
     private var selectedPackage: Package? {
         availablePlans.first(where: { $0.plan == selectedPlan })?.package
     }
 
-    // CTA は成果文言 (「購入する」系より「始める」系)。文言はユーザー添削待ち
+    // The CTA uses outcome wording ("start"-type rather than "buy"-type). Wording pending user review
     private var ctaTitle: String {
         if selectedPlan == .yearly && purchaseService.yearlyTrialEligible {
             return lang == .japanese ? "3日間無料で始める" : "Start 3-day free trial"
@@ -408,7 +420,7 @@ struct ProPaywallView: View {
                 purchaseTapped()
             }
 
-            // 正直表示の開示文 (隠さない・実額入り)
+            // Disclosure for honest display (nothing hidden, includes the actual amount)
             if let disclosure = disclosureText {
                 Text(disclosure)
                     .font(.system(size: 11))
@@ -417,9 +429,10 @@ struct ProPaywallView: View {
                     .padding(.horizontal, 8)
             }
 
-            // 復元 / 規約 は1行に集約 (隙間を詰める)。
-            // 「あとで」は 2026-07-31 実機FBで撤去 — 右上の × と役割が重複していた
-            // (閉じる導線は × 一本に統一)。復元・規約・プライバシーは Apple 要件なので残す
+            // Restore / Terms are put on one line (tighten the gaps).
+            // "あとで" ("Later") was removed after 2026-07-31 real device feedback: it duplicated the role of the ×
+            // at the top right (the close path is unified on the × only). Restore, Terms and Privacy stay because
+            // Apple requires them
             HStack(spacing: 18) {
                 Button {
                     restoreTapped()
@@ -444,7 +457,7 @@ struct ProPaywallView: View {
         }
     }
 
-    /// 正直表示の開示文 (選択プランに応じて動的、実額入り)
+    /// Disclosure for honest display (dynamic by selected plan, includes the actual amount)
     private var disclosureText: String? {
         guard let package = selectedPackage else { return nil }
         let price = package.localizedPriceString
@@ -504,7 +517,7 @@ struct ProPaywallView: View {
         }
     }
 
-    /// 閉じる動作の一本化: オンボ埋め込み時は onClose、シート表示時は dismiss
+    /// Single close action: onClose when embedded in onboarding, dismiss when shown as a sheet
     private func close() {
         if let onClose {
             onClose()
@@ -521,37 +534,38 @@ struct ProPaywallView: View {
 
 // MARK: - Dream Image Marquee
 
-/// 夢画像デッキ (OnboardingDreamAssets.deck) を角丸カードでゆっくり横に流し続けるマルキー。
-/// Retro のペイウォール上部を参照 (2026-07-19 ユーザー指定)。
-/// シームレスループ: カード列を2セット横に並べ、1セットぶんの幅だけ等速で流したら巻き戻す。
+/// A marquee that keeps slowly scrolling the dream image deck (OnboardingDreamAssets.deck) sideways as
+/// rounded cards. Based on the top of Retro's paywall (user specified 2026-07-19).
+/// Seamless loop: place 2 sets of the card row side by side, scroll at a constant speed by the width of
+/// 1 set, then rewind.
 private struct DreamImageMarquee: View {
     var cardWidth: CGFloat = 118
     var cardHeight: CGFloat = 150
     var gap: CGFloat = 12
-    /// 流速 (pt/秒)。「気づいたら動いている」程度のゆっくりさ
+    /// Speed (pt/sec). Slow enough that you only notice it is moving after a while
     var speed: CGFloat = 22
 
-    /// アセット未投入の名前は自動で除外 (OnboardingDreamAssets の設計と同じ)
+    /// Names whose assets are not added yet are excluded automatically (same design as OnboardingDreamAssets)
     private let images: [String] = OnboardingDreamAssets.deck.filter { UIImage(named: $0) != nil }
 
     @State private var startDate = Date()
 
     var body: some View {
-        // 重要: 幅2セットぶん (~2,800pt) の HStack を「レイアウト上の子」として置くと、
-        // その幅が親 VStack に伝播してページ全体が横に引き伸ばされる (2026-07-19 実機バグ)。
-        // Color.clear を土台にして overlay で載せることで、マルキーの中身の幅を
-        // レイアウト計算から切り離す (overlay の中身は親のサイズに影響しない)
+        // Important: if the HStack 2 sets wide (~2,800pt) is placed as a "layout child",
+        // that width propagates to the parent VStack and the whole page gets stretched sideways (2026-07-19
+        // real device bug). Using Color.clear as the base and putting it in an overlay cuts the marquee
+        // content's width off from the layout calculation (overlay content does not affect the parent's size)
         Color.clear
             .frame(height: cardHeight)
             .frame(maxWidth: .infinity)
             .overlay(alignment: .leading) {
                 if !images.isEmpty {
                     let setWidth = CGFloat(images.count) * (cardWidth + gap)
-                    // ProMotion 120Hz 対策: 30fps に上限 (等速マルキーなので視覚差はない)。
-                    // Reduce Motion 設定時は TimelineView 自体を止めて静止表示にする
-                    // (OnboardingQuiz.swift の CountUpNumber と同じ流儀)。
-                    // drawingGroup() は幅約4,400ptのHStack全体が対象になり巨大テクスチャで
-                    // 逆効果の恐れがあるためここでは適用しない
+                    // For ProMotion 120Hz: cap at 30fps (constant-speed marquee, so no visible difference).
+                    // When Reduce Motion is on, stop the TimelineView itself and show a still image
+                    // (same approach as CountUpNumber in OnboardingQuiz.swift).
+                    // drawingGroup() would apply to the whole HStack about 4,400pt wide, creating a huge texture that
+                    // may backfire, so it is not applied here
                     TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: UIAccessibility.isReduceMotionEnabled)) { context in
                         let elapsed = context.date.timeIntervalSince(startDate)
                         let offset = CGFloat(elapsed.truncatingRemainder(dividingBy: Double(setWidth / speed))) * speed

@@ -2,20 +2,20 @@
 //  BackgroundPickerView.swift
 //  AppBlocker
 //
-//  UGC 投稿 Step 2: 背景画像を選ぶ画面
-//  - 14 種すべてに「ユーザーが入力した言葉が乗ったプレビュー」を表示
-//  - 横 2 列のスマホ形 (9:16) グリッド
-//  - タップで選択、右上「投稿」で確定
+//  UGC post Step 2: screen for choosing the background image
+//  - Shows "a preview with the words the user typed on it" for all 14 kinds
+//  - Grid of 2 columns of phone-shaped (9:16) tiles
+//  - Tap to select, confirm with "投稿" ("Post") at the top right
 //
 
 import SwiftUI
 
 struct BackgroundPickerView: View {
-    /// PostComposerView で入力されたテキスト/タグ (プレビュー用、編集不可)
+    /// Text/tags entered in PostComposerView (for the preview, not editable)
     let previewTextJp: String?
     let previewTextEn: String?
     let previewTags: [String]
-    /// 「投稿」タップ時に呼ばれる。Int = 選択された背景 index
+    /// Called when "投稿" ("Post") is tapped. Int = index of the selected background
     let onSubmit: (Int) async -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -104,13 +104,13 @@ struct BackgroundPickerView: View {
         }
     }
 
-    /// FeedItemCard のミニ版 (背景 + 中央テキスト + 左下著者)
+    /// Mini version of FeedItemCard (background + centered text + author at bottom left)
     private func previewBody(index: Int) -> some View {
         ZStack {
-            // 背景画像 (FeedItemCard と同じ作り)
+            // Background image (built the same way as FeedItemCard)
             QuoteBackgroundView(quoteId: previewIdSeed, backgroundIndex: index)
 
-            // 中央テキスト (FeedItemCard と同じレイアウト、フォントだけ縮小)
+            // Centered text (same layout as FeedItemCard, only the font is smaller)
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
 
@@ -138,7 +138,7 @@ struct BackgroundPickerView: View {
                 Spacer(minLength: 0)
             }
 
-            // 左下: 著者 + タグ
+            // Bottom left: author + tags
             VStack(alignment: .leading, spacing: 4) {
                 Spacer()
 
@@ -169,7 +169,8 @@ struct BackgroundPickerView: View {
 
     // MARK: - Helpers
 
-    /// プレビュー時の hash seed (実投稿の id とは別、背景は backgroundIndex 優先なので影響なし)
+    /// Hash seed for the preview (separate from the real post's id; the background prefers backgroundIndex,
+    /// so no effect)
     private var previewIdSeed: UUID { UUID() }
 
     private var displayPrimary: String {

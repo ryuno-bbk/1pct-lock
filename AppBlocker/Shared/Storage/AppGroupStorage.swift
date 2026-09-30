@@ -2,12 +2,12 @@
 //  AppGroupStorage.swift
 //  AppBlocker
 //
-//  App Group経由でのデータ保存・取得
+//  Save and load data through the App Group
 //
 
 import Foundation
 
-/// App Group UserDefaults ラッパー
+/// App Group UserDefaults wrapper
 final class AppGroupStorage {
 
     static let shared = AppGroupStorage()
@@ -20,8 +20,8 @@ final class AppGroupStorage {
 
     // MARK: - Quote
 
-    /// 現在の名言を保存
-    /// Shield Extension のキャッシュ無効化用に更新タイムスタンプも書き込む
+    /// Save the current quote
+    /// Also writes an update timestamp for invalidating the Shield Extension's cache
     func saveCurrentQuote(_ quote: SharedQuote) {
         guard let data = try? JSONEncoder().encode(quote) else { return }
         userDefaults?.set(data, forKey: AppGroupConstants.Keys.currentQuote)
@@ -29,7 +29,7 @@ final class AppGroupStorage {
         userDefaults?.synchronize()
     }
 
-    /// 現在の名言を取得
+    /// Get the current quote
     func getCurrentQuote() -> SharedQuote? {
         guard let data = userDefaults?.data(forKey: AppGroupConstants.Keys.currentQuote),
               let quote = try? JSONDecoder().decode(SharedQuote.self, from: data) else {
@@ -38,8 +38,8 @@ final class AppGroupStorage {
         return quote
     }
 
-    /// Shield 用の名言プールを保存 (表示のたび Extension がここからランダムに1件引く)。
-    /// これにより Extension 側は 175 件 JSON パースを完全に不要にできる
+    /// Save the quote pool for the Shield (the Extension picks 1 at random from it each time it is
+    /// shown). This lets the Extension skip parsing the 175-item JSON entirely
     func saveQuotePool(_ quotes: [SharedQuote]) {
         guard !quotes.isEmpty, let data = try? JSONEncoder().encode(quotes) else { return }
         userDefaults?.set(data, forKey: AppGroupConstants.Keys.quotePool)
@@ -47,10 +47,11 @@ final class AppGroupStorage {
         userDefaults?.synchronize()
     }
 
-    // MARK: - Dream (Shield 案A サブタイトル用)
+    // MARK: - Dream (for the Shield plan A subtitle)
 
-    /// ユーザーの「夢」を Shield Extension 用に App Group へミラー保存する。
-    /// nil または空文字は未宣言扱いでキーごと削除する (Extension 側は「キー無し→名言フォールバック」で判定)
+    /// Mirror the user's "dream" to the App Group for the Shield Extension.
+    /// nil or an empty string counts as not declared and the key itself is removed (the Extension
+    /// decides by "no key → quote fallback")
     func saveUserDream(_ dream: String?) {
         let trimmed = dream?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let trimmed, !trimmed.isEmpty {
@@ -61,17 +62,17 @@ final class AppGroupStorage {
         userDefaults?.synchronize()
     }
 
-    /// ミラー保存済みの「夢」を取得。未宣言なら nil
+    /// Get the mirrored "dream". nil if not declared
     func getUserDream() -> String? {
         userDefaults?.string(forKey: AppGroupConstants.Keys.userDream)
     }
 
-    // MARK: - Current User ID Mirror (セッション帰属用, H3)
+    // MARK: - Current User ID Mirror (for session attribution, H3)
 
-    /// 現サインインユーザーの UUID を App Group へミラー保存する。
-    /// enqueue (本体 / DeviceActivityMonitorExtension) がセッション行に user_id を刻印するために読む。
-    /// nil はサインアウト確定時のみ渡す (キーごと削除)。lowercased で保存する
-    /// (Supabase auth.uid() が lowercase のため、SessionInsert と同じ流儀で揃える)
+    /// Mirror the UUID of the currently signed-in user to the App Group.
+    /// Read by enqueue (main app / DeviceActivityMonitorExtension) to stamp user_id onto session rows.
+    /// Pass nil only when sign-out is confirmed (removes the key). Saved lowercased
+    /// (Supabase auth.uid() is lowercase, so this follows the same convention as SessionInsert)
     func saveCurrentUserId(_ userId: UUID?) {
         if let userId {
             userDefaults?.set(userId.uuidString.lowercased(), forKey: AppGroupConstants.Keys.currentUserId)
@@ -81,30 +82,31 @@ final class AppGroupStorage {
         userDefaults?.synchronize()
     }
 
-    // MARK: - Language Sync (Shield 表示言語用)
+    // MARK: - Language Sync (for the Shield display language)
 
-    /// メインアプリの表示言語 ("japanese"/"english") を Shield Extension が読めるようミラーする。
-    /// UsageReportExtension が既に読んでいる onboardingLanguage キーを流用し、
-    /// 起動のたびに現在値で上書きすることで、オンボ後に設定画面で言語を変えても
-    /// 次回起動時点で Shield 側に反映される (完全リアルタイムではない旨は既知の制約)
+    /// Mirror the main app's display language ("japanese"/"english") so the Shield Extension can read it.
+    /// Reuses the onboardingLanguage key that UsageReportExtension already reads, and overwrites it with
+    /// the current value on every launch, so even if the language is changed in settings after
+    /// onboarding, it reaches the Shield at the next launch (not fully real-time; a known limitation)
     func syncCurrentLanguage(isJapanese: Bool) {
         userDefaults?.set(isJapanese ? "japanese" : "english", forKey: AppGroupConstants.Keys.onboardingLanguage)
         userDefaults?.synchronize()
     }
 
-    // MARK: - Onboarding 診断入力 (UsageReportExtension への受け渡し)
+    // MARK: - Onboarding diagnosis input (handed over to UsageReportExtension)
 
-    /// usageReveal 表示前に自己申告値と言語を書き込む。
-    /// Report 拡張はこれを読んで「予想 vs 実測」比較を拡張内で描画する
+    /// Write the self-reported value and language before usageReveal is shown.
+    /// The Report extension reads them and draws the "estimate vs measured" comparison inside the
+    /// extension
     func saveOnboardingRevealInputs(estimateMinutes: Int, languageRaw: String) {
         userDefaults?.set(estimateMinutes, forKey: AppGroupConstants.Keys.onboardingEstimateMinutes)
         userDefaults?.set(languageRaw, forKey: AppGroupConstants.Keys.onboardingLanguage)
         userDefaults?.synchronize()
     }
 
-    /// usageReveal のフェーズ ("comparison"/"topApps") を書き込む。
-    /// 書いた後にフィルタを微変更して再クエリを起こすと、拡張が makeConfiguration で
-    /// このフラグを読み直して表示を切り替える
+    /// Write the usageReveal phase ("comparison"/"topApps").
+    /// After writing it, slightly changing the filter triggers a re-query, and the extension re-reads
+    /// this flag in makeConfiguration and switches the display
     func saveOnboardingRevealPhase(_ phase: String) {
         userDefaults?.set(phase, forKey: AppGroupConstants.Keys.onboardingRevealPhase)
         userDefaults?.synchronize()
@@ -112,14 +114,14 @@ final class AppGroupStorage {
 
     // MARK: - Settings
 
-    /// 設定を保存
+    /// Save settings
     func saveSettings(_ settings: SharedSettings) {
         guard let data = try? JSONEncoder().encode(settings) else { return }
         userDefaults?.set(data, forKey: AppGroupConstants.Keys.userSettings)
         userDefaults?.synchronize()
     }
 
-    /// 設定を取得
+    /// Get settings
     func getSettings() -> SharedSettings {
         guard let data = userDefaults?.data(forKey: AppGroupConstants.Keys.userSettings),
               let settings = try? JSONDecoder().decode(SharedSettings.self, from: data) else {
@@ -130,13 +132,13 @@ final class AppGroupStorage {
 
     // MARK: - Background Style
 
-    /// 背景スタイルを保存
+    /// Save the background style
     func saveBackgroundStyle(_ style: BackgroundStyle) {
         userDefaults?.set(style.rawValue, forKey: AppGroupConstants.Keys.backgroundStyle)
         userDefaults?.synchronize()
     }
 
-    /// 背景スタイルを取得
+    /// Get the background style
     func getBackgroundStyle() -> BackgroundStyle {
         guard let rawValue = userDefaults?.string(forKey: AppGroupConstants.Keys.backgroundStyle),
               let style = BackgroundStyle(rawValue: rawValue) else {
@@ -147,7 +149,7 @@ final class AppGroupStorage {
 
     // MARK: - Block Session (Legacy)
 
-    /// ブロックセッションを保存（旧API互換）
+    /// Save the block session (old API compatibility)
     func saveBlockSession(_ session: BlockSession?) {
         if let session = session {
             guard let data = try? JSONEncoder().encode(session) else { return }
@@ -158,7 +160,7 @@ final class AppGroupStorage {
         userDefaults?.synchronize()
     }
 
-    /// ブロックセッションを取得（旧API互換）
+    /// Get the block session (old API compatibility)
     func getBlockSession() -> BlockSession? {
         guard let data = userDefaults?.data(forKey: AppGroupConstants.Keys.blockSession),
               let session = try? JSONDecoder().decode(BlockSession.self, from: data) else {
@@ -167,9 +169,9 @@ final class AppGroupStorage {
         return session
     }
 
-    // MARK: - Timer Session（独立セッション）
+    // MARK: - Timer Session (independent session)
 
-    /// タイマーセッションを保存
+    /// Save the timer session
     func saveTimerSession(_ session: BlockSession?) {
         if let session = session {
             guard let data = try? JSONEncoder().encode(session) else { return }
@@ -180,7 +182,7 @@ final class AppGroupStorage {
         userDefaults?.synchronize()
     }
 
-    /// タイマーセッションを取得
+    /// Get the timer session
     func getTimerSession() -> BlockSession? {
         guard let data = userDefaults?.data(forKey: AppGroupConstants.Keys.timerSession),
               let session = try? JSONDecoder().decode(BlockSession.self, from: data) else {
@@ -189,9 +191,9 @@ final class AppGroupStorage {
         return session
     }
 
-    // MARK: - Schedule Session（常駐型）
+    // MARK: - Schedule Session (always-on type)
 
-    /// スケジュールセッションを保存
+    /// Save the schedule session
     func saveScheduleSession(_ session: BlockSession?) {
         if let session = session {
             guard let data = try? JSONEncoder().encode(session) else { return }
@@ -202,7 +204,7 @@ final class AppGroupStorage {
         userDefaults?.synchronize()
     }
 
-    /// スケジュールセッションを取得
+    /// Get the schedule session
     func getScheduleSession() -> BlockSession? {
         guard let data = userDefaults?.data(forKey: AppGroupConstants.Keys.scheduleSession),
               let session = try? JSONDecoder().decode(BlockSession.self, from: data) else {
@@ -211,26 +213,27 @@ final class AppGroupStorage {
         return session
     }
 
-    // MARK: - Schedule Configs (複数対応 2026-07-15)
+    // MARK: - Schedule Configs (supports multiple, 2026-07-15)
 
-    /// スケジュール設定 (配列) を保存。上限の強制は ScheduleManager 側で行う
+    /// Save the schedule configs (array). The limit is enforced on the ScheduleManager side
     func saveScheduleConfigs(_ configs: [ScheduleConfig]) {
         guard let data = try? JSONEncoder().encode(configs) else { return }
         userDefaults?.set(data, forKey: AppGroupConstants.Keys.scheduleConfigs)
         userDefaults?.synchronize()
     }
 
-    /// スケジュール設定 (配列) を取得。
-    /// 旧・単一形式 (scheduleConfig キー) が残っていれば配列に包んで即永続化し、旧キーを削除する
-    /// (旧形式には id が無くデコードごとに UUID が変わるため、ここで確定させないと
-    /// DeviceActivityName とセッション記録キーが起動のたびにズレる)
+    /// Get the schedule configs (array).
+    /// If the old single format (scheduleConfig key) remains, wrap it in an array, persist it
+    /// immediately, and delete the old key (the old format has no id, so the UUID changes on every
+    /// decode. If it is not fixed here, the DeviceActivityName and the session record key drift on
+    /// every launch)
     func getScheduleConfigs() -> [ScheduleConfig] {
         if let data = userDefaults?.data(forKey: AppGroupConstants.Keys.scheduleConfigs),
            let configs = try? JSONDecoder().decode([ScheduleConfig].self, from: data) {
             return configs
         }
 
-        // 旧単一形式からの読み取り時移行
+        // Migration on read from the old single format
         if let data = userDefaults?.data(forKey: AppGroupConstants.Keys.scheduleConfig),
            let legacy = try? JSONDecoder().decode(ScheduleConfig.self, from: data) {
             let migrated = [legacy]
@@ -243,7 +246,7 @@ final class AppGroupStorage {
         return []
     }
 
-    /// スケジュール設定を全削除 (旧キーも掃除する)
+    /// Delete all schedule configs (also cleans up the old key)
     func removeScheduleConfigs() {
         userDefaults?.removeObject(forKey: AppGroupConstants.Keys.scheduleConfigs)
         userDefaults?.removeObject(forKey: AppGroupConstants.Keys.scheduleConfig)
@@ -251,24 +254,26 @@ final class AppGroupStorage {
 
     // MARK: - Pro Blocking Entitlement Mirror (C1)
 
-    /// Pro 遮断 (スケジュール/位置) の実行可否ミラーを書き込む。
-    /// false を書いてよいのは ProAccess.reconcileEntitlementMirror (新鮮なフェッチで失効確定) のみ。
-    /// true は ProAccess.recompute の正方向 (購入直後の即時復活) からも書かれる
+    /// Write the mirror of whether Pro blocking (schedule/location) may run.
+    /// Only ProAccess.reconcileEntitlementMirror (expiry confirmed by a fresh fetch) may write false.
+    /// true is also written by the positive direction of ProAccess.recompute (immediate restore right
+    /// after purchase)
     func saveProBlockingEntitled(_ entitled: Bool) {
         userDefaults?.set(entitled, forKey: AppGroupConstants.Keys.proBlockingEntitled)
         userDefaults?.synchronize()
     }
 
-    /// Pro 遮断の実行可否を取得。未確定 (キー無し) は true = 許可に倒す
-    /// (オフライン起動・初回アップデート直後に正規 Pro の遮断を誤解除しないため)
+    /// Get whether Pro blocking may run. Undetermined (no key) falls to true = allowed
+    /// (so that a legitimate Pro user's blocking is not wrongly released on an offline launch or right
+    /// after the first update)
     func isProBlockingEntitled() -> Bool {
         (userDefaults?.object(forKey: AppGroupConstants.Keys.proBlockingEntitled) as? Bool) ?? true
     }
 
     // MARK: - Clear
 
-    /// すべてのデータをクリア
-    /// ログアウトやアカウント削除時にも呼ばれるので、App Group 側に残る全キーを網羅すること
+    /// Clear all data
+    /// Also called on logout and account deletion, so it must cover every key left on the App Group side
     func clearAll() {
         let keys = [
             AppGroupConstants.Keys.currentQuote,
@@ -280,69 +285,78 @@ final class AppGroupStorage {
             AppGroupConstants.Keys.blockSession,
             AppGroupConstants.Keys.userSettings,
             AppGroupConstants.Keys.backgroundStyle,
-            // タイマー
+            // Timer
             AppGroupConstants.Keys.timerConfig,
             AppGroupConstants.Keys.timerSelection,
             AppGroupConstants.Keys.timerSession,
-            // スケジュール
+            // Schedule
             AppGroupConstants.Keys.scheduleConfig,
             AppGroupConstants.Keys.scheduleConfigs,
             AppGroupConstants.Keys.scheduleSelection,
             AppGroupConstants.Keys.scheduleSession,
-            // 位置情報
+            // Location
             AppGroupConstants.Keys.locationSelection,
             AppGroupConstants.Keys.registeredLocations,
-            // 課金 (C1)
+            // Purchase (C1)
             AppGroupConstants.Keys.proBlockingEntitled
         ]
         keys.forEach { userDefaults?.removeObject(forKey: $0) }
         userDefaults?.synchronize()
     }
 
-    /// ユーザー固有データのみをクリア (サインアウト/アカウント削除時、M16 監査2026-07-20対応)。
-    /// clearAll() は課金失効ミラーやキューまで含めて全消しするため、サインアウト用途には過剰:
-    /// - proBlockingEntitled を消すと nil=fail-open (許可) 側に倒れてしまう (C1)
-    /// - pendingBlockSessions を消すと user_id 刻印済みの未送信セッションが失われる (H3)
-    /// ここでは「端末共有時に前ユーザーの位置座標/スケジュール設定/Shield表示キャッシュが
-    /// 次ユーザーへ漏れる」ことの防止に範囲を限定する。
+    /// Clear only user-specific data (on sign-out/account deletion, fix for M16 audit 2026-07-20).
+    /// clearAll() wipes everything, including the purchase expiry mirror and the queue, which is too
+    /// much for sign-out:
+    /// - removing proBlockingEntitled falls to the nil = fail-open (allow) side (C1)
+    /// - removing pendingBlockSessions loses unsent sessions already stamped with user_id (H3)
+    /// Here the scope is limited to preventing "the previous user's location coordinates / schedule
+    /// configs / Shield display cache leaking to the next user when a device is shared".
     ///
-    /// 意図的に対象外 (残す):
-    /// - pendingBlockSessions: 各行に user_id 刻印済み、本人の再サインイン時に正しく flush される
-    /// - onboardingLanguage (currentLanguage ミラー兼用) / onboardingEstimateMinutes / onboardingRevealPhase:
-    ///   デバイスレベル設定・サインイン前提でないオンボ入力値
-    /// - proBlockingEntitled: nil にすると fail-open になるため触らない (M17でエンジン自体を止める)
-    /// - userDream / currentUserId: signOut() 内で確定タイミングが別管理のため、そちらで個別に消す
+    /// Intentionally excluded (kept):
+    /// - pendingBlockSessions: each row is stamped with user_id and is flushed correctly when that user
+    ///   signs in again
+    /// - onboardingLanguage (also used as the currentLanguage mirror) / onboardingEstimateMinutes /
+    ///   onboardingRevealPhase: device-level settings / onboarding input that does not assume sign-in
+    /// - proBlockingEntitled: setting it to nil makes it fail-open, so do not touch it (M17 stops the
+    ///   engine itself)
+    /// - userDream / currentUserId: their timing is managed separately inside signOut(), so they are
+    ///   removed there individually
     func clearUserSpecificData() {
         let keys = [
-            // Shield 表示用キャッシュ (名言) — 前ユーザーの選択が次ユーザーに一瞬見える事故を防ぐ
+            // Shield display cache (quote): prevents the accident where the previous user's selection is
+            // briefly visible to the next user
             AppGroupConstants.Keys.currentQuote,
             AppGroupConstants.Keys.quotePool,
             AppGroupConstants.Keys.quoteUpdatedAt,
             AppGroupConstants.Keys.selectedQuoteId,
-            // 旧・現行の各セッションミラー
+            // Each session mirror, old and current
             AppGroupConstants.Keys.blockSession,
-            // タイマー (TimerManager.stopTimer() が timerConfig は消すが、選択/セッションも念のため)
+            // Timer (TimerManager.stopTimer() removes timerConfig, but the selection/session are removed too,
+            // just in case)
             AppGroupConstants.Keys.timerConfig,
             AppGroupConstants.Keys.timerSelection,
             AppGroupConstants.Keys.timerSession,
-            // スケジュール (ScheduleManager.stopMonitoring() が configs は消すが、選択は消えないため必須)
+            // Schedule (ScheduleManager.stopMonitoring() removes the configs but not the selection, so this is
+            // required)
             AppGroupConstants.Keys.scheduleConfig,
             AppGroupConstants.Keys.scheduleConfigs,
             AppGroupConstants.Keys.scheduleSelection,
             AppGroupConstants.Keys.scheduleSession,
-            // 位置情報 (座標/半径) — LocationManager.removeLocation() ループで registeredLocations は
-            // 空配列化されるが、アプリ選択 (locationSelection) は別キーのため必須
+            // Location (coordinates/radius): the LocationManager.removeLocation() loop empties
+            // registeredLocations, but the app selection (locationSelection) is a separate key, so this is
+            // required
             AppGroupConstants.Keys.locationSelection,
             AppGroupConstants.Keys.registeredLocations
         ]
         keys.forEach { userDefaults?.removeObject(forKey: $0) }
 
-        // scheduleActiveStart_<uuid> / locationActiveStart_<uuid> はスケジュール/地点ごとに
-        // 動的なキー名 (プレフィックス+UUID) のため上の配列に列挙できない。
-        // スケジュール側は ScheduleManager.stopMonitoring() が事前に flush 済みだが、
-        // LocationManager には同等の flush 公開APIが無く signOut 時点の在室セッションが
-        // 未flushで残り得るため、プレフィックス一致で残骸を総ざらいする
-        // (この場合そのセッションは completed としてキューに積まれず、統計からは欠落する — 既知の制約)
+        // scheduleActiveStart_<uuid> / locationActiveStart_<uuid> have dynamic key names per schedule/place
+        // (prefix + UUID), so they cannot be listed in the array above.
+        // The schedule side is flushed beforehand by ScheduleManager.stopMonitoring(), but
+        // LocationManager has no equivalent public flush API, and an in-region session at sign-out time
+        // can remain unflushed, so all leftovers are swept by prefix match
+        // (in that case the session is not queued as completed and is missing from the stats; a known
+        // limitation)
         if let defaults = userDefaults {
             let prefixes = [
                 AppGroupConstants.Keys.scheduleActiveStartPrefix,

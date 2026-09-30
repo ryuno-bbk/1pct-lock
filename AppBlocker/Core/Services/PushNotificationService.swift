@@ -2,24 +2,25 @@
 //  PushNotificationService.swift
 //  AppBlocker
 //
-//  プッシュ通知 (APNs) の許可取得・端末トークン登録・受信ハンドリング。
+//  Push notifications (APNs): getting permission, registering the device token, handling incoming ones.
 //
-//  背景:
-//    user_notifications は動いているのに配信手段が無く、
-//    通知の大半が未読のまま死んでいた。新機能ではなく「切れていた配線」。
+//  Background:
+//    user_notifications was working but there was no way to deliver them,
+//    and most notifications died unread. Not a new feature, but "wiring that was cut".
 //
-//  配信の流れ:
-//    user_notifications へ INSERT
+//  Delivery flow:
+//    INSERT into user_notifications
 //      → Supabase Database Webhook
 //      → Edge Function `send-push` (Supabase/functions/send-push/index.ts)
-//      → APNs → 端末
+//      → APNs → device
 //
-//  🔴 サンドボックス / 本番 APNs:
-//    開発ビルド (Xcode から直接インストール) はサンドボックス、TestFlight と
-//    App Store は本番。ホストが別物なので、どちらで取得したトークンかを
-//    サーバーに申告する (078 の user_push_tokens.environment)。
-//    ここを誤ると「開発では届くが本番で無音」を踏む。
-//    ⚠️ 必ず TestFlight で1回実機確認すること。Xcode 実行だけでは本番経路を検証できない。
+//  🔴 Sandbox / production APNs:
+//    Development builds (installed directly from Xcode) use the sandbox, TestFlight and
+//    the App Store use production. The hosts are different, so we tell the server which one
+//    the token came from (user_push_tokens.environment in 078).
+//    Getting this wrong means "delivered in development but silent in production".
+//    ⚠️ Always check once on a real device with TestFlight. Running from Xcode alone cannot verify
+//    the production path.
 //
 
 import Foundation
@@ -33,21 +34,22 @@ final class PushNotificationService: NSObject, ObservableObject {
 
     static let shared = PushNotificationService()
 
-    /// システムの許可状態。UI から「まだ聞いていない / 拒否された」を見分けるのに使う
+    /// The system permission state. Used by the UI to tell "not asked yet / denied" apart
     @Published private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
 
-    /// 通知をタップして起動/復帰したときに立つ。MainTabView が拾って通知一覧を開く
+    /// Set when the app is launched/resumed by tapping a notification. MainTabView picks it up and opens the
+    /// notification list
     @Published var shouldOpenNotificationList: Bool = false
 
-    /// APNs から受け取った端末トークン (16進文字列)。
-    /// サインインより先に届くことがあるので保持しておき、サインイン後に登録する
+    /// Device token received from APNs (hex string).
+    /// It can arrive before sign-in, so it is kept and registered after sign-in
     private var deviceToken: String?
 
     private let client: SupabaseClient
 
-    /// このビルドがどちらの APNs に紐づくか。
-    /// Debug = Xcode 直接インストール = サンドボックス、
-    /// Release = TestFlight / App Store = 本番。
+    /// Which APNs this build is tied to.
+    /// Debug = installed directly from Xcode = sandbox,
+    /// Release = TestFlight / App Store = production.
     private var apnsEnvironment: String {
         #if DEBUG
         return "sandbox"
@@ -61,11 +63,11 @@ final class PushNotificationService: NSObject, ObservableObject {
         super.init()
     }
 
-    // MARK: - 起動時
+    // MARK: - On launch
 
-    /// アプリ起動時に呼ぶ。既に許可済みなら黙って登録し直すだけ (トークンは変わりうるため)。
-    /// 🔴 ここで許可ダイアログは出さない。起動直後の「唐突な許可要求」は拒否されやすく、
-    ///    一度拒否されるとアプリ内から復帰できない (設定アプリに行かせるしかない)
+    /// Called on app launch. If already allowed, just quietly register again (the token can change).
+    /// 🔴 No permission dialog here. A "sudden permission request" right after launch tends to be denied,
+    ///    and once denied it cannot be recovered from inside the app (we can only send the user to Settings)
     func refreshOnLaunch() async {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         authorizationStatus = settings.authorizationStatus
@@ -77,19 +79,19 @@ final class PushNotificationService: NSObject, ObservableObject {
         UIApplication.shared.registerForRemoteNotifications()
     }
 
-    // MARK: - 許可取得
+    // MARK: - Getting permission
 
-    /// 許可ダイアログを出す。既に決定済みなら何もしない (再表示はできない)。
-    /// 呼ぶ場所は「通知に意味が出た瞬間」に限ること (下記 2箇所)。
-    /// - 通知一覧を開いたとき (まさに通知を見に来ている)
-    /// - 投稿を公開した直後 (いいね/コメントが届く理由ができた)
+    /// Shows the permission dialog. Does nothing if already decided (it cannot be shown again).
+    /// Only call it at "the moment notifications start to mean something" (the 2 places below).
+    /// - When the notification list is opened (the user came exactly to look at notifications)
+    /// - Right after publishing a post (there is now a reason for likes/comments to arrive)
     @discardableResult
     func requestAuthorizationIfNeeded() async -> Bool {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         authorizationStatus = settings.authorizationStatus
 
         guard settings.authorizationStatus == .notDetermined else {
-            // 既に許可済みなら登録だけ念のため走らせる
+            // If already allowed, run only the registration, just in case
             if settings.authorizationStatus == .authorized {
                 UNUserNotificationCenter.current().delegate = self
                 UIApplication.shared.registerForRemoteNotifications()
@@ -112,23 +114,23 @@ final class PushNotificationService: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - 端末トークン
+    // MARK: - Device token
 
-    /// AppDelegate の didRegisterForRemoteNotificationsWithDeviceToken から呼ぶ
+    /// Called from didRegisterForRemoteNotificationsWithDeviceToken in AppDelegate
     func handleDeviceToken(_ data: Data) {
         let hex = data.map { String(format: "%02x", $0) }.joined()
         deviceToken = hex
         Task { await syncTokenToServer() }
     }
 
-    /// AppDelegate の didFailToRegisterForRemoteNotifications から呼ぶ。
-    /// シミュレータや機内モードでは普通に失敗するので、握りつぶしてログだけ残す
+    /// Called from didFailToRegisterForRemoteNotifications in AppDelegate.
+    /// It fails normally on the simulator or in airplane mode, so swallow it and only log it
     func handleRegistrationFailure(_ error: Error) {
         print("⚠️ Failed to register for remote notifications: \(error)")
     }
 
-    /// トークンをサーバーに登録する。サインイン直後にも呼ぶ
-    /// (トークンがサインインより先に届いているケースを拾うため)
+    /// Registers the token with the server. Also called right after sign-in
+    /// (to catch cases where the token arrived before sign-in)
     func syncTokenToServer() async {
         guard let token = deviceToken else { return }
         guard UserAuthService.shared.userId != nil else { return }
@@ -145,8 +147,9 @@ final class PushNotificationService: NSObject, ObservableObject {
         }
     }
 
-    /// サインアウト時に呼ぶ。
-    /// 残したままにすると、次にその端末を使う人に前の持ち主宛ての通知が飛ぶ
+    /// Called on sign-out.
+    /// If the token were left, the next person using that device would receive notifications meant for the
+    /// previous owner
     func removeTokenFromServer() async {
         guard let token = deviceToken else { return }
 
@@ -159,10 +162,10 @@ final class PushNotificationService: NSObject, ObservableObject {
         clearBadge()
     }
 
-    // MARK: - バッジ
+    // MARK: - Badge
 
-    /// アプリアイコンのバッジを未読件数に合わせる。
-    /// 一覧を開いて既読化したら 0 にする (数字が残り続けると信用を失う)
+    /// Set the app icon badge to the unread count.
+    /// Set it to 0 when the list is opened and items are marked read (a number that stays forever loses trust)
     func setBadge(_ count: Int) {
         UNUserNotificationCenter.current().setBadgeCount(max(0, count)) { error in
             if let error { print("⚠️ Failed to set badge: \(error)") }
@@ -178,8 +181,8 @@ final class PushNotificationService: NSObject, ObservableObject {
 
 extension PushNotificationService: UNUserNotificationCenterDelegate {
 
-    /// アプリを開いている最中に届いた通知。黙って捨てず、バナーで出す
-    /// (アプリ内ベルの未読数も一緒に更新する)
+    /// Notification that arrived while the app is open. Do not silently drop it, show it as a banner
+    /// (also update the unread count of the in-app bell)
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
@@ -188,7 +191,7 @@ extension PushNotificationService: UNUserNotificationCenterDelegate {
         return [.banner, .list, .sound, .badge]
     }
 
-    /// 通知をタップした。通知一覧へ送る
+    /// The notification was tapped. Send the user to the notification list
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse

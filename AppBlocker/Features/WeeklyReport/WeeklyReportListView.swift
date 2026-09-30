@@ -2,12 +2,12 @@
 //  WeeklyReportListView.swift
 //  AppBlocker
 //
-//  設定 → 週次レポート。過去のレポートを新しい順に並べ、タップで開く。
+//  Settings → Weekly report. Lists past reports newest first, tap to open.
 //
-//  🔴 レポートは保存していない。ここに並ぶのは block_sessions から再集計した結果で、
-//     タップすると同じ週を weekOffset 指定で取り直す (保存済みの静的コピーではない)。
+//  🔴 Reports are not stored. What is listed here is the result of re-aggregating block_sessions, and
+//     tapping one fetches the same week again with weekOffset (it is not a stored static copy).
 //
-//  ⚠️⚠️ 文言はユーザー添削待ち
+//  ⚠️⚠️ Copy waiting for user review
 //
 
 import SwiftUI
@@ -47,9 +47,9 @@ struct WeeklyReportListView: View {
                 }
             }
         }
-        .navigationTitle(isJa ? "週次レポート" : "Weekly Reports")  // 文言はユーザー添削待ち
+        .navigationTitle(isJa ? "週次レポート" : "Weekly Reports")  // Copy waiting for user review
         .navigationBarTitleDisplayMode(.inline)
-        // 設定から push されるので、SettingsListView と同じヘッダー貫通対策を入れる
+        // It is pushed from Settings, so the same header see-through fix as SettingsListView is applied
         .toolbarBackground(AppColors.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
@@ -63,7 +63,7 @@ struct WeeklyReportListView: View {
                 Text(weekRangeText(row))
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(AppColors.textPrimary)
-                Text(isJa ? "\(row.sessions)回" : "\(row.sessions) sessions")  // 文言はユーザー添削待ち
+                Text(isJa ? "\(row.sessions)回" : "\(row.sessions) sessions")  // Copy waiting for user review
                     .font(.system(size: 12))
                     .foregroundColor(AppColors.textTertiary)
             }
@@ -84,10 +84,10 @@ struct WeeklyReportListView: View {
             Image(systemName: "chart.bar.doc.horizontal")
                 .font(.system(size: 34))
                 .foregroundColor(AppColors.textTertiary)
-            Text(isJa ? "まだレポートがありません" : "No reports yet")  // 文言はユーザー添削待ち
+            Text(isJa ? "まだレポートがありません" : "No reports yet")  // Copy waiting for user review
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(AppColors.textPrimary)
-            Text(isJa ? "一度ロックを使うと、翌週から届きます" : "Use a lock once and your report starts next week")  // 文言はユーザー添削待ち
+            Text(isJa ? "一度ロックを使うと、翌週から届きます" : "Use a lock once and your report starts next week")  // Copy waiting for user review
                 .font(.system(size: 13))
                 .foregroundColor(AppColors.textSecondary)
                 .multilineTextAlignment(.center)

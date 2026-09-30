@@ -1,44 +1,44 @@
 // ============================================================
 // moderate-post / index.ts
-// AI モデレーション Edge Function (Deno)
+// AI moderation Edge Function (Deno)
 // ============================================================
-// 設計: Fable 5 / 実装: Sonnet 5
-// 設計書: Docs/ai_moderation_design_2026_07_10.md
+// Design: Fable 5 / Implementation: Sonnet 5
+// Design doc: Docs/ai_moderation_design_2026_07_10.md
 //
-// 役割:
-//   Supabase Database Webhook (INSERT) を 3 テーブル分まとめて受ける:
-//     - user_posts    : 画像 (carousel 全枚数) + text_jp/text_en/title を層1→層2で判定
-//     - user_comments : テキストのみ、同じルーブリックで判定
-//     - user_reports  : テキストのみ、AI トリアージ (ai_severity 1-5 + ai_summary)
-//   判定結果は service_role クライアントで該当行へ直接 UPDATE する
-//   (027_ai_moderation.sql の protect trigger は rolbypassrls を通すため書き込める)。
+// Role:
+//   Receives the Supabase Database Webhook (INSERT) for 3 tables in one place:
+//     - user_posts    : images (all carousel images) + text_jp/text_en/title, judged by layer 1→layer 2
+//     - user_comments : text only, judged with the same rubric
+//     - user_reports  : text only, AI triage (ai_severity 1-5 + ai_summary)
+//   The result is written with a direct UPDATE to the target row using the service_role client
+//   (the protect trigger in 027_ai_moderation.sql lets rolbypassrls through, so the write works).
 //
-// 非同期 UX:
-//   投稿/コメントは INSERT 時点で 'pending' のままフィードに即時表示される
-//   (027 の RPC は moderation_status <> 'rejected' のみ弾くため、pending は表示継続)。
-//   このFunctionはその後バックグラウンドで判定し、結果を書き戻すだけ。
+// Asynchronous UX:
+//   Posts/comments appear in the feed immediately at INSERT time while still 'pending'
+//   (the RPC in 027 filters only on moderation_status <> 'rejected', so pending stays visible).
+//   This Function then judges in the background and only writes the result back.
 //
-// エラー処理:
-//   Claude API 呼び出し・画像DL・パースのいずれかで失敗しても moderation_status は
-//   'pending' のまま放置し (表示は継続)、HTTP 200 を返す。
-//   Webhook を 4xx/5xx で落とすと Supabase 側がリトライの嵐を起こすため、
-//   このFunction内部のエラーは常に 200 で握りつぶす (console.error でログのみ残す)。
-//   例外: シークレット照合失敗のみ 401 (呼び出し認可、2026-07-20 監査 C2 対応)。
+// Error handling:
+//   If any of the Claude API call, image download or parsing fails, moderation_status is left as
+//   'pending' (it stays visible) and HTTP 200 is returned.
+//   Failing the webhook with 4xx/5xx makes Supabase fire a storm of retries, so errors inside this
+//   Function are always swallowed with 200 (only logged with console.error).
+//   Exception: only a secret mismatch returns 401 (call authorization, fix for 2026-07-20 audit C2).
 //
-// 環境変数 (Supabase Edge Function ランタイムが自動注入 / secrets set で設定):
-//   ANTHROPIC_API_KEY          - `supabase secrets set` で設定 (ユーザー作業)
-//   MODERATION_WEBHOOK_SECRET  - `supabase secrets set` で設定 (ユーザー作業)。
-//                                Database Webhook の x-moderation-secret ヘッダと
-//                                同じ文字列にする。未設定の間は全リクエスト 401 (fail-closed)
-//   SUPABASE_URL               - ランタイム自動注入
-//   SUPABASE_SERVICE_ROLE_KEY  - ランタイム自動注入
+// Environment variables (auto-injected by the Supabase Edge Function runtime / set with secrets set):
+//   ANTHROPIC_API_KEY          - set with `supabase secrets set` (user task)
+//   MODERATION_WEBHOOK_SECRET  - set with `supabase secrets set` (user task).
+//                                Must be the same string as the x-moderation-secret header of
+//                                the Database Webhook. While unset, every request gets 401 (fail-closed)
+//   SUPABASE_URL               - auto-injected by the runtime
+//   SUPABASE_SERVICE_ROLE_KEY  - auto-injected by the runtime
 //
-// デプロイ: `supabase functions deploy moderate-post --no-verify-jwt`
-//   (--no-verify-jwt 必須: verify_jwt はアプリ埋め込みの anon key JWT で通過できて
-//    認可にならないため、x-moderation-secret 照合一本に統一する)
-// Webhook 登録: Dashboard → Database → Webhooks で user_posts/user_comments/user_reports
-//   の INSERT イベントをこの Function の URL に向け、HTTP Headers に
-//   x-moderation-secret: <MODERATION_WEBHOOK_SECRET と同じ値> を追加する (ユーザー作業)
+// Deploy: `supabase functions deploy moderate-post --no-verify-jwt`
+//   (--no-verify-jwt is required: verify_jwt can be passed with the anon key JWT embedded in the
+//    app, so it is not authorization. Authorization relies only on the x-moderation-secret check)
+// Webhook registration: in Dashboard → Database → Webhooks, point the INSERT events of
+//   user_posts/user_comments/user_reports to this Function's URL, and add to HTTP Headers
+//   x-moderation-secret: <same value as MODERATION_WEBHOOK_SECRET> (user task)
 // ============================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -47,27 +47,29 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 
-// 監査C2対応: Database Webhook からの呼び出しであることをシークレットで検証する。
-// 未設定 ("") の間は全リクエストを 401 で拒否する (fail-closed)
+// Audit C2 fix: verify with the secret that the call comes from the Database Webhook.
+// While unset (""), every request is rejected with 401 (fail-closed)
 const MODERATION_WEBHOOK_SECRET = Deno.env.get("MODERATION_WEBHOOK_SECRET") ?? "";
 
-// 047: 実際に使うモデルは moderation_config.model (SQL 一発で切替、デプロイ不要)。
-// これは列が未追加/空の場合のフォールバック。通報トリアージは常にこの既定を使う
+// 047: the model actually used is moderation_config.model (switch with one SQL statement, no deploy).
+// This is the fallback when the column is not added / empty. Report triage always uses this default
 const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
 const ANTHROPIC_VERSION = "2023-06-01";
 const POST_IMAGES_BUCKET = "post-images";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// 066 (コスト攻撃対策 第1弾, §4-2): AIに送る直前の多層防御 truncate。
-// DB側 (066_cost_attack_hardening.sql) で overlays合計3000字 / user_reports.detail
-// 1000字の上限をトリガー/CHECK制約で設けたが、それでも Edge Function 側で独立に
-// 切る。理由は2つ:
-//   1. 「DB制約が将来緩められても課金が守られる」多層防御 (設計書 §4-2)
-//   2. 066 適用前に作られた既存行は INSERT 時点のトリガー検証を通っていないため、
-//      DB制約だけでは救えない。ここでの truncate が実質的な唯一の防波堤になる
-// 文字数カウントの厳密さ (サロゲートペア等) より実装のシンプルさを優先している
-// (モデレーション入力のコスト上限が目的で、表示用の正確な文字送りではないため)。
+// 066 (cost attack countermeasures part 1, §4-2): defense-in-depth truncate right before sending to
+// the AI. The DB side (066_cost_attack_hardening.sql) sets limits of 3000 chars total for overlays
+// and 1000 chars for user_reports.detail with a trigger/CHECK constraint, but the Edge Function still
+// truncates independently. Two reasons:
+//   1. Defense in depth: "billing stays protected even if the DB constraint is loosened later"
+//      (design doc §4-2)
+//   2. Existing rows created before 066 was applied did not go through the INSERT-time trigger
+//      check, so the DB constraint alone cannot cover them. The truncate here is effectively the
+//      only barrier
+// Implementation simplicity is preferred over exact character counting (surrogate pairs etc.)
+// (the goal is a cost cap on moderation input, not exact character handling for display).
 function truncateForAI(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   return text.slice(0, maxLen) + "…(truncated)";
@@ -78,7 +80,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 });
 
 // ------------------------------------------------------------
-// Webhook payload 型 (Supabase Database Webhooks の形)
+// Webhook payload type (the shape of Supabase Database Webhooks)
 // ------------------------------------------------------------
 interface WebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
@@ -89,7 +91,7 @@ interface WebhookPayload {
 }
 
 // ------------------------------------------------------------
-// moderation_config (rubric + ethos_enforce) 読み込み
+// Load moderation_config (rubric + ethos_enforce)
 // ------------------------------------------------------------
 interface ModerationConfig {
   ethos_enforce: boolean;
@@ -101,7 +103,8 @@ interface ModerationConfig {
 }
 
 async function loadModerationConfig(): Promise<ModerationConfig> {
-  // select("*"): 047/055 の列が未適用の環境でもエラーにしない (欠けていれば既定へフォールバック)
+  // select("*"): does not error even in environments where the 047/055 columns are not applied (falls
+  // back to defaults if missing)
   const { data, error } = await supabase
     .from("moderation_config")
     .select("*")
@@ -122,7 +125,7 @@ async function loadModerationConfig(): Promise<ModerationConfig> {
     model: typeof row.model === "string" && row.model.length > 0
       ? row.model
       : DEFAULT_ANTHROPIC_MODEL,
-    // 055: 2段カスケード。低confidence判定を上位モデルで再判定する
+    // 055: 2-stage cascade. Re-judge low-confidence verdicts with a higher-tier model
     escalation_model:
       typeof row.escalation_model === "string" && row.escalation_model.length > 0
         ? row.escalation_model
@@ -134,12 +137,13 @@ async function loadModerationConfig(): Promise<ModerationConfig> {
 }
 
 // ------------------------------------------------------------
-// Claude API 呼び出し (raw fetch、依存を増やさない方針)
+// Claude API call (raw fetch, following the policy of not adding dependencies)
 // ------------------------------------------------------------
 interface PostVerdict {
-  // 2026-07-23 B-full対応: analysis = 内部用の分析全文 (reasoning-first を維持したまま
-  // 本人向け safety_reason/ethos_reason から分析過程・内部用語を排除するための分離先)。
-  // 本人には一切表示しない (AppealService.fetchModerationInfo は reason 2キーしか読まない)
+  // 2026-07-23 B-full fix: analysis = the full internal analysis text (split out so that we keep
+  // reasoning-first while removing the analysis process and internal terms from the user-facing
+  // safety_reason/ethos_reason). Never shown to the user (AppealService.fetchModerationInfo only reads
+  // the 2 reason keys)
   analysis: string;
   safety: "pass" | "fail";
   safety_reason: string;
@@ -160,9 +164,9 @@ type AnthropicContentBlock =
       source: { type: "base64"; media_type: string; data: string };
     };
 
-// M28監査対応: Anthropic API が stop_reason: "refusal" (safety/policy上の理由で判定自体を拒否)
-// を返したことを表す専用エラー。呼び出し側 (handleUserPost/handleUserComment) はこれだけを
-// catch し、pending放置ではなく安全側のrejectedへ自動的に倒す。
+// M28 audit fix: dedicated error meaning the Anthropic API returned stop_reason: "refusal" (it
+// refused to judge at all for safety/policy reasons). The callers (handleUserPost/handleUserComment)
+// catch only this and automatically fall to the safe side, rejected, instead of leaving it pending.
 class ModerationRefusalError extends Error {}
 
 async function callClaudeJSON<T>(
@@ -182,12 +186,14 @@ async function callClaudeJSON<T>(
     body: JSON.stringify({
       model,
       max_tokens: maxTokens,
-      // モデレーションは短い分類タスクなので thinking は明示的に無効化 (コスト/レイテンシ優先)
+      // Moderation is a short classification task, so thinking is explicitly disabled (cost/latency first)
       thinking: { type: "disabled" },
-      // 2026-07-29 コスト最適化: system (= rubric 数千tok、全判定で同一) にプロンプトキャッシュを
-      // 効かせる。5分TTL内の連続判定 (連投/バズ時) で該当部分の input 単価が 1/10 になる。
-      // 最低キャッシュ長 (1024tok〜) 未満の system (通報トリアージ等) では単に無視され課金増もない。
-      // rubric を SQL で更新した場合はキャッシュキーが変わり自動で新規キャッシュになる (運用手順不要)
+      // 2026-07-29 cost optimization: apply prompt caching to system (= the rubric, thousands of tokens,
+      // the same for every judgment). For consecutive judgments within the 5-minute TTL (rapid posting /
+      // viral spikes), the input price for that part drops to 1/10. A system shorter than the minimum
+      // cache length (1024 tok+), such as report triage, is simply ignored and costs nothing extra.
+      // When the rubric is updated by SQL, the cache key changes and a new cache is created automatically
+      // (no ops step needed)
       system: [
         {
           type: "text",
@@ -220,8 +226,9 @@ async function callClaudeJSON<T>(
   return JSON.parse(textBlock.text) as T;
 }
 
-// analysis を先頭に置く = 分析(reasoning)を書き切ってから判定を出させる reasoning-first 構成。
-// これで精度を保ったまま、本人表示用の *_reason から分析過程を追い出せる (B-full, 2026-07-23)
+// Putting analysis first = a reasoning-first structure where the model writes out the analysis
+// (reasoning) before giving the verdict. This keeps accuracy while moving the analysis process out
+// of the user-facing *_reason (B-full, 2026-07-23)
 const POST_VERDICT_SCHEMA = {
   type: "object",
   properties: {
@@ -270,10 +277,13 @@ function buildSystemPrompt(config: ModerationConfig): string {
     "あなたは SNS アプリ「1%」の投稿モデレーション AI です。",
     "層1(安全性)→層2(1%エトス)の順で評価し、必ず指定された JSON 形式のみで回答してください。",
     "confidence には判定全体の確信度を 0〜1 の数値で出力してください。ルーブリックの適用に迷いがある・境界的だと感じる場合は 0.8 未満にしてください。",
-    // 2026-07-30 グラビア対策 (v15: ユーザー方針「基本Haikuで全部判断、見逃しかけの瞬間だけ網」):
-    // ①弾く判定=一発確定 ②明確に運動実施/ステージと認定できたpass=一発通過 (ジム/ウォーキング/K-POP)
-    // ③それ以外の露出系をpassにする時だけ低confidence強制=上位モデルの再確認 (=グラビア見逃しの網)。
-    // 残余リスク: 場面認定ごと誤る自信満々の誤分類は通り得る → 056ルーブリック+通報3件閾値(042)が後段の網
+    // 2026-07-30 gravure countermeasure (v15: user policy "Haiku judges everything by default, with a
+    // net only at the moment something is nearly missed"):
+    // ① reject verdicts = final in one shot ② a pass clearly identified as actual exercise/stage =
+    // passes in one shot (gym/walking/K-POP) ③ only when passing other revealing content, force low
+    // confidence = re-check by the higher model (= the net for missed gravure).
+    // Remaining risk: a confident misclassification that gets the scene itself wrong can get through →
+    // the 056 rubric + the 3-report threshold (042) are the later net
     "人物画像を pass と判定する際、その場面が「運動・競技・練習を実際にしている場面 (ジム・ランニング・ウォーキング等)」または「ステージ上のパフォーマンス・公式の宣材写真」だと明確に認定できる場合は、通常どおりの confidence で構いません。それ以外で露出が多い人物画像 (水着・下着・ポーズ写真・身体の強調が主目的の構図) を pass と判定する場合のみ、confidence を 0.7 以下にしてください (上位モデルによる再確認に回されます)。fail 判定にはこの制限を適用しません。",
     "analysis は要点のみ簡潔に (最大3文)。",
     "",
@@ -283,10 +293,10 @@ function buildSystemPrompt(config: ModerationConfig): string {
   ].join("\n");
 }
 
-// 055: 2段カスケード判定。基本モデル (Haiku) で判定し、confidence が閾値未満なら
-// 上位モデル (Sonnet) で再判定してそちらを採用する。model と escalation_model が
-// 同一値の場合は単段運用 (カスケード無効)。refusal はどちらの段でも呼び出し元の
-// refusal フォールバック (安全側 rejected) に落ちる
+// 055: 2-stage cascade judgment. Judge with the base model (Haiku), and if confidence is below the
+// threshold, re-judge with the higher model (Sonnet) and use that result. If model and
+// escalation_model are the same value, it runs as a single stage (cascade disabled). A refusal at
+// either stage falls to the caller's refusal fallback (safe side, rejected)
 async function judgeWithCascade(
   system: string,
   content: AnthropicContentBlock[],
@@ -321,18 +331,18 @@ async function judgeWithCascade(
 }
 
 // ------------------------------------------------------------
-// user_posts: 画像 (carousel 全枚数) 取得
+// user_posts: fetch images (all carousel images)
 // ------------------------------------------------------------
-// パス規約 (UserPostService.swift / 021_post_carousel.sql と同一):
-//   1枚目 = image_path そのもの ("{uid}/{post_id}.jpg")
-//   2枚目以降 = "{base}_2.jpg" 〜 "_4.jpg" (base = image_path から ".jpg" を除去)
+// Path convention (same as UserPostService.swift / 021_post_carousel.sql):
+//   1st image = image_path itself ("{uid}/{post_id}.jpg")
+//   2nd and later = "{base}_2.jpg" to "_4.jpg" (base = image_path with ".jpg" removed)
 function buildImagePaths(imagePath: string, imageCount: number): string[] {
   if (!imagePath.endsWith(".jpg")) {
-    // TODO: 想定外の拡張子/フォーマットの場合はここで対応を追加する。
-    // 現状は1枚目のみ判定対象にする (層1のフォールバックとして安全側に倒す)。
+    // TODO: add handling here for unexpected extensions/formats.
+    // For now only the 1st image is judged (falls to the safe side as the layer 1 fallback).
     return [imagePath];
   }
-  const base = imagePath.slice(0, -4); // ".jpg" を除去
+  const base = imagePath.slice(0, -4); // Remove ".jpg"
   const count = Math.max(imageCount || 1, 1);
   const paths: string[] = [];
   for (let n = 1; n <= count; n++) {
@@ -341,23 +351,25 @@ function buildImagePaths(imagePath: string, imageCount: number): string[] {
   return paths;
 }
 
-// 067 #7: 1回分の取得ロジック (縮小変換→原寸フォールバックの2段構え自体は変更しない)。
-// 呼び出し側 (下の fetchImageAsBase64) がこれをリトライでラップする。
+// 067 #7: logic for a single attempt (the 2-step approach itself, resize transform → original-size
+// fallback, is unchanged). The caller (fetchImageAsBase64 below) wraps this with retries.
 async function fetchImageAsBase64Attempt(
   path: string,
 ): Promise<AnthropicContentBlock | null> {
-  // M29軽量対応: Storage Image Transformations (対応プランのみ有効) で縮小してから送信し、
-  // Anthropicへの画像トークンを削減する。
-  // 変換URLが非200 (プラン未対応など) を返した場合のみ、原寸fetchにフォールバックする。
-  // 2026-07-25 コスト対策: 768→512px (画像トークン約55%減、1判定の支配項)。
-  // モデレーション用途 (ヌード/暴力/ジム/遊びの判別) は512pxで十分な解像度
+  // M29 lightweight fix: resize with Storage Image Transformations (only on supported plans) before
+  // sending, to reduce the image tokens sent to Anthropic.
+  // Only if the transform URL returns non-200 (plan not supported, etc.), fall back to an
+  // original-size fetch.
+  // 2026-07-25 cost measure: 768→512px (about 55% fewer image tokens, the dominant cost of one
+  // judgment). For moderation use (telling nudity/violence/gym/play apart), 512px is enough resolution
   const transformUrl =
     `${SUPABASE_URL}/storage/v1/render/image/public/${POST_IMAGES_BUCKET}/${path}?width=512&format=origin`;
   const transformRes = await fetch(transformUrl);
 
   let res = transformRes;
   if (!transformRes.ok) {
-    // 変換非対応プラン等へのフォールバック (画像ごとに出るログのため簡潔に留める)
+    // Fallback for plans without transform support, etc. (this log is written per image, so keep it
+    // short)
     console.log(`画像変換フォールバック (status=${transformRes.status}): ${path}`);
 
     const { data } = supabase.storage.from(POST_IMAGES_BUCKET).getPublicUrl(
@@ -373,7 +385,7 @@ async function fetchImageAsBase64Attempt(
     }
   }
   const buf = new Uint8Array(await res.arrayBuffer());
-  // btoa はバイナリ安全ではないため chunk 単位で変換する
+  // btoa is not binary-safe, so convert in chunks
   let binary = "";
   const chunkSize = 0x8000;
   for (let i = 0; i < buf.length; i += chunkSize) {
@@ -390,10 +402,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// 067 #7: Storage の一時的な取得失敗 (5xx/タイムアウト等) で正当な投稿を誤って
-// fail-closed に倒さないための短いリトライ。計3回・指数バックオフ (0.5s → 1s)。
-// 3回とも失敗したら null を返す。呼び出し側 (handleUserPost) はこれを見て
-// 「imagePath はあるのに1枚も取得できなかった」を判定し、fail-closed (rejected) にする。
+// 067 #7: short retry so that a temporary Storage fetch failure (5xx/timeout etc.) does not wrongly
+// push a valid post into fail-closed. 3 attempts total with exponential backoff (0.5s → 1s).
+// Returns null if all 3 fail. The caller (handleUserPost) uses this to detect
+// "imagePath exists but not a single image could be fetched" and makes it fail-closed (rejected).
 async function fetchImageAsBase64(
   path: string,
 ): Promise<AnthropicContentBlock | null> {
@@ -402,21 +414,21 @@ async function fetchImageAsBase64(
     try {
       const block = await fetchImageAsBase64Attempt(path);
       if (block) return block;
-      // block が null = 非200が続いた (例外ではない)。これもリトライ対象にする
-      // (一時的な5xx/404の可能性があるため)
+      // block is null = non-200 kept coming back (not an exception). This is also retried
+      // (it may be a temporary 5xx/404)
     } catch (e) {
       console.error(
         `画像取得で例外 (attempt=${attempt + 1}/${backoffsMs.length + 1}, path=${path}):`,
         e instanceof Error ? e.message : e,
       );
     }
-    if (attempt >= backoffsMs.length) return null; // リトライ回数を使い切った
+    if (attempt >= backoffsMs.length) return null; // Retries used up
     await sleep(backoffsMs[attempt]);
   }
 }
 
 // ------------------------------------------------------------
-// verdict → moderation_status マッピング
+// verdict → moderation_status mapping
 // ------------------------------------------------------------
 function mapVerdictToStatus(verdict: PostVerdict): string {
   if (verdict.safety === "fail") return "rejected";
@@ -425,11 +437,12 @@ function mapVerdictToStatus(verdict: PostVerdict): string {
 }
 
 // ------------------------------------------------------------
-// user_posts ハンドラ
+// user_posts handler
 // ------------------------------------------------------------
 async function handleUserPost(id: string): Promise<void> {
-  // 監査C2対応: payload の本文は信用せず、判定対象は必ず DB から再取得する
-  // (偽テキストを添えた偽 webhook による moderation 洗浄/検閲を構造的に不可能にする)
+  // Audit C2 fix: do not trust the payload body. Always refetch the target from the DB
+  // (makes laundering/censoring moderation with a fake webhook carrying fake text structurally
+  // impossible)
   const { data: row, error: fetchError } = await supabase
     .from("user_posts")
     .select("image_path, image_count, text_jp, text_en, title, overlays, moderation_status, moderated_at")
@@ -440,12 +453,13 @@ async function handleUserPost(id: string): Promise<void> {
     throw new Error(`user_posts 再取得失敗 (id=${id}): ${fetchError.message}`);
   }
   if (!row) {
-    // 行が存在しない (偽 id / 判定前に削除済み) → 何もしない
+    // Row does not exist (fake id / deleted before judging) → do nothing
     console.log(`↩️ user_posts 行なし、スキップ (id=${id})`);
     return;
   }
   if (row.moderated_at !== null || row.moderation_status !== "pending") {
-    // 冪等ガード: 判定済み行は再判定しない (webhook 再送・重複呼び出し対策)
+    // Idempotency guard: do not re-judge rows already judged (protection against webhook resends /
+    // duplicate calls)
     console.log(`↩️ 判定済みのためスキップ (id=${id}, status=${row.moderation_status})`);
     return;
   }
@@ -460,10 +474,10 @@ async function handleUserPost(id: string): Promise<void> {
 
   const content: AnthropicContentBlock[] = [];
 
-  // 067 #7: 期待枚数 (imagePath があれば paths.length) と実際に取得できた枚数を数える。
-  // imagePath が非NULLなのに1枚も取得できなかった場合、テキストだけで approved が
-  // 確定してしまう穴があった (fetchImageAsBase64 が null を返しても呼び出し側は
-  // 黙って捨てるだけで、「画像0枚」を検出する分岐が存在しなかった)。
+  // 067 #7: count the expected number of images (paths.length if imagePath exists) and the number
+  // actually fetched. There was a hole where approved could be finalized from the text alone when
+  // imagePath was non-NULL but not a single image could be fetched (even when fetchImageAsBase64
+  // returned null, the caller just silently dropped it, and no branch detected "0 images").
   let fetchedImageCount = 0;
   if (imagePath) {
     const paths = buildImagePaths(imagePath, imageCount);
@@ -477,11 +491,12 @@ async function handleUserPost(id: string): Promise<void> {
   }
 
   if (imagePath && fetchedImageCount === 0) {
-    // 067 #7: リトライ (計3回) してもなお1枚も取得できなかった場合は判定を実行せず
-    // rejected で確定させる (fail-closed)。pending のままにすると「未審査の投稿を
-    // 表示させ続ける」という攻撃者の目的を達成させてしまう
-    // (index.ts:468-490 の ModerationRefusalError と同じ判断・同じ形を踏襲)。
-    // 一部だけ取得できた場合 (fetchedImageCount > 0) はこの分岐に入らず従来どおり続行する。
+    // 067 #7: if not a single image can be fetched even after retrying (3 attempts total), do not run
+    // the judgment and finalize as rejected (fail-closed). Leaving it pending would achieve the
+    // attacker's goal of "keeping an unreviewed post visible"
+    // (follows the same decision and the same shape as the ModerationRefusalError at index.ts:468-490).
+    // If only some images were fetched (fetchedImageCount > 0), this branch is not entered and it
+    // continues as before.
     const { error } = await supabase
       .from("user_posts")
       .update({
@@ -504,18 +519,19 @@ async function handleUserPost(id: string): Promise<void> {
     return;
   }
 
-  // v2投稿のユーザーテキストは画像への焼き込み (overlays) が主経路。生テキストを判定に渡さないと
-  // AIには縮小画像内のピクセルとしてしか見えず、小さい文字は読めない (2026-07-25 ユーザー指摘で発覚)。
-  // overlays jsonb: [{ text, imageIndex, ... }] (PostOverlayDTO / UserPost.swift と同形)
+  // For v2 posts, the user's text is mainly baked into the image (overlays). If the raw text is not
+  // passed to the judgment, the AI only sees it as pixels in the resized image and cannot read small
+  // text (found when the user pointed it out on 2026-07-25).
+  // overlays jsonb: [{ text, imageIndex, ... }] (same shape as PostOverlayDTO / UserPost.swift)
   const overlayTexts = (Array.isArray(row.overlays) ? row.overlays : [])
     .map((o: Record<string, unknown>) =>
       typeof o?.text === "string" ? o.text.trim() : ""
     )
     .filter((t: string) => t.length > 0);
 
-  // 066 §4-2: DB側 (066マイグレーション) が overlays 合計3000字を検証するのは INSERT
-  // 時点のみ。ここでの truncate は (a) その制約が将来緩んだ場合の保険 (b) 066適用前に
-  // 作られた既存行 (未検証) の両方をカバーする最終防波堤
+  // 066 §4-2: the DB side (066 migration) checks the 3000-char overlays total only at INSERT time.
+  // The truncate here is the final barrier that covers both (a) insurance in case that constraint is
+  // loosened later and (b) existing rows created before 066 was applied (never checked)
   const overlayTextsJoined = truncateForAI(overlayTexts.join(" / "), 3000);
 
   const textParts = [
@@ -537,15 +553,16 @@ async function handleUserPost(id: string): Promise<void> {
     verdict = await judgeWithCascade(
       buildSystemPrompt(config),
       content,
-      // analysis フィールド追加 (2026-07-23) に合わせて増量。途中切れは JSON parse error になる
+      // Increased to match the analysis field added on 2026-07-23. A cut-off response becomes a JSON parse
+      // error
       700,
       config,
       `user_posts id=${id}`,
     );
   } catch (e) {
     if (e instanceof ModerationRefusalError) {
-      // M28: refusal は「AIが判定自体を拒否するほど危険」というシグナルなので、
-      // pending(表示継続)ではなく安全側のrejectedへ倒す
+      // M28: a refusal is a signal that "it is dangerous enough for the AI to refuse to judge at all", so
+      // fall to the safe side, rejected, instead of pending (stays visible)
       const { error } = await supabase
         .from("user_posts")
         .update({
@@ -566,7 +583,7 @@ async function handleUserPost(id: string): Promise<void> {
       }
       return;
     }
-    throw e; // refusal以外は既存通り再スロー (外側でpending維持のままログのみ)
+    throw e; // Anything other than refusal is rethrown as before (outside, it stays pending and is only logged)
   }
 
   const status = mapVerdictToStatus(verdict);
@@ -586,10 +603,10 @@ async function handleUserPost(id: string): Promise<void> {
 }
 
 // ------------------------------------------------------------
-// user_comments ハンドラ (テキストのみ)
+// user_comments handler (text only)
 // ------------------------------------------------------------
 async function handleUserComment(id: string): Promise<void> {
-  // 監査C2対応: 判定対象テキストは DB から再取得する (payload は信用しない)
+  // Audit C2 fix: refetch the text to judge from the DB (do not trust the payload)
   const { data: row, error: fetchError } = await supabase
     .from("user_comments")
     .select("text, moderation_status, moderated_at")
@@ -617,15 +634,15 @@ async function handleUserComment(id: string): Promise<void> {
     verdict = await judgeWithCascade(
       buildSystemPrompt(config),
       [{ type: "text", text: text || "(本文無し)" }],
-      // analysis フィールド追加 (2026-07-23) に合わせて増量
+      // Increased to match the analysis field added on 2026-07-23
       500,
       config,
       `user_comments id=${id}`,
     );
   } catch (e) {
     if (e instanceof ModerationRefusalError) {
-      // M28: refusal は「AIが判定自体を拒否するほど危険」というシグナルなので、
-      // pending(表示継続)ではなく安全側のrejectedへ倒す
+      // M28: a refusal is a signal that "it is dangerous enough for the AI to refuse to judge at all", so
+      // fall to the safe side, rejected, instead of pending (stays visible)
       const { error } = await supabase
         .from("user_comments")
         .update({
@@ -646,7 +663,7 @@ async function handleUserComment(id: string): Promise<void> {
       }
       return;
     }
-    throw e; // refusal以外は既存通り再スロー (外側でpending維持のままログのみ)
+    throw e; // Anything other than refusal is rethrown as before (outside, it stays pending and is only logged)
   }
 
   const status = mapVerdictToStatus(verdict);
@@ -666,10 +683,11 @@ async function handleUserComment(id: string): Promise<void> {
 }
 
 // ------------------------------------------------------------
-// user_reports ハンドラ (AIトリアージ、テキストのみ)
+// user_reports handler (AI triage, text only)
 // ------------------------------------------------------------
 async function handleUserReport(id: string): Promise<void> {
-  // 監査C2対応: 通報内容も DB から再取得する。ai_severity が既に入っていれば再判定しない
+  // Audit C2 fix: also refetch the report content from the DB. If ai_severity is already set, do not
+  // re-judge
   const { data: row, error: fetchError } = await supabase
     .from("user_reports")
     .select("reason, detail, ai_severity")
@@ -684,14 +702,16 @@ async function handleUserReport(id: string): Promise<void> {
     return;
   }
   if (row.ai_severity !== null) {
-    // 冪等ガード: トリアージ済み (user_reports に moderated_at は無いので ai_severity で判定)
+    // Idempotency guard: already triaged (user_reports has no moderated_at, so ai_severity is used to
+    // check)
     console.log(`↩️ トリアージ済みのためスキップ (id=${id})`);
     return;
   }
 
   const reason = (row.reason as string | null) ?? "";
-  // 066 §4-2: user_reports.detail は DB側 CHECK 制約 (066マイグレーション) で1000字上限を
-  // 追加したが、既存行 (適用前に作られたもの) は制約の対象外なのでここでも独立に切る
+  // 066 §4-2: a 1000-char limit on user_reports.detail was added with a DB-side CHECK constraint (066
+  // migration), but existing rows (created before it was applied) are not covered by the constraint,
+  // so truncate independently here too
   const detail = truncateForAI((row.detail as string | null) ?? "", 1000);
 
   const system = [
@@ -724,18 +744,18 @@ async function handleUserReport(id: string): Promise<void> {
 }
 
 // ------------------------------------------------------------
-// エントリポイント
+// Entry point
 // ------------------------------------------------------------
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
     return new Response("method not allowed", { status: 405 });
   }
 
-  // Database Webhook に設定した x-moderation-secret ヘッダと突き合わせる (監査C2)。
-  // シークレット未設定 (secrets set 忘れ) も含めて不一致は全て 401 (fail-closed)
+  // Compare with the x-moderation-secret header set on the Database Webhook (audit C2).
+  // Any mismatch, including an unset secret (forgot secrets set), is 401 (fail-closed)
   const gotSecret = req.headers.get("x-moderation-secret");
   if (!MODERATION_WEBHOOK_SECRET || gotSecret !== MODERATION_WEBHOOK_SECRET) {
-    // 値そのものはログに残さない (秘密)。長さだけで原因を切り分ける
+    // Do not log the value itself (it is a secret). Diagnose the cause from the length only
     console.error(
       `❌ secret mismatch: got len=${gotSecret?.length ?? 0} expected len=${MODERATION_WEBHOOK_SECRET.length}`,
     );
@@ -747,18 +767,18 @@ Deno.serve(async (req: Request) => {
     payload = await req.json();
   } catch (e) {
     console.error("payload の JSON パースに失敗:", e);
-    // パース自体に失敗した場合はリトライしても無意味なので 200 で終わる
+    // If parsing itself fails, retrying is pointless, so finish with 200
     return new Response("ok", { status: 200 });
   }
 
   try {
     if (payload.type !== "INSERT") {
-      // INSERT 以外は対象外 (UPDATE/DELETE は無視)
+      // Anything other than INSERT is out of scope (UPDATE/DELETE are ignored)
       return new Response("ignored", { status: 200 });
     }
 
-    // payload からは table と record.id しか信用しない (監査C2)。
-    // 本文/画像パス等は各ハンドラが service_role で DB から再取得する
+    // From the payload, only table and record.id are trusted (audit C2).
+    // The body, image path etc. are refetched from the DB by each handler with service_role
     const recordId = payload.record?.id;
     if (typeof recordId !== "string" || !UUID_RE.test(recordId)) {
       console.error(`record.id が UUID でない: ${String(recordId)}`);
@@ -779,8 +799,8 @@ Deno.serve(async (req: Request) => {
         console.error(`未対応のテーブル: ${payload.table}`);
     }
   } catch (e) {
-    // 判定失敗時は moderation_status='pending' のまま (表示は継続)。
-    // Webhook のリトライ嵐を避けるため常に 200 を返す。
+    // On a judgment failure, moderation_status stays 'pending' (it stays visible).
+    // Always return 200 to avoid a webhook retry storm.
     console.error(
       `モデレーション処理失敗 (table=${payload.table}):`,
       e instanceof Error ? e.message : e,

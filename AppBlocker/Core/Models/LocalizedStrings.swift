@@ -2,8 +2,8 @@
 //  LocalizedStrings.swift
 //  AppBlocker
 //
-//  AppLanguage に連動する全 UI 文字列を集約。
-//  使い方: L.tabFeed(lang)
+//  Collects all UI strings that depend on AppLanguage.
+//  Usage: L.tabFeed(lang)
 //
 
 import Foundation
@@ -21,8 +21,9 @@ enum L {
     }
 
     static func tabTimer(_ lang: AppLanguage) -> String {
-        // 3モード (タイマー/スケジュール/位置) を束ねる画面になったため「ロック」に改名 (2026-07-15 実機FB)
-        lang == .japanese ? "ロック" : "Lock" // 文言はユーザー添削待ち
+        // Renamed to "ロック" ("Lock") because it became the screen that groups the 3 modes
+        // (timer/schedule/location) (2026-07-15 real device feedback)
+        lang == .japanese ? "ロック" : "Lock" // Wording pending user review
     }
 
     static func tabMyPage(_ lang: AppLanguage) -> String {
@@ -34,7 +35,7 @@ enum L {
     }
 
     static func tabSearch(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "検索" : "Search" // 文言はユーザー添削待ち
+        lang == .japanese ? "検索" : "Search" // Wording pending user review
     }
 
     // MARK: - HomeView
@@ -97,7 +98,7 @@ enum L {
         lang == .japanese ? "タイマーを停止" : "Stop Timer"
     }
 
-    // MARK: - HomeView (Shield hint / ロック源バッジ / 継続ロックトースト)
+    // MARK: - HomeView (Shield hint / lock source badge / ongoing lock toast)
 
     static func homeShieldFirstRunHint(_ lang: AppLanguage) -> String {
         lang == .japanese
@@ -139,7 +140,7 @@ enum L {
         lang == .japanese ? "ストリーク" : "Streak"
     }
 
-    /// ストリークの値表示 (例: "N日連続" / "N-day streak")
+    /// Streak value display (e.g. "N日連続" ("N days in a row") / "N-day streak")
     static func sessionCompleteStreakValue(_ days: Int, _ lang: AppLanguage) -> String {
         lang == .japanese ? "\(days)日連続" : "\(days)-day streak"
     }
@@ -189,12 +190,12 @@ enum L {
         }
     }
 
-    // MARK: - ScheduleBlockView (L14: 最小長バリデーション)
+    // MARK: - ScheduleBlockView (L14: minimum length validation)
 
     static func scheduleTooShort(_ minMinutes: Int, _ lang: AppLanguage) -> String {
         lang == .japanese
-            ? "ブロック時間は最低\(minMinutes)分以上にしてください" // 文言はユーザー添削待ち
-            : "Schedule must be at least \(minMinutes) minutes long" // 文言はユーザー添削待ち
+            ? "ブロック時間は最低\(minMinutes)分以上にしてください" // Wording pending user review
+            : "Schedule must be at least \(minMinutes) minutes long" // Wording pending user review
     }
 
     // MARK: - Settings (SettingsListView)
@@ -303,7 +304,7 @@ enum L {
         lang == .japanese ? "上位%" : "Top %"
     }
 
-    /// 上位%の値表示 (データ不足時は呼び出し側で "—" を使う)
+    /// Top percentile value display (when data is missing, the caller uses an em dash placeholder)
     static func profileTopPercentValue(_ percent: Int, _ lang: AppLanguage) -> String {
         lang == .japanese ? "上位\(percent)%" : "Top \(percent)%"
     }
@@ -312,122 +313,125 @@ enum L {
         lang == .japanese ? "連続日数" : "Streak"
     }
 
-    /// 連続ロック日数の値表示 (0日も表示)
+    /// Streak lock days value display (0 days is also shown)
     static func profileStreakValue(_ days: Int, _ lang: AppLanguage) -> String {
         lang == .japanese ? "\(days)日" : "\(days)d"
     }
 
-    // MARK: - 統計パック (完遂率、2026-07-16)
+    // MARK: - Stats pack (completion rate, 2026-07-16)
 
-    /// 完遂率チップのラベル (直近30日・タイマーのみ)
+    /// Label of the completion rate chip (last 30 days, timer only)
     static func profileCompletionLabel(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "完遂率・30日" : "Completion · 30d" // 文言はユーザー添削待ち
+        lang == .japanese ? "完遂率・30日" : "Completion · 30d" // Wording pending user review
     }
 
-    /// 完遂率の値表示 (データ不足時は呼び出し側で "—" を使う)
+    /// Completion rate value display (when data is missing, the caller uses an em dash placeholder)
     static func profileCompletionValue(_ percent: Int, _ lang: AppLanguage) -> String {
-        "\(percent)%" // 文言はユーザー添削待ち
+        "\(percent)%" // Wording pending user review
     }
 
-    // MARK: - 統計セルの詳細説明シート (2026-07-17)
+    // MARK: - Detail sheet for stat cells (2026-07-17)
 
     static func statInfoTotalTitle(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "累計ロック" : "Total locked" // 文言はユーザー添削待ち
+        lang == .japanese ? "累計ロック" : "Total locked" // Wording pending user review
     }
 
     static func statInfoTotalDesc(_ lang: AppLanguage) -> String {
         lang == .japanese
-            ? "これまでにロックした時間の合計です。タイマー・スケジュール・位置情報の全モードを合算しています。" // 文言はユーザー添削待ち
+            ? "これまでにロックした時間の合計です。タイマー・スケジュール・位置情報の全モードを合算しています。" // Wording pending user review
             : "Total time you've locked so far, across timer, schedule, and location modes."
     }
 
     static func statInfoStreakTitle(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "連続日数" : "Streak" // 文言はユーザー添削待ち
+        lang == .japanese ? "連続日数" : "Streak" // Wording pending user review
     }
 
     static func statInfoStreakDesc(_ lang: AppLanguage) -> String {
         lang == .japanese
-            ? "その日に1回でもロックした日が連続している日数です。今日まだロックしていなくても、昨日までの連続は途切れません。" // 文言はユーザー添削待ち
+            ? "その日に1回でもロックした日が連続している日数です。今日まだロックしていなくても、昨日までの連続は途切れません。" // Wording pending user review
             : "Consecutive days with at least one lock. Yesterday's streak stays alive until today ends."
     }
 
     static func statInfoCompletionTitle(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "完遂率" : "Completion rate" // 文言はユーザー添削待ち
+        lang == .japanese ? "完遂率" : "Completion rate" // Wording pending user review
     }
 
     static func statInfoCompletionDesc(_ lang: AppLanguage) -> String {
         lang == .japanese
-            ? "開始したタイマーロックを途中で終了せず最後まで完遂した割合です。10分以上のタイマーだけが対象で、スケジュール・位置情報ロックは含まれません。" // 文言はユーザー添削待ち
+            ? "開始したタイマーロックを途中で終了せず最後まで完遂した割合です。10分以上のタイマーだけが対象で、スケジュール・位置情報ロックは含まれません。" // Wording pending user review
             : "How often you finish the timer locks you start. Only timers of 10 minutes or longer count; schedule and location locks are excluded."
     }
 
     static func statInfoTopPercentTitle(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "上位%" : "Top %" // 文言はユーザー添削待ち
+        lang == .japanese ? "上位%" : "Top %" // Wording pending user review
     }
 
     static func statInfoTopPercentDesc(_ lang: AppLanguage) -> String {
         lang == .japanese
-            ? "累計ロック時間の、全ユーザーの中での順位です。" // 文言はユーザー添削待ち
+            ? "累計ロック時間の、全ユーザーの中での順位です。" // Wording pending user review
             : "Your rank among all users by total locked time."
     }
 
-    /// 詳細シートの数値行ラベル: 直近30日
+    /// Number row label in the detail sheet: last 30 days
     static func statInfoLast30(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "直近30日" : "Last 30 days" // 文言はユーザー添削待ち
+        lang == .japanese ? "直近30日" : "Last 30 days" // Wording pending user review
     }
 
-    /// 詳細シートの数値行ラベル: 全期間
+    /// Number row label in the detail sheet: all time
     static func statInfoAllTime(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "全期間" : "All time" // 文言はユーザー添削待ち
+        lang == .japanese ? "全期間" : "All time" // Wording pending user review
     }
 
-    /// 詳細シートの数値行ラベル: 順位
+    /// Number row label in the detail sheet: rank
     static func statInfoRank(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "順位" : "Rank" // 文言はユーザー添削待ち
+        lang == .japanese ? "順位" : "Rank" // Wording pending user review
     }
 
-    /// 完遂率の詳細行の値 (例: "92% (12/13回)")
+    /// Value of the completion rate detail row (e.g. "92% (12/13回)" ("92% (12/13 times)"))
     static func statInfoCompletionRow(_ percent: Int, _ done: Int, _ total: Int, _ lang: AppLanguage) -> String {
-        lang == .japanese ? "\(percent)% (\(done)/\(total)回)" : "\(percent)% (\(done)/\(total))" // 文言はユーザー添削待ち
+        lang == .japanese ? "\(percent)% (\(done)/\(total)回)" : "\(percent)% (\(done)/\(total))" // Wording pending user review
     }
 
-    /// 順位の詳細行の値 (例: "3位 / 128人中")
+    /// Value of the rank detail row (e.g. "3位 / 128人中" ("3rd / out of 128"))
     static func statInfoRankRow(_ rank: Int, _ total: Int, _ lang: AppLanguage) -> String {
-        lang == .japanese ? "\(rank)位 / \(total)人中" : "#\(rank) of \(total)" // 文言はユーザー添削待ち
+        lang == .japanese ? "\(rank)位 / \(total)人中" : "#\(rank) of \(total)" // Wording pending user review
     }
 
-    // MARK: - 統計シート v2 (2026-07-30 実機FB「説明が足りない」)
+    // MARK: - Stats sheet v2 (2026-07-30 real device feedback "not enough explanation")
 
-    /// 統計シートの完遂率行ラベル (直近30日)。
-    /// 2026-07-31 実機FB「何の完遂率か分からない」→「ロック完遂率」に
+    /// Completion rate row label in the stats sheet (last 30 days).
+    /// 2026-07-31 real device feedback "can't tell what the completion rate is for" → changed to "ロック完遂率"
+    /// ("lock completion rate")
     static func statSheetCompletion30(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "ロック完遂率 (直近30日)" : "Lock completion (last 30 days)" // 文言はユーザー添削待ち
+        lang == .japanese ? "ロック完遂率 (直近30日)" : "Lock completion (last 30 days)" // Wording pending user review
     }
 
-    /// 統計シートの完遂率行ラベル (全期間)
+    /// Completion rate row label in the stats sheet (all time)
     static func statSheetCompletionAll(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "ロック完遂率 (全期間)" : "Lock completion (all time)" // 文言はユーザー添削待ち
+        lang == .japanese ? "ロック完遂率 (全期間)" : "Lock completion (all time)" // Wording pending user review
     }
 
-    /// セッション終了確認での完遂率への影響の告知 (2026-07-31 実機FB:
-    /// 「知らないうちに完遂率が下がっていた」というUXを避ける)。
-    /// 予定10分以上のタイマーだけが完遂率の対象なので、呼び出し側で条件を絞ること
+    /// Notice about the effect on the completion rate in the end-session confirmation (2026-07-31 real
+    /// device feedback: avoid the UX of "my completion rate went down without me knowing").
+    /// Only timers planned for 10 minutes or more count toward the completion rate, so the caller must
+    /// narrow the condition
     static func stopConfirmCompletionWarning(_ lang: AppLanguage) -> String {
         lang == .japanese
-            ? "ここでやめると、ロック完遂率が下がります" // 文言はユーザー添削待ち
+            ? "ここでやめると、ロック完遂率が下がります" // Wording pending user review
             : "Quitting now will lower your lock completion rate"
     }
 
-    /// 統計シート (上位%フォーカス) の最上部見出し。「上位3%って何が?」に答える説明を
-    /// ヒーローの上に置く (2026-07-30 実機FB: 下のキャプションでなく一番上に書く)
+    /// Top heading of the stats sheet (top percentile focus). Put the explanation that answers "top 3% in
+    /// what?" above the hero (2026-07-30 real device feedback: write it at the very top, not in a caption
+    /// below)
     static func statSheetTopPercentHeader(_ lang: AppLanguage) -> String {
         lang == .japanese
-            ? "全ユーザーの中での累計ロック時間の順位" // 文言はユーザー添削待ち
+            ? "全ユーザーの中での累計ロック時間の順位" // Wording pending user review
             : "Total lock time rank among all users"
     }
 
-    // 🔴 2026-08-08: 旧・名言SNS期の残骸「いいねした名言がありません」を撤去。
-    // 同日、いいねタブが投稿も出すようになったので「投稿」で言い切ってよい
+    // 🔴 2026-08-08: Removed "いいねした名言がありません" ("No liked quotes"), a leftover from the old quote-SNS era.
+    // The same day, the likes tab started showing posts too, so it is fine to just say "posts"
     static func profileNoLikes(_ lang: AppLanguage) -> String {
         lang == .japanese ? "いいねした投稿がありません" : "No liked posts yet"
     }
@@ -440,7 +444,8 @@ enum L {
         lang == .japanese ? "いいね解除" : "Unlike"
     }
 
-    // 「偉人」表記は旧・名言SNS期の残骸 (2026-07-30 実機FBで発見→中立な文言へ)
+    // The wording "偉人" ("great figures") is a leftover from the old quote-SNS era (found in 2026-07-30
+    // real device feedback → changed to neutral wording)
     static func profileNoFollows(_ lang: AppLanguage) -> String {
         lang == .japanese ? "まだ誰もフォローしていません" : "Not following anyone yet"
     }
@@ -455,9 +460,10 @@ enum L {
 
     // MARK: - AuthorProfileView
 
-    // 🔴 2026-08-08: 「名言」→「投稿」。旧・名言SNS期の残骸。
-    // 呼び出し元は UserProfileView (他人のプロフィール) / OfficialProfileView (公式アカウント) /
-    // AuthorProfileView (フロー除外・残置)。公式が出しているのも画面上は投稿なので投稿で統一する
+    // 🔴 2026-08-08: "名言" ("quotes") → "投稿" ("posts"). A leftover from the old quote-SNS era.
+    // Callers are UserProfileView (another user's profile) / OfficialProfileView (official account) /
+    // AuthorProfileView (excluded from the flow, left in place). What the official account publishes is
+    // also a post on screen, so unify on posts
     static func authorQuotes(_ lang: AppLanguage) -> String {
         lang == .japanese ? "投稿" : "Posts"
     }
@@ -483,7 +489,7 @@ enum L {
     }
 
     static func authorNoQuotes(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "投稿がありません" : "No posts yet"  // 2026-08-08: 「名言」から変更
+        lang == .japanese ? "投稿がありません" : "No posts yet"  // 2026-08-08: changed from "名言" ("quotes")
     }
 
     static func authorShowMore(_ lang: AppLanguage) -> String {
@@ -500,7 +506,7 @@ enum L {
         lang == .japanese ? "読み込み中..." : "Loading..."
     }
 
-    /// おすすめ/タグ別フィードが空のとき (フィードは投稿主体になったため「名言」とは言わない)
+    /// When the recommended/tag feed is empty (the feed is now mainly posts, so do not say "名言" ("quotes"))
     static func feedPostsEmpty(_ lang: AppLanguage) -> String {
         lang == .japanese ? "まだ投稿がありません" : "No posts yet"
     }
@@ -521,22 +527,22 @@ enum L {
         lang == .japanese ? "気になる人をフォローしてみよう" : "Follow people whose posts you want to see"
     }
 
-    /// FeedCardListView 共通の空状態 (いいね一覧の最後の1件を解除した時など)
+    /// Shared empty state of FeedCardListView (e.g. when you unlike the last item in the likes list)
     static func feedEmptyGeneric(_ lang: AppLanguage) -> String {
         lang == .japanese ? "まだ何もありません" : "Nothing here yet"
     }
 
-    /// カード下部の「N件のコメントをすべて表示」(FeedListCard)
+    /// "N件のコメントをすべて表示" ("View all N comments") at the bottom of the card (FeedListCard)
     static func feedCommentsViewAll(_ count: Int, _ lang: AppLanguage) -> String {
         lang == .japanese ? "\(count)件のコメントをすべて表示" : "View all \(count) comments"
     }
 
-    /// 公式チェックマークバッジの VoiceOver ラベル (FeedListCard / ProfileHero)
+    /// VoiceOver label of the official checkmark badge (FeedListCard / ProfileHero)
     static func feedOfficialBadgeLabel(_ lang: AppLanguage) -> String {
         lang == .japanese ? "公式" : "Official"
     }
 
-    /// いいねした人一覧シート (LikersSheet): まだいいねがない時
+    /// Likers list sheet (LikersSheet): when there are no likes yet
     static func feedLikersEmpty(_ lang: AppLanguage) -> String {
         lang == .japanese ? "まだいいねがありません" : "No likes yet"
     }
@@ -615,13 +621,14 @@ enum L {
         lang == .japanese ? "削除する" : "Delete"
     }
 
-    /// AI モデレーション (027 SQL): rejected (層1安全性NG) の投稿に本人の投稿一覧でのみ表示するバッジ。
-    /// flagged (層2エトスNG/shadow) は何も表示しない (シャドウの意味を保つ、design doc 参照)
+    /// AI moderation (027 SQL): a badge shown only in the author's own post list on rejected posts (layer 1
+    /// safety NG). flagged (layer 2 ethos NG/shadow) shows nothing (keeps the point of shadowing, see the
+    /// design doc)
     static func postsModerationRejectedBadge(_ lang: AppLanguage) -> String {
         lang == .japanese ? "審査により非公開" : "Hidden after review"
     }
 
-    // MARK: - UserProfile (一般ユーザー)
+    // MARK: - UserProfile (regular user)
 
     static func userProfilePosts(_ lang: AppLanguage) -> String {
         lang == .japanese ? "投稿" : "Posts"
@@ -693,9 +700,10 @@ enum L {
         lang == .japanese ? "その他" : "Other"
     }
 
-    /// 067 #9: エトス専用の通報理由。文言はユーザー添削待ち (設計書 追補 #9 の指定文言をそのまま使用)
+    /// 067 #9: A report reason only for ethos. Wording pending user review (uses the wording specified in
+    /// design doc addendum #9 as is)
     static func moderationReportReasonOffTopic(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "アプリの趣旨に合わない" : "Doesn't fit this app"  // 文言はユーザー添削待ち
+        lang == .japanese ? "アプリの趣旨に合わない" : "Doesn't fit this app"  // Wording pending user review
     }
 
     static func moderationBlockConfirmTitle(_ lang: AppLanguage) -> String {
@@ -964,7 +972,7 @@ enum L {
         lang == .japanese ? "返信をキャンセル" : "Cancel reply"
     }
 
-    // MARK: - Time formatting (相対時間: 通知 / コメント表示用)
+    // MARK: - Time formatting (relative time: for notifications / comments)
 
     static func timeJustNow(_ lang: AppLanguage) -> String {
         lang == .japanese ? "たった今" : "just now"
@@ -1041,23 +1049,23 @@ enum L {
         return text
     }
 
-    // MARK: - Block Views (Schedule / Location) — 監査 copy high 2件対応 (2026-07-22)
+    // MARK: - Block Views (Schedule / Location): fixes for 2 audit copy high items (2026-07-22)
 
     static func scheduleSectionLabel(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "スケジュール" : "Schedules" // 文言はユーザー添削待ち
+        lang == .japanese ? "スケジュール" : "Schedules" // Wording pending user review
     }
 
     static func scheduleTimeSectionLabel(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "ブロック時間" : "Block hours" // 文言はユーザー添削待ち
+        lang == .japanese ? "ブロック時間" : "Block hours" // Wording pending user review
     }
 
     static func scheduleRepeatSectionLabel(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "繰り返し" : "Repeat" // 文言はユーザー添削待ち
+        lang == .japanese ? "繰り返し" : "Repeat" // Wording pending user review
     }
 
-    /// 曜日ボタン用の1文字ラベル (1=日〜7=土)
+    /// 1-character labels for weekday buttons (1=Sun to 7=Sat)
     static func weekdayInitial(_ weekday: Int, _ lang: AppLanguage) -> String {
-        // 文言はユーザー添削待ち
+        // Wording pending user review
         switch weekday {
         case 1: return lang == .japanese ? "日" : "S"
         case 2: return lang == .japanese ? "月" : "M"
@@ -1070,9 +1078,9 @@ enum L {
         }
     }
 
-    /// サマリー表示用の短縮曜日名 (1=日〜7=土)
+    /// Short weekday names for the summary (1=Sun to 7=Sat)
     static func weekdayShortName(_ weekday: Int, _ lang: AppLanguage) -> String {
-        // 文言はユーザー添削待ち
+        // Wording pending user review
         switch weekday {
         case 1: return lang == .japanese ? "日" : "Sun"
         case 2: return lang == .japanese ? "月" : "Mon"
@@ -1086,101 +1094,101 @@ enum L {
     }
 
     static func weekdaySummaryWeekdays(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "平日" : "Weekdays" // 文言はユーザー添削待ち
+        lang == .japanese ? "平日" : "Weekdays" // Wording pending user review
     }
 
     static func weekdaySummaryEveryday(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "毎日" : "Every day" // 文言はユーザー添削待ち
+        lang == .japanese ? "毎日" : "Every day" // Wording pending user review
     }
 
     static func weekdaySummaryWeekend(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "週末" : "Weekends" // 文言はユーザー添削待ち
+        lang == .japanese ? "週末" : "Weekends" // Wording pending user review
     }
 
-    /// カスタム曜日サマリー (例: "日・水・金" / "Sun, Wed, Fri") の区切り文字
+    /// Separator for the custom weekday summary (e.g. "日・水・金" / "Sun, Wed, Fri")
     static func weekdaySummarySeparator(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "・" : ", " // 文言はユーザー添削待ち
+        lang == .japanese ? "・" : ", " // Wording pending user review
     }
 
     static func timeEditStart(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "開始時刻" : "Start time" // 文言はユーザー添削待ち
+        lang == .japanese ? "開始時刻" : "Start time" // Wording pending user review
     }
 
     static func timeEditEnd(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "終了時刻" : "End time" // 文言はユーザー添削待ち
+        lang == .japanese ? "終了時刻" : "End time" // Wording pending user review
     }
 
     static func timeEditDone(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "完了" : "Done" // 文言はユーザー添削待ち
+        lang == .japanese ? "完了" : "Done" // Wording pending user review
     }
 
     static func locationPermissionTitle(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "位置情報の権限が必要です" : "Location access needed" // 文言はユーザー添削待ち
+        lang == .japanese ? "位置情報の権限が必要です" : "Location access needed" // Wording pending user review
     }
 
     static func locationPermissionBody(_ lang: AppLanguage) -> String {
         lang == .japanese
-            ? "バックグラウンドでも位置情報を取得するため、「常に許可」を選択してください" // 文言はユーザー添削待ち
-            : "Choose \"Always Allow\" so location works in the background" // 文言はユーザー添削待ち
+            ? "バックグラウンドでも位置情報を取得するため、「常に許可」を選択してください" // Wording pending user review
+            : "Choose \"Always Allow\" so location works in the background" // Wording pending user review
     }
 
     static func locationPermissionAllow(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "位置情報を許可" : "Allow location access" // 文言はユーザー添削待ち
+        lang == .japanese ? "位置情報を許可" : "Allow location access" // Wording pending user review
     }
 
     static func locationPermissionOpenSettings(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "設定アプリで許可する" : "Allow in Settings" // 文言はユーザー添削待ち
+        lang == .japanese ? "設定アプリで許可する" : "Allow in Settings" // Wording pending user review
     }
 
     static func locationBgWarningTitle(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "バックグラウンドで動作しません" : "Won't work in the background" // 文言はユーザー添削待ち
+        lang == .japanese ? "バックグラウンドで動作しません" : "Won't work in the background" // Wording pending user review
     }
 
     static func locationBgWarningBody(_ lang: AppLanguage) -> String {
         lang == .japanese
-            ? "\"常に許可\" にしないとバックグラウンドで動作しません" // 文言はユーザー添削待ち
-            : "Location must be set to \"Always Allow\" to work in the background" // 文言はユーザー添削待ち
+            ? "\"常に許可\" にしないとバックグラウンドで動作しません" // Wording pending user review
+            : "Location must be set to \"Always Allow\" to work in the background" // Wording pending user review
     }
 
     static func locationBgWarningOpenSettings(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "設定アプリで\"常に許可\"にする" : "Set to \"Always Allow\" in Settings" // 文言はユーザー添削待ち
+        lang == .japanese ? "設定アプリで\"常に許可\"にする" : "Set to \"Always Allow\" in Settings" // Wording pending user review
     }
 
     static func locationRegisteredSection(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "登録済みの場所" : "Saved places" // 文言はユーザー添削待ち
+        lang == .japanese ? "登録済みの場所" : "Saved places" // Wording pending user review
     }
 
     static func locationNoneRegistered(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "場所が登録されていません" : "No places saved yet" // 文言はユーザー添削待ち
+        lang == .japanese ? "場所が登録されていません" : "No places saved yet" // Wording pending user review
     }
 
     static func locationRadiusText(_ meters: Int, _ lang: AppLanguage) -> String {
-        lang == .japanese ? "半径 \(meters)m" : "\(meters)m radius" // 文言はユーザー添削待ち
+        lang == .japanese ? "半径 \(meters)m" : "\(meters)m radius" // Wording pending user review
     }
 
     static func locationRadiusHereText(_ meters: Int, _ lang: AppLanguage) -> String {
-        lang == .japanese ? "半径 \(meters)m ・ 現在ここ" : "\(meters)m radius ・ You're here" // 文言はユーザー添削待ち
+        lang == .japanese ? "半径 \(meters)m ・ 現在ここ" : "\(meters)m radius ・ You're here" // Wording pending user review
     }
 
     static func locationDeleteTitle(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "場所を削除" : "Delete place" // 文言はユーザー添削待ち
+        lang == .japanese ? "場所を削除" : "Delete place" // Wording pending user review
     }
 
     static func locationDeleteConfirmMessage(_ name: String, _ lang: AppLanguage) -> String {
-        lang == .japanese ? "「\(name)」を削除しますか？" : "Delete \"\(name)\"?" // 文言はユーザー添削待ち
+        lang == .japanese ? "「\(name)」を削除しますか？" : "Delete \"\(name)\"?" // Wording pending user review
     }
 
-    /// B-4: iOS のジオフェンス同時監視上限に達した場合の注記
+    /// B-4: Note shown when the iOS limit for concurrently monitored geofences is reached
     static func locationLimitNote(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "iOS 制限で 20 箇所まで" : "Up to 20 places (iOS limit)" // 文言はユーザー添削待ち
+        lang == .japanese ? "iOS 制限で 20 箇所まで" : "Up to 20 places (iOS limit)" // Wording pending user review
     }
 
-    /// FB#11: 無課金ロックカード下端の全幅タップ可アクセントストリップ
+    /// FB#11: Full-width tappable accent strip at the bottom edge of the lock card for non-paying users
     static func blockLockedStripText(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "実行には 1% エリートが必要" : "1% Elite is required to run this" // 文言はユーザー添削待ち
+        lang == .japanese ? "実行には 1% エリートが必要" : "1% Elite is required to run this" // Wording pending user review
     }
 
     static func blockLockedSeeElite(_ lang: AppLanguage) -> String {
-        lang == .japanese ? "1% エリートを見る" : "See 1% Elite" // 文言はユーザー添削待ち
+        lang == .japanese ? "1% エリートを見る" : "See 1% Elite" // Wording pending user review
     }
 }

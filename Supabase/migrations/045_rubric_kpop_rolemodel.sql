@@ -1,14 +1,14 @@
 -- ============================================================
 -- 045_rubric_kpop_rolemodel.sql
--- ロールモデル引用にアイドルを明記 (2026-07-24 ユーザーFB)
+-- Name idols explicitly in role model quotes (user feedback 2026-07-24)
 -- ============================================================
--- 「憧れのロールモデル」には K-POP アイドル等も含まれ、ステージ衣装は露出が多いことが
--- あるため、露出だけを理由に誤って弾かれないよう層1・層2の両方に明記する。
--- 判定コストは増えない (同一コール内のルーブリック数十トークン増のみ)。
--- 前提: 044 適用済み。replace 方式、二重適用ガード付きで冪等。
+-- "Role models you admire" include K-POP idols etc., and stage outfits can be revealing,
+-- so state it in both layer 1 and layer 2 so they are not wrongly rejected for exposure alone.
+-- Moderation cost does not increase (only a few dozen more rubric tokens in the same call).
+-- Assumes 044 is applied. Replace approach, idempotent with a guard against applying twice.
 -- ============================================================
 
--- 層1: スポーツウェア除外にステージ衣装を追加
+-- Layer 1: add stage outfits to the sportswear exclusion
 UPDATE public.moderation_config
 SET safety_rubric = replace(
     safety_rubric,
@@ -18,7 +18,7 @@ SET safety_rubric = replace(
 WHERE id = true
   AND position('ステージ衣装や宣材写真' in safety_rubric) = 0;
 
--- 層2: ロールモデル引用の例示にアイドルを追加
+-- Layer 2: add idols to the examples of role model quotes
 UPDATE public.moderation_config
 SET ethos_rubric = replace(
     ethos_rubric,

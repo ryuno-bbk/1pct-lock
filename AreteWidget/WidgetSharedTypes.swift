@@ -2,19 +2,20 @@
 //  WidgetSharedTypes.swift
 //  AreteWidget
 //
-//  AreteWidget 拡張から参照する型・定数の独立定義。
-//  メインアプリ側の同名定義 (AppBlocker/Shared/WidgetEntryQuote.swift, AppGroupIdentifier.swift) と
-//  内容を同期させること。Synchronized Folder の都合で同じファイルを共有できないため二重定義になっている。
+//  Standalone definitions of types and constants used by the AreteWidget extension.
+//  Keep the contents in sync with the definitions of the same names in the main app
+//  (AppBlocker/Shared/WidgetEntryQuote.swift, AppGroupIdentifier.swift). Because of Synchronized
+//  Folder, the same file cannot be shared, so they are defined twice.
 //
 
 import Foundation
 
-/// ⚠️ メインアプリ側の `AppGroupConstants.identifier` と一致させること。
+/// ⚠️ Must match `AppGroupConstants.identifier` in the main app.
 enum AppGroupConstants {
     static let identifier = "group.com.ryunosuke.appblocker.shared"
 }
 
-/// ⚠️ メインアプリ側 `WidgetEntryQuote` と JSON 互換 (フィールド名・型一致必須)。
+/// ⚠️ JSON compatible with `WidgetEntryQuote` in the main app (field names and types must match).
 struct WidgetEntryQuote: Codable, Identifiable, Equatable, Hashable {
     let id: String
     let textJp: String

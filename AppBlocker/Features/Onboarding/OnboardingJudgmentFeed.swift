@@ -2,27 +2,30 @@
 //  OnboardingJudgmentFeed.swift
 //  AppBlocker
 //
-//  「ライブ審査」演出 (2026-07-29 ユーザー発案、v1=Fable裁量実装)。
-//  v1はフック画面に置いたが、実機FBで「これらは流れてこない」(ModerationPolicyStepView) へ
-//  移設 (フック画面はARISE型ヒーローに刷新)。投稿カードが上から1枚ずつ落ちてきて、
-//  中央でスキャン→カテゴリラベルが付く→合格なら下 (フィード方向) へ流れ込み、
-//  不合格なら赤転して横へ弾き飛ばされる。AIモデレーションという主張を文字でなく
-//  目の前の出来事として見せる。親フレームに埋め込む前提 (カードは親の中央に配置)。
+//  "Live review" effect (2026-07-29 user idea, v1 = implemented at Fable's discretion).
+//  v1 was placed on the hook screen, but after real device feedback it moved to
+//  "これらは流れてこない" ("These don't flow in") (ModerationPolicyStepView) (the hook screen was
+//  redone as an ARISE-style hero). Post cards drop one at a time from the top, are scanned in the
+//  center → get a category label → if passed, flow down (toward the feed), and if rejected, turn
+//  red and get knocked out to the side. Shows the claim of AI moderation not in words but as
+//  something happening in front of you. Meant to be embedded in a parent frame (the card is
+//  placed at the center of the parent).
 //
-//  トーン設計 (「Sっぽく/悪趣味になる」懸念への回避):
-//  - 裁きの演出ではなく「検問」— 静かなスキャンと淡々とした通過がベース。
-//    赤を使うのは不合格の一瞬だけ。動きはブランド原則どおり光とスケール中心
-//  - スタンプ/バウンス/回転過多は使わない (弾き出しの傾き -12° のみ)
+//  Tone design (avoiding the concern that it could feel "sadistic / in bad taste"):
+//  - Not a show of judgment but a "checkpoint": a quiet scan and a matter-of-fact pass are the
+//    base. Red is used only for the moment of rejection. Motion is mainly light and scale, per the
+//    brand principles
+//  - No stamps/bounces/excess rotation (only the -12° tilt when knocked out)
 //
-//  ロールバック: FeedPreviewHookView で JudgmentFeedView → FeedMarquee に戻すだけ
-//  (FeedMarquee は残置)。
+//  Rollback: just switch JudgmentFeedView back to FeedMarquee in FeedPreviewHookView
+//  (FeedMarquee is left in place).
 //
 
 import SwiftUI
 
-// MARK: - 台本
+// MARK: - Script
 
-/// 審査される1枚。ラベルは判定チップに出すカテゴリ名 // 文言はユーザー添削待ち
+/// One card under review. label = category name shown on the verdict chip // Wording awaiting user review
 struct JudgmentItem {
     let image: String
     let labelJa: String
@@ -31,21 +34,27 @@ struct JudgmentItem {
 }
 
 enum JudgmentScript {
-    /// 表示言語に応じた台本 (2026-07-31 実機FB)。
-    /// 英語版から外すもの:
-    ///   - パチンコ: 日本固有の遊技で英語圏には文脈が伝わらない (ユーザー指定)。
-    ///     代わりに2枚目=パーティーにする (掴みは「弾かれる方」を早く見せる方針を維持)
-    ///   - 日本語が焼き込まれた良い投稿5枚 (腕の日 / 4食分作った / 今から商談 / 朝ラン /
-    ///     食い終わったら走って勉強) — 英語ユーザーに日本語の画像を見せないため。
-    ///     英語版で使える良い投稿は「5:20」「HARD WORK」「LEG DAY」「文字なし」の4枚
-    /// 英語版は計12枚 (良4 + NG8)。ブランド画像を英語版込みで作り直したらここに足す
+    /// Script per display language (2026-07-31 real device feedback).
+    /// Removed from the English version:
+    ///   - Pachinko: a Japan-specific game whose context does not come across in English-speaking
+    ///     regions (specified by the user). Instead, the 2nd card is a party (keeps the policy of
+    ///     showing "the rejected ones" early as the hook)
+    ///   - 5 good posts with Japanese baked in ("腕の日" ("arm day") / "4食分作った" ("made 4 meals") /
+    ///     "今から商談" ("business meeting now") / "朝ラン" ("morning run") /
+    ///     "食い終わったら走って勉強" ("done eating, now run and study")), so that English users are not
+    ///     shown images with Japanese. The good posts usable in the English version are 4: "5:20",
+    ///     "HARD WORK", "LEG DAY" and one with no text
+    /// The English version has 12 in total (4 good + 8 NG). Add here once the brand images are remade
+    /// including English versions
     static func items(for lang: AppLanguage) -> [JudgmentItem] {
         lang == .japanese ? japanese : english
     }
 
-    /// 2026-07-29 実機FB: 「見せたいのは弾かれる方」→ NG全9枚を使い、2枚目から早速
-    /// 弾かれる例を見せる (冒頭 良→悪→悪 の掴み)。以降はほぼ交互。
-    /// 画像は既存の OnboardingPosts アセット (良い投稿=焼き込み済みから9枚、NG=テキスト無し新素材9枚)
+    /// 2026-07-29 real device feedback: "what we want to show is the rejected ones" → use all 9 NG
+    /// images, and show a rejected example right from the 2nd card (opening hook good → bad → bad).
+    /// After that, mostly alternating.
+    /// Images are existing OnboardingPosts assets (good posts = 9 of the baked ones, NG = 9 new images
+    /// without text)
     static let japanese: [JudgmentItem] = [
         JudgmentItem(image: "run-park-female-pov",       labelJa: "ランニング",   labelEn: "Running",   pass: true),
         JudgmentItem(image: "moderate-pachinko",         labelJa: "ギャンブル",   labelEn: "Gambling",  pass: false),
@@ -56,7 +65,7 @@ enum JudgmentScript {
         JudgmentItem(image: "moderate-karaoke",          labelJa: "夜遊び",       labelEn: "Night out", pass: false),
         JudgmentItem(image: "mealprep-containers",       labelJa: "自炊",         labelEn: "Meal prep", pass: true),
         JudgmentItem(image: "moderate-party-cups",       labelJa: "飲み会",       labelEn: "Partying",  pass: false),
-        JudgmentItem(image: "study-cafe-coffee",         labelJa: "読書",         labelEn: "Reading",   pass: true), // 本+カフェの画像 (2026-07-29 勉強→読書へ修正)
+        JudgmentItem(image: "study-cafe-coffee",         labelJa: "読書",         labelEn: "Reading",   pass: true), // Book + cafe image (2026-07-29 changed from "勉強" ("study") to "読書" ("reading"))
         JudgmentItem(image: "moderate-ramen-jiro",       labelJa: "ジャンクフード", labelEn: "Junk food", pass: false),
         JudgmentItem(image: "business-laptop",           labelJa: "仕事",         labelEn: "Work",      pass: true),
         JudgmentItem(image: "moderate-bowling",          labelJa: "遊び",         labelEn: "Hanging out", pass: false),
@@ -67,37 +76,38 @@ enum JudgmentScript {
         JudgmentItem(image: "mealprep-eating-plate",     labelJa: "食事管理",     labelEn: "Nutrition", pass: true),
     ]
 
-    /// 英語版 (12枚)。日本語が写り込む画像とパチンコを除外し、2枚目=パーティー
+    /// English version (12 cards). Excludes images showing Japanese and pachinko; the 2nd card is a party
     static let english: [JudgmentItem] = [
-        JudgmentItem(image: "run-park-female-pov",       labelJa: "ランニング",   labelEn: "Running",   pass: true),  // 焼き込み="5:20"
+        JudgmentItem(image: "run-park-female-pov",       labelJa: "ランニング",   labelEn: "Running",   pass: true),  // Baked text = "5:20"
         JudgmentItem(image: "moderate-party-cups",       labelJa: "飲み会",       labelEn: "Partying",  pass: false),
         JudgmentItem(image: "moderate-izakaya-beer",     labelJa: "飲み会",       labelEn: "Drinking",  pass: false),
-        JudgmentItem(image: "study-desk-laptop",         labelJa: "勉強",         labelEn: "Study",     pass: true),  // 焼き込み="HARD WORK"
+        JudgmentItem(image: "study-desk-laptop",         labelJa: "勉強",         labelEn: "Study",     pass: true),  // Baked text = "HARD WORK"
         JudgmentItem(image: "moderate-burger-drivethru", labelJa: "ジャンクフード", labelEn: "Junk food", pass: false),
-        JudgmentItem(image: "gym-mirror-female",         labelJa: "筋トレ",       labelEn: "Workout",   pass: true),  // 焼き込み="LEG DAY"
+        JudgmentItem(image: "gym-mirror-female",         labelJa: "筋トレ",       labelEn: "Workout",   pass: true),  // Baked text = "LEG DAY"
         JudgmentItem(image: "moderate-karaoke",          labelJa: "夜遊び",       labelEn: "Night out", pass: false),
         JudgmentItem(image: "moderate-bowling",          labelJa: "遊び",         labelEn: "Hanging out", pass: false),
-        JudgmentItem(image: "study-cafe-coffee",         labelJa: "読書",         labelEn: "Reading",   pass: true),  // 焼き込みなし
+        JudgmentItem(image: "study-cafe-coffee",         labelJa: "読書",         labelEn: "Reading",   pass: true),  // No baked text
         JudgmentItem(image: "moderate-ramen-jiro",       labelJa: "ジャンクフード", labelEn: "Junk food", pass: false),
         JudgmentItem(image: "moderate-movie-popcorn",    labelJa: "夜更かし",     labelEn: "Late night", pass: false),
         JudgmentItem(image: "moderate-pizza-night",      labelJa: "ジャンクフード", labelEn: "Junk food", pass: false),
     ]
 }
 
-// MARK: - 本体
+// MARK: - Main view
 
 struct JudgmentFeedView: View {
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
     private var lang: AppLanguage { AppLanguage(rawValue: mainLanguageRaw) ?? .english }
 
-    /// カードの人生: 画面上外 → 中央へ落下 → スキャン → 判定確定 → 退場 (合格=下 / 不合格=横)
+    /// Life of a card: above the screen → drops to the center → scan → verdict decided → exit (pass =
+    /// down / reject = sideways)
     private enum Phase {
         case offscreen, center, scanning, verdict, exited
     }
 
     @State private var index = 0
     @State private var phase: Phase = .offscreen
-    /// スキャン光帯の走行 (0→1)。scanning 突入ごとにリセットして走らせる
+    /// Travel of the scan light band (0→1). Reset and run each time scanning starts
     @State private var scanProgress: CGFloat = 0
 
     private var script: [JudgmentItem] { JudgmentScript.items(for: lang) }
@@ -105,14 +115,15 @@ struct JudgmentFeedView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // 2026-07-29 実機FB「小さい/上が見切れる」対応:
-            // - カード幅 0.60→0.68 に拡大 (親フレーム基準)
-            // - アスペクトを 4:5→2:3 に変更 (NG素材の原寸比。fill しても上下が切れない)。
-            //   ただし親の高さに収まるよう高さ側からも制約 (小さい端末でのはみ出し防止)
+            // Fix for 2026-07-29 real device feedback "too small / the top is cut off":
+            // - card width enlarged 0.60→0.68 (relative to the parent frame)
+            // - aspect changed from 4:5 to 2:3 (the native ratio of the NG images, so top and bottom are not
+            //   cut even with fill). But it is also constrained by height so it fits in the parent (prevents
+            //   overflow on small devices)
             let cardW = min(geo.size.width * 0.68, (geo.size.height * 0.92) / 1.5)
             let cardH = cardW * 1.5
-            // 親フレームの中央がステージ (モデレ画面に埋め込む前提。旧フック画面時代の
-            // 全画面 ignoresSafeArea + 上寄せ配置は廃止)
+            // The center of the parent frame is the stage (meant to be embedded in the moderation screen. The
+            // full-screen ignoresSafeArea + top-aligned layout from the old hook screen era was removed)
             let stageCenterY = geo.size.height * 0.5
 
             ZStack {
@@ -128,7 +139,7 @@ struct JudgmentFeedView: View {
         .task { await runLoop() }
     }
 
-    // MARK: - カード
+    // MARK: - Card
 
     private func judgedCard(width: CGFloat, height: CGFloat) -> some View {
         ZStack(alignment: .bottomLeading) {
@@ -144,11 +155,11 @@ struct JudgmentFeedView: View {
             }
             .frame(width: width, height: height)
             .clipped()
-            // 不合格確定後は彩度を抜いて「死んだ」投稿にする
+            // Once rejected, remove the saturation to make it a "dead" post
             .saturation(phase == .verdict && !item.pass ? 0.15 : 1)
             .overlay(Color.black.opacity(phase == .verdict && !item.pass ? 0.35 : 0))
 
-            // スキャン光帯 (scanning 中のみ上→下へ1回走る。ブランドの「動きは光」原則)
+            // Scan light band (runs once top→bottom only while scanning. The brand principle "motion is light")
             if phase == .scanning {
                 LinearGradient(
                     stops: [
@@ -165,7 +176,7 @@ struct JudgmentFeedView: View {
                 .allowsHitTesting(false)
             }
 
-            // 判定チップ (カード左下)。scanning=ラベルのみ / verdict=アイコン+色が確定
+            // Verdict chip (bottom left of the card). scanning = label only / verdict = icon + color decided
             if phase == .scanning || phase == .verdict {
                 judgmentChip
                     .padding(10)
@@ -192,7 +203,7 @@ struct JudgmentFeedView: View {
                     .font(.system(size: 11, weight: .bold))
                     .transition(.scale.combined(with: .opacity))
             } else {
-                // スキャン中の思考ドット (静かな脈動、回転スピナーは使わない)
+                // Thinking dots during the scan (quiet pulse, no rotating spinner)
                 Circle()
                     .frame(width: 5, height: 5)
                     .opacity(0.7)
@@ -206,8 +217,8 @@ struct JudgmentFeedView: View {
         .padding(.horizontal, 11)
         .padding(.vertical, 7)
         .background(
-            // 判定確定後: 合格=緑 / 不合格=赤 (2026-07-29 ユーザー指示「OKは緑のOK色に」)。
-            // スキャン中は中立のガラス
+            // After the verdict: pass = green / reject = red (2026-07-29 user instruction "make OK the green OK
+            // color"). Neutral glass while scanning
             Capsule().fill(
                 chipIsFail
                     ? AnyShapeStyle(AppColors.error.opacity(0.92))
@@ -219,7 +230,7 @@ struct JudgmentFeedView: View {
         .environment(\.colorScheme, .dark)
     }
 
-    // MARK: - フェーズ→トランスフォーム
+    // MARK: - Phase → transform
 
     private func offsetY(height: CGFloat) -> CGFloat {
         switch phase {
@@ -230,7 +241,7 @@ struct JudgmentFeedView: View {
     }
 
     private func offsetX(width: CGFloat) -> CGFloat {
-        // 不合格の退場だけ横へ弾く
+        // Only the rejected exit is knocked out sideways
         (phase == .exited && !item.pass) ? -width * 1.3 : 0
     }
 
@@ -246,20 +257,20 @@ struct JudgmentFeedView: View {
         }
     }
 
-    // MARK: - 進行ループ
+    // MARK: - Progress loop
 
     @MainActor
     private func runLoop() async {
         if UIAccessibility.isReduceMotionEnabled {
-            // 静止表示: 合格チップ付きの1枚を置くだけ
+            // Static display: just place one card with a pass chip
             phase = .verdict
             return
         }
 
-        // テンポ変遷: 2.4秒 (v1「遅い」) → 1.85秒 (「もう少し遅くて大丈夫」) → 約2.15秒/枚
-        // (2026-07-29 FB3回目: スキャンとスキャンの間に呼吸を戻す)
+        // Tempo history: 2.4s (v1 "too slow") → 1.85s ("a bit slower is fine") → about 2.15s per card
+        // (2026-07-29 feedback round 3: bring back a pause between scans)
         while !Task.isCancelled {
-            // 1. 落下→中央で受け止め
+            // 1. Drop → caught in the center
             phase = .offscreen
             scanProgress = 0
             try? await Task.sleep(nanoseconds: 120_000_000)
@@ -268,13 +279,13 @@ struct JudgmentFeedView: View {
             try? await Task.sleep(nanoseconds: 520_000_000)
             guard !Task.isCancelled else { return }
 
-            // 2. スキャン (光帯1往路+ラベル出現)
+            // 2. Scan (one pass of the light band + the label appears)
             withAnimation(.easeOut(duration: 0.22)) { phase = .scanning }
             withAnimation(.easeInOut(duration: 0.5)) { scanProgress = 1 }
             try? await Task.sleep(nanoseconds: 620_000_000)
             guard !Task.isCancelled else { return }
 
-            // 3. 判定確定 + ハプティクス (合格=軽 / 不合格=硬)
+            // 3. Verdict decided + haptics (pass = light / reject = rigid)
             withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { phase = .verdict }
             if item.pass {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -284,7 +295,7 @@ struct JudgmentFeedView: View {
             try? await Task.sleep(nanoseconds: item.pass ? 450_000_000 : 580_000_000)
             guard !Task.isCancelled else { return }
 
-            // 4. 退場 (合格=下のフィードへ流れ込む / 不合格=横へ弾き飛ばし)
+            // 4. Exit (pass = flows into the feed below / reject = knocked out sideways)
             withAnimation(.easeIn(duration: item.pass ? 0.42 : 0.38)) { phase = .exited }
             try? await Task.sleep(nanoseconds: 420_000_000)
             guard !Task.isCancelled else { return }

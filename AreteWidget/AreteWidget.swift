@@ -2,8 +2,9 @@
 //  AreteWidget.swift
 //  AreteWidget
 //
-//  名言を表示するウィジェット。App Group の JSON キャッシュ (メインアプリが書き込み) を読む。
-//  Supabase / FamilyControls 等の重い依存は extension に持ち込まない (メモリ制約のため)。
+//  Widget that shows quotes. Reads the JSON cache in the App Group (written by the main app).
+//  Heavy dependencies such as Supabase / FamilyControls are not brought into the extension (memory
+//  limits).
 //
 
 import WidgetKit
@@ -46,7 +47,7 @@ struct Provider: AppIntentTimelineProvider {
         let language = loadLanguage()
         let now = Date()
 
-        // 1 時間ごとに 5 エントリを並べる。`.atEnd` で末尾到達時に再要求。
+        // Lay out 5 entries, one per hour. `.atEnd` requests again when the end is reached.
         let entries: [QuoteEntry] = (0..<5).map { hourOffset in
             let date = Calendar.current.date(byAdding: .hour, value: hourOffset, to: now) ?? now
             let quote = pool.randomElement() ?? Self.fallbackQuote
@@ -74,7 +75,7 @@ struct Provider: AppIntentTimelineProvider {
         return code == "ja" ? "ja" : "en"
     }
 
-    // 2026-07-30 名言監査: 実名全廃。著者名は空 = 表示行なし
+    // 2026-07-30 quote audit: all real names removed. Author name empty = no line shown
     static let fallbackQuote = WidgetEntryQuote(
         id: "fallback",
         textJp: "止まりさえしなければ、どんなにゆっくりでも構わない。",
@@ -91,21 +92,23 @@ struct AreteWidgetEntryView: View {
     @Environment(\.widgetFamily) private var family
 
     private var jaPreferred: Bool { entry.language == "ja" }
-    /// Small / Medium で使う主言語のテキスト (デバイス言語に合わせる)。
+    /// Text in the primary language used by Small / Medium (follows the device language).
     private var primaryText: String { entry.quote.displayText(jaPreferred: jaPreferred) }
-    /// Large の上段 (太字大): 日本語ユーザーでも textEn を優先 (ShareableQuoteCard と同じ「原文を主役」)。
+    /// Top part of Large (bold, large): textEn is preferred even for Japanese users (same "original text as
+    /// the lead" as ShareableQuoteCard).
     private var largePrimary: String {
         if jaPreferred, !entry.quote.textEn.isEmpty {
             return entry.quote.textEn
         }
         return entry.quote.displayText(jaPreferred: jaPreferred)
     }
-    /// Large の下段 (和訳): 日本語ユーザーで両言語あるときだけ表示。
+    /// Bottom part of Large (Japanese translation): shown only for Japanese users when both languages exist.
     private var largeSecondary: String? {
         guard jaPreferred, !entry.quote.textJp.isEmpty, !entry.quote.textEn.isEmpty else { return nil }
         return entry.quote.textJp
     }
-    /// 表示してよい著者名。空/Anonymous (2026-07-30 実名全廃) は nil = 行ごと非表示
+    /// Author name that may be shown. Empty/Anonymous (2026-07-30 all real names removed) is nil = the whole
+    /// line is hidden
     private var author: String? {
         let name = entry.quote.authorName
         return (name.isEmpty || name == "Anonymous") ? nil : name
@@ -127,7 +130,7 @@ struct AreteWidgetEntryView: View {
 
     private var smallView: some View {
         ZStack {
-            // 中央: 名言
+            // Center: quote
             Text("“\(primaryText)”")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white)
@@ -136,9 +139,9 @@ struct AreteWidgetEntryView: View {
                 .minimumScaleFactor(0.7)
                 .lineLimit(7)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .padding(.bottom, 18) // 著者名と被らないように
+                .padding(.bottom, 18) // so it does not overlap the author name
 
-            // 左下: 著者名
+            // Bottom left: author name
             VStack {
                 Spacer()
                 HStack {
@@ -157,7 +160,7 @@ struct AreteWidgetEntryView: View {
 
     private var mediumView: some View {
         ZStack {
-            // 中央: 名言
+            // Center: quote
             Text("“\(primaryText)”")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.white)
@@ -169,7 +172,7 @@ struct AreteWidgetEntryView: View {
                 .padding(.horizontal, 4)
                 .padding(.bottom, 22)
 
-            // 左下: 著者名
+            // Bottom left: author name
             VStack {
                 Spacer()
                 HStack {
@@ -183,7 +186,7 @@ struct AreteWidgetEntryView: View {
                 }
             }
 
-            // 右下: ウォーターマーク
+            // Bottom right: watermark
             VStack {
                 Spacer()
                 HStack {
@@ -197,7 +200,7 @@ struct AreteWidgetEntryView: View {
 
     private var largeView: some View {
         ZStack {
-            // 中央: 英語 (太字大) + 和訳 (小)
+            // Center: English (bold, large) + Japanese translation (small)
             VStack(spacing: 14) {
                 Text("“\(largePrimary)”")
                     .font(.system(size: 22, weight: .bold))
@@ -221,7 +224,7 @@ struct AreteWidgetEntryView: View {
             .padding(.horizontal, 4)
             .padding(.bottom, 28)
 
-            // 左下: 著者名
+            // Bottom left: author name
             VStack {
                 Spacer()
                 HStack {
@@ -235,7 +238,7 @@ struct AreteWidgetEntryView: View {
                 }
             }
 
-            // 右下: ウォーターマーク
+            // Bottom right: watermark
             VStack {
                 Spacer()
                 HStack {
@@ -257,8 +260,9 @@ struct AreteWidgetEntryView: View {
         .containerBackground(for: .widget) { Color.clear }
     }
 
-    /// B1 マーク（ロック画面の丸型ウィジェット用ミニ版）。
-    /// 縦棒 + 対角ドット2つ。viewBox 100 換算 (棒 x44 y20 w12 h60 rx6 / ドット r9.5 中心 (26,31),(74,69))。
+    /// B1 mark (mini version for the round lock screen widget).
+    /// A vertical bar + 2 diagonal dots. In viewBox 100 units (bar x44 y20 w12 h60 rx6 / dots r9.5 centered
+    /// at (26,31),(74,69)).
     private var b1MarkMini: some View {
         let size: CGFloat = 22
         let scale = size / 100

@@ -2,20 +2,23 @@
 //  PostLockPromptView.swift
 //  AppBlocker
 //
-//  投稿完了後、[ロックして作業を始める] を押した人だけに表示するモーダル。
-//  ホームのタイマーブロックとほぼ同一の UI (ヒーロー数字 + プリセット + アプリ選択) をシートに載せ、
-//  その場でタイマーブロックを開始する。「言葉」だけで終わらせず「行動」に接続するための導線
-//  (全員自動表示ではない)。
+//  Modal shown after posting, only to people who pressed the "ロックして作業を始める"
+//  ("Lock and start working") button.
+//  It puts almost the same UI as the home timer block (hero number + presets + app selection) in a
+//  sheet and starts a timer block right there. An entry point that connects "words" to "action"
+//  instead of ending at words (not shown to everyone automatically).
 //
-//  実機FB第9弾: 旧「15/30/60ピル+ボタンだけ」のシートは簡素すぎるため全面改装。
-//  アプリ未選択時の専用分岐は廃止し、AppSelectCard がその状態表示を担う (HomeView.swift 445-592行を参照)。
+//  Real device feedback round 9: the old sheet ("15/30/60 pills + a button only") was too plain, so
+//  it was fully redone. The special branch for no apps selected was removed, and AppSelectCard shows
+//  that state (see HomeView.swift lines 445-592).
 //
 
 import SwiftUI
 import FamilyControls
 
 struct PostLockPromptView: View {
-    /// ロック開始成功時に呼ばれる (呼び出し側でこのモーダルを閉じ、フロー全体も dismiss する)
+    /// Called when the lock starts successfully (the caller closes this modal and dismisses the whole
+    /// flow too)
     let onLockStarted: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -39,7 +42,8 @@ struct PostLockPromptView: View {
 
     var body: some View {
         ScrollView {
-            // 実機FB第10弾 (2026-07-15): 煽りコピー撤去 + 半画面シートに収まるようコンパクト化
+            // Real device feedback round 10 (2026-07-15): removed the pushy copy + made it compact enough to fit
+            // in a half-height sheet
             VStack(spacing: 16) {
                 Text(PostFlowStrings.lockPromptHeadline(lang))
                     .font(.system(size: 17, weight: .bold))
@@ -55,7 +59,7 @@ struct PostLockPromptView: View {
                         PostFlowStrings.lockStartCTA(lang),
                         isDisabled: !hasAppsSelected
                     ) {
-                        // settle 版で開始し、完了後にフロー全体を閉じる (ホームのカウントダウンへ)
+                        // Start with the settle version, then close the whole flow when done (to the countdown on home)
                         Task {
                             await blockingService.startTimerBlockingWithSettle(durationMinutes: selectedMinutes)
                             onLockStarted()
@@ -82,11 +86,11 @@ struct PostLockPromptView: View {
             isPresented: $showingPicker,
             selection: $blockingService.selectedApps
         )
-        // 実機FB第10弾: 全画面は余白だらけだったので半画面程度に (中身が .medium より
-        // わずかに背が高いので 0.6。カスタムスライダー展開時や小型機は .large まで引き上げ可能。
-        // 中身は ScrollView なので溢れてもスクロールできる)
+        // Real device feedback round 10: full screen was mostly empty space, so about half height (the
+        // content is slightly taller than .medium, so 0.6. With the custom slider expanded or on small
+        // devices it can go up to .large. The content is a ScrollView, so it scrolls if it overflows)
         .presentationDetents([.fraction(0.6), .large])
-        // sheet は独立階層のため、ホーム側のオーバーレイが被らない。ここにも出す
+        // A sheet is a separate hierarchy, so the overlay on the home side does not cover it. Show it here too
         .overlay {
             if blockingService.isPreparingLock {
                 PreparingLockOverlay(lang: lang)
@@ -95,11 +99,12 @@ struct PostLockPromptView: View {
         .animation(.easeOut(duration: 0.2), value: blockingService.isPreparingLock)
     }
 
-    // MARK: - Timer Setup Card (HomeView.timerSetupCard と同一構成。共通部品化は今回見送り)
+    // MARK: - Timer Setup Card (same structure as HomeView.timerSetupCard. Making it a shared component
+    // is postponed for now)
 
     private var timerSetupCard: some View {
         VStack(spacing: 16) {
-            // 大きな時間表示 (ヒーロー)。半画面シートに収めるためホーム(72pt)より一回り小さい56pt
+            // Large time display (hero). 56pt, one size smaller than home (72pt), to fit in the half-height sheet
             HStack {
                 Spacer()
                 VStack(spacing: 2) {
@@ -146,7 +151,7 @@ struct PostLockPromptView: View {
             }
 
             presetPill(
-                label: lang == .japanese ? "カスタム" : "Custom", // 文言はユーザー添削待ち
+                label: lang == .japanese ? "カスタム" : "Custom", // Wording is waiting for the user's review
                 isSelected: showCustomDurationPicker
             ) {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -156,13 +161,13 @@ struct PostLockPromptView: View {
         }
     }
 
-    /// プリセット時間のピル表示ラベル (例: 30分 / 1時間 / 2時間)
+    /// Label for the preset time pills (e.g. "30分 / 1時間 / 2時間" ("30 min / 1 hr / 2 hr"))
     private func presetLabel(_ minutes: Int) -> String {
         if minutes % 60 == 0 {
             let hours = minutes / 60
-            return lang == .japanese ? "\(hours)時間" : "\(hours)h" // 文言はユーザー添削待ち
+            return lang == .japanese ? "\(hours)時間" : "\(hours)h" // Wording is waiting for the user's review
         }
-        return lang == .japanese ? "\(minutes)分" : "\(minutes)m" // 文言はユーザー添削待ち
+        return lang == .japanese ? "\(minutes)分" : "\(minutes)m" // Wording is waiting for the user's review
     }
 
     private func presetPill(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
@@ -183,7 +188,7 @@ struct PostLockPromptView: View {
         }
     }
 
-    /// カスタム時間ピッカー (ホームと同一のスライダー UI をそのまま流用)
+    /// Custom time picker (reuses the same slider UI as home)
     private var customDurationPicker: some View {
         VStack(spacing: 8) {
             Slider(
@@ -208,7 +213,7 @@ struct PostLockPromptView: View {
         }
     }
 
-    // MARK: - App Selection Card (共通部品 AppSelectCard、HomeView と同一)
+    // MARK: - App Selection Card (shared component AppSelectCard, same as HomeView)
 
     private var appSelectionCard: some View {
         AppSelectCard(selection: blockingService.selectedApps, lang: lang) {

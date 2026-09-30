@@ -2,22 +2,24 @@
 //  PostConfirmView.swift
 //  AppBlocker
 //
-//  UGC 投稿 v2 Step3: TikTok式確定画面。
-//  上段: サムネ横スクロール ([+] で最大4枚まで追加) / タイトル入力 (# タグ予測付き) /
-//  「投稿後にロックを開始する」トグル (投稿の瞬間に選ぶ、前回値を記憶) / 投稿ボタン。
-//  投稿成功後は同じ画面が「投稿完了」の完了状態にモーフする。トグル ON なら PostLockPromptView が
-//  自動で立ち上がる (完了後にボタンを押させる方式は廃止、投稿前の意思表示に一本化)。
+//  UGC post v2 Step3: TikTok-style confirm screen.
+//  Top: horizontal thumbnail scroll (add up to 4 with [+]) / title input (with # tag suggestions) /
+//  "投稿後にロックを開始する" ("Start a lock after posting") toggle (chosen at the moment of posting,
+//  remembers the last value) / post button.
+//  After a successful post, the same screen morphs into the "投稿完了" ("Posted") done state. If the
+//  toggle is ON, PostLockPromptView opens automatically (the old approach of making the user press a
+//  button after completion was removed, it is now only the intent stated before posting).
 //
 
 import SwiftUI
 
 struct PostConfirmView: View {
     @ObservedObject var draft: PostDraft
-    /// 確認画面の [+] タップ時に呼ばれる (PostFlowView が .addBackground を push する)
+    /// Called when [+] is tapped on the confirm screen (PostFlowView pushes .addBackground)
     let onAddImage: () -> Void
-    /// サムネタップ時に呼ばれる (その画像をエディタで再編集)
+    /// Called when a thumbnail is tapped (re-edit that image in the editor)
     let onEditImage: (Int) -> Void
-    /// [閉じる] / ロック開始成功時に呼ばれる。フロー全体 (PostFlowView) を dismiss する。
+    /// Called on [Close] / when a lock starts successfully. Dismisses the whole flow (PostFlowView).
     let onCloseFlow: () -> Void
 
     @ObservedObject private var postService = UserPostService.shared
@@ -26,19 +28,22 @@ struct PostConfirmView: View {
     @State private var isSubmitting = false
     @State private var didSucceed = false
     @State private var showLockPrompt = false
-    /// 投稿失敗時のアラート文言 (046 レート制限/汎用。nil = 非表示)
+    /// Alert text when posting fails (046 rate limit / generic. nil = hidden)
     @State private var submitError: String?
-    /// 残り投稿枠 (057 上限5件化の可視化。nil = 未取得/取得失敗で非表示)
+    /// Remaining post slots (shows the 057 limit of 5 posts. nil = not fetched / fetch failed, hidden)
     @State private var remainingSlots: Int?
-    // 投稿完了アニメーション (2026-07-25 実機FB: 描かれるチェックマーク → 自動フェードで閉じる)
+    // Post-complete animation (2026-07-25 real-device feedback: a checkmark that draws itself → closes
+    // with an automatic fade)
     @State private var completeCircleProgress: CGFloat = 0
     @State private var completeCheckProgress: CGFloat = 0
     @State private var completedOpacity: Double = 1
     @FocusState private var isTitleFieldFocused: Bool
-    /// 投稿後にロックを開始するか。投稿の瞬間に選ぶトグル (前回値を記憶、デフォルトはOFF)
+    /// Whether to start a lock after posting. A toggle chosen at the moment of posting (remembers the last
+    /// value, default is OFF)
     @AppStorage("startLockAfterPost") private var startLockAfterPost = false
 
-    /// PostComposerView.availableTags と同じ 16 語彙 (複製可、既存コード側は編集禁止のため)
+    /// The same 16-word vocabulary as PostComposerView.availableTags (duplicated on purpose, because the
+    /// existing code must not be edited)
     private let availableTags: [String] = [
         "mindset", "action", "discipline", "work-ethic",
         "growth", "hardship", "self-belief", "consistency",
@@ -68,16 +73,16 @@ struct PostConfirmView: View {
         }
         .navigationBarBackButtonHidden(didSucceed)
         .onAppear {
-            // [+] → 背景グリッド → エディタ と進んだ後に「戻る」連打でここへ帰ってきた場合、
-            // 未焼き込みの DraftImage が残り canSubmit が永久に false になる。掃除して防ぐ。
+            // If the user comes back here by tapping "back" repeatedly after going [+] → background grid → editor,
+            // an unbaked DraftImage remains and canSubmit is false forever. Clean it up to prevent that.
             draft.images.removeAll { $0.bakedImageData == nil }
             if draft.editingIndex >= draft.images.count {
                 draft.editingIndex = max(0, draft.images.count - 1)
             }
         }
-        // 削除/エラー系モーダルは中央 .alert 統一 (2026-07-22 設計ルール)
+        // Delete/error modals are all a centered .alert (2026-07-22 design rule)
         .alert(
-            lang == .japanese ? "投稿できません" : "Can't post",  // 文言はユーザー添削待ち
+            lang == .japanese ? "投稿できません" : "Can't post",  // Copy waiting for user review
             isPresented: Binding(
                 get: { submitError != nil },
                 set: { if !$0 { submitError = nil } }
@@ -89,9 +94,9 @@ struct PostConfirmView: View {
         }
         .sheet(isPresented: $showLockPrompt) {
             PostLockPromptView {
-                // 実機FB第10弾 (2026-07-16): 内側シートとフロー全体 (外側シート) を同一 tick で
-                // 同時に dismiss すると入れ子シートの遷移がスタックし操作不能 (フリーズ) になる。
-                // 内側を先に閉じ、dismiss アニメーション完了を待ってから外側を閉じる
+                // Real-device feedback round 10 (2026-07-16): dismissing the inner sheet and the whole flow (outer
+                // sheet) in the same tick jams the nested sheet transition and the app becomes unusable (freeze).
+                // Close the inner one first, wait for the dismiss animation to finish, then close the outer one
                 showLockPrompt = false
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 550_000_000)
@@ -101,7 +106,7 @@ struct PostConfirmView: View {
         }
     }
 
-    // MARK: - Compose (投稿前、TikTok式レイアウト)
+    // MARK: - Compose (before posting, TikTok-style layout)
 
     private var composeView: some View {
         VStack(spacing: 0) {
@@ -151,9 +156,9 @@ struct PostConfirmView: View {
 
             Spacer()
 
-            // フッター (ロックカード + 全幅CTA)。実機FB第8弾で再設計 (2026-07-15)
+            // Footer (lock card + full-width CTA). Redesigned after real-device feedback round 8 (2026-07-15)
             VStack(spacing: 12) {
-                // ロック開始トグルをカード行に (アプリ標準のカード様式に合わせる)
+                // The lock start toggle is in a card row (matches the app's standard card style)
                 HStack(spacing: 10) {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 14, weight: .semibold))
@@ -170,12 +175,12 @@ struct PostConfirmView: View {
                 .padding(.vertical, 12)
                 .background(RoundedRectangle(cornerRadius: 14).fill(AppColors.cardBackground))
 
-                // 投稿ボタンは全幅CTA (右下の小ボタンをやめる)。
-                // PrimaryButton のラベルは内部で .frame(maxWidth: .infinity) 済みのため、
-                // VStack 直下に置くだけで幅いっぱいに広がる (外側からの maxWidth 指定は不要)。
-                // 高さは size: .large (56pt) を採用: 内部ラベルが size.height を自前で固定しており
-                // 外側から .frame(height:) を当てても背景の見た目には反映されず tap 領域が広がる
-                // だけになるため、要件の "~52pt" に一番近い既存サイズをそのまま使う
+                // The post button is a full-width CTA (no more small button at the bottom right).
+                // The PrimaryButton label already has .frame(maxWidth: .infinity) inside, so just placing it
+                // directly in the VStack stretches it to full width (no outer maxWidth needed).
+                // Height uses size: .large (56pt): the inner label fixes size.height by itself, and applying
+                // .frame(height:) from outside does not change how the background looks and only enlarges the tap
+                // area, so the existing size closest to the required "~52pt" is used as is
                 PrimaryButton(
                     PostFlowStrings.submitCTA(lang),
                     size: .large,
@@ -185,12 +190,12 @@ struct PostConfirmView: View {
                     Task { await submit() }
                 }
 
-                // 057: 上限5件化に伴い残り枠を可視化 (「5にするならユーザーに分かるように」)。
-                // 取得失敗時は何も出さない (投稿は妨げない)
+                // 057: the remaining slots are shown because of the limit of 5 ("if it's 5, make it clear to users").
+                // If the fetch fails, nothing is shown (posting is not blocked)
                 if let remainingSlots {
                     Text(lang == .japanese
                          ? "今日はあと\(remainingSlots)件投稿できます"
-                         : "\(remainingSlots) posts left today")  // 文言はユーザー添削待ち
+                         : "\(remainingSlots) posts left today")  // Copy waiting for user review
                         .font(.system(size: 12))
                         .foregroundColor(AppColors.textTertiary)
                         .frame(maxWidth: .infinity)
@@ -199,12 +204,12 @@ struct PostConfirmView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 24)
             .contentShape(Rectangle())
-            .onTapGesture { isTitleFieldFocused = false }   // 2-b: フッター空白タップで閉じる
+            .onTapGesture { isTitleFieldFocused = false }   // 2-b: tapping empty space in the footer closes it
             .task { remainingSlots = await postService.remainingDailyPostSlots() }
         }
     }
 
-    // MARK: - サムネ行 (横スクロール + [+] タイル)
+    // MARK: - Thumbnail row (horizontal scroll + [+] tile)
 
     private var thumbnailRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -219,16 +224,17 @@ struct PostConfirmView: View {
             }
             .padding(.horizontal, 20)
         }
-        // 2-a: サムネ行の空白タップでタイトル入力のキーボードを閉じる
-        // (サムネ/[+] タイルの Button は子が優先されるので既存タップは壊れない。
-        // 実機FB第8弾: 全面外タップ→写真エリア/フッターのみに限定 (2026-07-15))
+        // 2-a: tapping empty space in the thumbnail row closes the title input keyboard
+        // (the Buttons of the thumbnails/[+] tile are children and take priority, so existing taps are not
+        // broken. Real-device feedback round 8: limited from any outside tap to only the photo area/footer
+        // (2026-07-15))
         .contentShape(Rectangle())
         .onTapGesture { isTitleFieldFocused = false }
     }
 
     private func thumbnailTile(image: DraftImage, index: Int) -> some View {
         ZStack(alignment: .topTrailing) {
-            // サムネタップ → その画像をエディタで再編集
+            // Tap a thumbnail → re-edit that image in the editor
             Button {
                 onEditImage(index)
             } label: {
@@ -250,7 +256,7 @@ struct PostConfirmView: View {
             }
             .buttonStyle(PlainButtonStyle())
 
-            // 2枚目以降が存在する時のみ削除✕を出す (最後の1枚は消せない)
+            // Show the delete ✕ only when there are 2 or more images (the last one cannot be deleted)
             if draft.images.count > 1 {
                 Button {
                     removeImage(at: index)
@@ -287,7 +293,7 @@ struct PostConfirmView: View {
         }
     }
 
-    // MARK: - # チップボタン (タイトル末尾に # を挿入してフォーカス)
+    // MARK: - # chip button (inserts # at the end of the title and focuses it)
 
     private var hashButton: some View {
         Button {
@@ -302,12 +308,13 @@ struct PostConfirmView: View {
         }
     }
 
-    // MARK: - Completed (投稿後)
+    // MARK: - Completed (after posting)
 
-    // 2026-07-25 実機FB: 静的な checkmark.circle.fill + 閉じるボタンを廃止。
-    // 円→チェックが描かれるアニメーション後、画面ごとフェードして自動で閉じる。
-    // 例外: 投稿後ロック ON の時は PostLockPromptView (入れ子シート) が閉じ役なので
-    // 自動クローズしない (入れ子シートの同時 dismiss はフリーズ実績あり、実機FB第10弾)
+    // 2026-07-25 real-device feedback: removed the static checkmark.circle.fill + close button.
+    // After an animation that draws a circle → check, the whole screen fades and closes automatically.
+    // Exception: when lock-after-post is ON, PostLockPromptView (nested sheet) is responsible for closing,
+    // so it does not auto-close (dismissing nested sheets at the same time has caused freezes before,
+    // real-device feedback round 10)
     private var completedView: some View {
         VStack(spacing: 24) {
             Spacer()
@@ -332,8 +339,8 @@ struct PostConfirmView: View {
             Spacer()
 
             if startLockAfterPost {
-                // ロックプロンプト経由で閉じるのが本線だが、プロンプトをスワイプで
-                // 閉じた場合の詰み防止に手動の閉じるだけ残す
+                // Closing through the lock prompt is the main path, but a manual close is kept to avoid getting stuck
+                // if the prompt was closed with a swipe
                 Button {
                     onCloseFlow()
                 } label: {
@@ -351,7 +358,7 @@ struct PostConfirmView: View {
             withAnimation(.easeOut(duration: 0.35).delay(0.25)) { completeCheckProgress = 1 }
             guard !startLockAfterPost else { return }
             Task { @MainActor in
-                // 描き切り (~0.6s) + 余韻 0.5s → 0.6s かけてフェード → 閉じる
+                // Finish drawing (~0.6s) + 0.5s pause → fade over 0.6s → close
                 try? await Task.sleep(nanoseconds: 1_100_000_000)
                 withAnimation(.easeIn(duration: 0.6)) { completedOpacity = 0 }
                 try? await Task.sleep(nanoseconds: 620_000_000)
@@ -360,9 +367,9 @@ struct PostConfirmView: View {
         }
     }
 
-    // MARK: - # タグ予測
+    // MARK: - # tag suggestions
 
-    /// タイトル末尾の "#query" フラグメント (最後の # 以降に空白が無い場合のみ)
+    /// The "#query" fragment at the end of the title (only if there is no whitespace after the last #)
     private var activeHashQuery: String? {
         guard let hashIndex = draft.title.lastIndex(of: "#") else { return nil }
         let after = draft.title[draft.title.index(after: hashIndex)...]
@@ -386,10 +393,10 @@ struct PostConfirmView: View {
         draft.title.replaceSubrange(hashIndex..., with: "#\(display) ")
     }
 
-    /// タイトル文字列から #トークンを 16 語彙 (日英どちらの表示名でも) と照合し、
-    /// 一致したものを語彙キー (英語) の配列に正規化する (最大3)。
-    /// 日本語タイトルは # の前に空白が無いのが普通なので、空白区切りではなく
-    /// 「# から次の空白/# まで」を正規表現で直接拾う。
+    /// Matches #tokens in the title string against the 16-word vocabulary (by either the Japanese or English
+    /// display name) and normalizes the matches into an array of vocabulary keys (English) (max 3).
+    /// Japanese titles usually have no space before #, so instead of splitting on whitespace,
+    /// a regex directly picks up "from # to the next whitespace/#".
     private func extractTagKeys(from title: String) -> [String] {
         let tokens = title
             .matches(of: /#([^#\s]+)/)
@@ -420,9 +427,9 @@ struct PostConfirmView: View {
         defer { isSubmitting = false }
 
         let tags = extractTagKeys(from: draft.title)
-        // 抽出した tags を使って title 側の #タグ表示分/中身が空の単独 # を掃除する
-        // (extractTagKeys が先: 掃除後の title には対象の #タグがもう残っておらず、
-        // 順序を逆にすると tags が空になってしまう)
+        // Use the extracted tags to clean the #tag text and standalone # with empty content out of the title
+        // (extractTagKeys must come first: after cleaning, the target #tags are no longer in the title,
+        // so reversing the order would leave tags empty)
         let cleanedTitle = (Quote.displayTitle(from: draft.title, tags: tags) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -441,28 +448,29 @@ struct PostConfirmView: View {
             if startLockAfterPost {
                 showLockPrompt = true
             }
-            // 投稿が出た = いいね/コメントが届く理由ができた瞬間。
-            // ここが2つ目の許可を聞く場所 (既に決定済みなら何も起きない)
+            // The post is out = the moment there is a reason for likes/comments to arrive.
+            // This is the second place where permission is asked (nothing happens if already decided)
             await PushNotificationService.shared.requestAuthorizationIfNeeded()
         } else {
-            // 失敗を無言で握りつぶさない (046 レート制限は専用文言、それ以外は汎用)
+            // Do not silently swallow failures (046 rate limit has its own message, everything else is generic)
             if postService.lastCreateFailure == .rateLimited {
-                // 057: 上限5件化に伴い数字を明示 (UserPostService.dailyPostLimit = サーバーと同期)
+                // 057: the number is stated explicitly because of the limit of 5 (UserPostService.dailyPostLimit =
+                // in sync with the server)
                 submitError = lang == .japanese
                     ? "1日の投稿は\(UserPostService.dailyPostLimit)件までです。24時間経つと枠が戻ります"
-                    : "You can post up to \(UserPostService.dailyPostLimit) times a day. Slots free up after 24 hours"  // 文言はユーザー添削待ち
+                    : "You can post up to \(UserPostService.dailyPostLimit) times a day. Slots free up after 24 hours"  // Copy waiting for user review
             } else {
                 submitError = lang == .japanese
                     ? "投稿できませんでした。時間をおいて再試行してください"
-                    : "Couldn't post. Please try again later"  // 文言はユーザー添削待ち
+                    : "Couldn't post. Please try again later"  // Copy waiting for user review
             }
         }
     }
 }
 
-// MARK: - DrawnCheckmark (投稿完了の「描かれる」チェック)
+// MARK: - DrawnCheckmark (the "drawn" check for post completion)
 
-/// trim(from:to:) で左→右へストロークが走るチェックマーク。88pt 枠基準の相対座標
+/// Checkmark whose stroke runs left → right with trim(from:to:). Relative coordinates based on an 88pt frame
 private struct DrawnCheckmark: Shape {
     func path(in rect: CGRect) -> Path {
         var p = Path()
@@ -473,7 +481,7 @@ private struct DrawnCheckmark: Shape {
     }
 }
 
-// MARK: - PostTitleField (独立子View、パフォーマンス局所化)
+// MARK: - PostTitleField (separate child View, isolated for performance)
 
 private struct PostTitleField: View {
     @Binding var text: String
@@ -482,8 +490,9 @@ private struct PostTitleField: View {
 
     var body: some View {
         TextField(placeholder, text: $text, axis: .vertical)
-            // 実機FB第8弾: 3行分は狭くタップがシビアだったため常時5行分の高さを確保 (2026-07-15)
-            // (7行は下のロックカード/フッターと被った、実機FB第9弾)
+            // Real-device feedback round 8: 3 lines was narrow and hard to tap, so the height of 5 lines is always
+            // reserved (2026-07-15)
+            // (7 lines overlapped the lock card/footer below, real-device feedback round 9)
             .lineLimit(5, reservesSpace: true)
             .font(.system(size: 17))
             .foregroundColor(AppColors.textPrimary)

@@ -1,32 +1,37 @@
 -- ============================================================
 -- 063_feed_seeded_shuffle.sql
--- 引き下げ更新 (pull-to-refresh) でフィードの並びが変わらない問題の修正 (2026-07-31)
+-- Fix for the feed order not changing on pull-to-refresh (2026-07-31)
 -- ============================================================
--- 症状 (ユーザー報告・複数回):
---   アプリを再起動すると並び順は変わるのに、フィード最上部で引き下げて更新しても
---   同じ並びのまま。アプリ側の配線 (refreshable → loadRecommended → RPC 再取得 →
---   @Published 差し替え) はコード上正しく、restart で変わる以上ジッター自体は効いている。
+-- Symptom (reported by the user, several times):
+--   Restarting the app changes the order, but pulling down to refresh at the top of the feed keeps
+--   the same order. The app-side wiring (refreshable → loadRecommended → RPC re-fetch →
+--   @Published replacement) is correct in the code, and since a restart changes it, the jitter
+--   itself works.
 --
--- 原因 (推定):
---   本関数は LANGUAGE sql **STABLE** と宣言されているが、本体で VOLATILE な random() を
---   使っていた。STABLE は「同一トランザクション内で同じ引数なら同じ結果を返す」という
---   宣言であり、PostgreSQL はこれを信じてプランを再利用してよい。
---   同じ引数 (limit_count=50) での連続呼び出しが、プール済み接続 + キャッシュ済みプランの
---   条件で同じ結果を返し得た。アプリ再起動では接続もプランも作り直されるため変化する —
---   報告された症状 (再起動=変わる / 更新=変わらない) と一致する。
+-- Cause (presumed):
+--   This function is declared LANGUAGE sql **STABLE**, but its body used the VOLATILE random().
+--   STABLE is a declaration that "it returns the same result for the same arguments within the same
+--   transaction", and PostgreSQL is allowed to trust it and reuse the plan.
+--   Consecutive calls with the same arguments (limit_count=50) could return the same result under
+--   the conditions of a pooled connection + a cached plan. An app restart recreates both the
+--   connection and the plan, so it changes. This matches the reported symptom (restart = changes /
+--   refresh = does not change).
 --
--- 修正方針: サーバーの random() 任せをやめ、**並びの種 (seed) をアプリが毎回渡す**方式へ。
---   - ジッター = md5(item_id || seed) から作る 0〜1 の一様値。seed が変われば必ず並びが変わり、
---     同じ seed なら必ず同じ並びになる (= 宣言と実装が一致する)
---   - seed 省略時はサーバーが gen_random_uuid() で1つ作る (旧クライアント互換)
---   - 関数は VOLATILE (既定) に変更 = 実態どおりの宣言。プラン再利用による同一結果を防ぐ
+-- Fix: stop relying on the server's random(), and switch to **the app passing an order seed every time**.
+--   - Jitter = a uniform 0-1 value made from md5(item_id || seed). If the seed changes, the order
+--     always changes, and the same seed always gives the same order (= the declaration matches the
+--     implementation)
+--   - If seed is omitted, the server makes one with gen_random_uuid() (compatibility with old clients)
+--   - The function is changed to VOLATILE (the default) = a declaration that matches reality.
+--     Prevents identical results from plan reuse
 --
--- ⚠️ 引数が増えるため CREATE OR REPLACE では別関数 (オーバーロード) になってしまう。
---    PostgREST の解決が曖昧にならないよう、旧シグネチャを DROP してから作り直す。
---    seed に DEFAULT があるので、更新前のアプリ (limit_count だけ送る) からも呼べる。
+-- ⚠️ The number of arguments grows, so CREATE OR REPLACE would create a separate function (overload).
+--    To keep PostgREST resolution unambiguous, DROP the old signature first and then recreate it.
+--    seed has a DEFAULT, so it can also be called from app versions before the update (which send
+--    only limit_count).
 --
--- 適用: SQL Editor で全文実行。冪等。
--- ロールバック: 062 を再実行すれば旧実装 (random()) に戻る。
+-- Apply: run the whole text in the SQL Editor. Idempotent.
+-- Rollback: re-running 062 goes back to the old implementation (random()).
 -- ============================================================
 
 DROP FUNCTION IF EXISTS public.fetch_mixed_feed_random(integer);
@@ -58,19 +63,19 @@ LANGUAGE sql VOLATILE SECURITY DEFINER
 SET search_path = public
 AS $$
     WITH params AS MATERIALIZED (
-        -- ============ チューニング用重み (ここだけ書き換えて CREATE OR REPLACE すれば調整可) ============
+        -- ============ Tuning weights (edit only here and CREATE OR REPLACE to adjust) ============
         SELECT
-            3.0  ::double precision AS w_recency,          -- 投稿の新しさの最大点 (投稿直後)
-            24.0 ::double precision AS recency_half_hours, -- この時間経過で新しさ点が半減
-            0.5  ::double precision AS w_like,             -- ln(1+like_count) の係数
-            0.7  ::double precision AS w_comment,          -- ln(1+comment_count) の係数 (コメントはいいねより強い関心)
-            1.2  ::double precision AS w_follow,           -- フォロー中の投稿者へのボーナス
-            1.0  ::double precision AS w_seen,             -- ln(1+自分の閲覧回数) の既読ペナルティ係数 (減点)
-            1.5  ::double precision AS w_jitter,           -- ジッターの最大値 (探索性)
-            0.45 ::double precision AS quote_base,         -- 062: 名言はユーザー投稿より控えめに
-            2    ::integer          AS author_cap,         -- 1フィードあたり同一投稿者の最大件数 (postsのみ)
-            15   ::integer          AS quote_cap,          -- 062: 投稿が十分ある時の名言枠の下限 (適応型)
-            -- 063: 並びの種。アプリが毎回新しい値を渡す。省略時はサーバーで1つ作る
+            3.0  ::double precision AS w_recency,          -- Max score for post recency (right after posting)
+            24.0 ::double precision AS recency_half_hours, -- The recency score halves after this much time
+            0.5  ::double precision AS w_like,             -- Coefficient of ln(1+like_count)
+            0.7  ::double precision AS w_comment,          -- Coefficient of ln(1+comment_count) (a comment is stronger interest than a like)
+            1.2  ::double precision AS w_follow,           -- Bonus for authors you follow
+            1.0  ::double precision AS w_seen,             -- Read penalty coefficient of ln(1+your own view count) (deduction)
+            1.5  ::double precision AS w_jitter,           -- Max jitter (exploration)
+            0.45 ::double precision AS quote_base,         -- 062: quotes are weighted lower than user posts
+            2    ::integer          AS author_cap,         -- Max number of posts from the same author per feed (posts only)
+            15   ::integer          AS quote_cap,          -- 062: lower bound of the quote slots when there are enough posts (adaptive)
+            -- 063: order seed. The app passes a new value every time. If omitted, the server makes one
             COALESCE(seed, gen_random_uuid()::text) AS shuffle_seed
     ),
     scored AS (
@@ -96,7 +101,8 @@ AS $$
                 p.quote_base
                 + p.w_like * ln(1 + q.like_count)
                 + p.w_comment * ln(1 + q.comment_count)
-                -- 063: seed 由来の一様ジッター (同じ seed なら同じ並び / 変えれば必ず変わる)
+                -- 063: uniform jitter from the seed (the same seed gives the same order / changing it always changes
+                -- the order)
                 + p.w_jitter * (
                     ('x' || substr(md5(q.id::text || p.shuffle_seed), 1, 8))::bit(32)::bigint::double precision
                     / 4294967296.0
@@ -164,8 +170,8 @@ AS $$
           AND up.created_at > now() - interval '30 days'
     ),
     ranked AS (
-        -- posts: 同一投稿者の連投キャップ (052)。
-        -- quotes: kind 単位の1パーティション = フィード全体の名言キャップ (062)
+        -- posts: cap on consecutive posts from the same author (052).
+        -- quotes: one partition per kind = quote cap for the whole feed (062)
         SELECT s.*,
                row_number() OVER (
                    PARTITION BY s.kind,
@@ -175,7 +181,7 @@ AS $$
         FROM scored s
     ),
     quota AS (
-        -- 適応型の名言枠 (062): 投稿候補が limit_count に足りない分は名言で満たす
+        -- Adaptive quote slots (062): whatever the post candidates lack for limit_count is filled with quotes
         SELECT GREATEST(
             p.quote_cap,
             limit_count - (

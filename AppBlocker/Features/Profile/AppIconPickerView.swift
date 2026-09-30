@@ -2,22 +2,25 @@
 //  AppIconPickerView.swift
 //  AppBlocker
 //
-//  アプリアイコンの切替 (エリート特典、2026-07-20 新設 / 2026-07-25 ギャラリー化)。
+//  Switching the app icon (Elite perk, added 2026-07-20 / turned into a gallery 2026-07-25).
 //
-//  ■ 新しいアイコンを追加する手順 (ユーザーが画像を作るたびにやること):
-//    1. Assets.xcassets に "AppIcon<名前>.appiconset" を作り 1024x1024 PNG (アルファなし) を入れる
-//       (Contents.json は既存 appiconset をコピーして filename を差し替え)
-//    2. プレビュー用に "IconPreview<名前>.imageset" にも同じ PNG を入れる
-//    3. (あれば) 元アートを "Original<名前>.imageset" に入れる (ギャラリーの背景に出る)
-//    4. pbxproj の ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES にセット名を追記 (スペース区切り)
-//    5. 下の AppIconCatalog.all に1行追加
-//    ※ アイコン画像の追加は必ずアプリ更新 (審査) が必要 — iOS の仕様で実行時追加は不可能。
-//      「解禁のタイミング制御」だけを審査なしでやりたくなったら Supabase の app_icons
-//      フラグテーブルを重ねる (2026-07-20 設計メモ)。
+//  ■ Steps to add a new icon (do this every time the user makes an image):
+//    1. Create "AppIcon<name>.appiconset" in Assets.xcassets and put in a 1024x1024 PNG (no alpha)
+//       (copy Contents.json from an existing appiconset and replace filename)
+//    2. For the preview, also put the same PNG in "IconPreview<name>.imageset"
+//    3. (If there is one) put the original art in "Original<name>.imageset" (shown as the gallery
+//       background)
+//    4. Add the set name to ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES in pbxproj (space
+//       separated)
+//    5. Add one line to AppIconCatalog.all below
+//    ※ Adding icon images always needs an app update (App Review). iOS does not allow adding them at
+//      runtime. If you want to control only "when they unlock" without App Review, layer a Supabase
+//      app_icons flag table on top (2026-07-20 design note).
 //
-//  ■ UX (2026-07-25 ユーザー指定):
-//    グリッドのアイコンをタップ → 中央モーダルのギャラリー。背景に元アートを暗めに敷き、
-//    中央にアイコンをドンと置く。左右の矢印 (+スワイプ) で送り、CTA で適用。
+//  ■ UX (2026-07-25 user request):
+//    Tap an icon in the grid → gallery in a centered modal. The original art is laid dimmed in the
+//    background, and the icon sits big in the center. Page with the left/right arrows (+ swipe), and
+//    apply with the CTA.
 //
 
 import SwiftUI
@@ -25,20 +28,21 @@ import SwiftUI
 // MARK: - Catalog
 
 struct AppIconOption: Identifiable {
-    /// setAlternateIconName に渡す名前。nil = プライマリ (AppIcon)
+    /// Name passed to setAlternateIconName. nil = primary (AppIcon)
     let alternateName: String?
-    /// 一覧に出すプレビュー画像 (imageset 名)
+    /// Preview image shown in the list (imageset name)
     let previewAssetName: String
-    /// ギャラリー背景に敷く元アート (imageset 名)。nil = 単色背景
+    /// Original art laid behind the gallery (imageset name). nil = solid background
     let originalAssetName: String?
     let nameJa: String
     let nameEn: String
 
     var id: String { alternateName ?? "primary" }
 
-    /// 無料で使えるアイコン (クラシック=プライマリ と ホワイト。2026-07-25 ユーザー確定)。
-    /// ワードマークは 2026-07-29 のブランドテスト中につき暫定無料 (プライマリ昇格の可能性あり、
-    /// 確定したら有料化 or プライマリ化を判断)。それ以外はエリート特典 (適用時のみゲート、閲覧無料)
+    /// Icons usable for free (Classic = primary, and White. Confirmed by the user 2026-07-25).
+    /// Wordmark is temporarily free during the 2026-07-29 brand test (it may be promoted to primary;
+    /// once decided, choose between making it paid or making it primary). Everything else is an Elite
+    /// perk (gated only on apply, browsing is free)
     var isFree: Bool {
         alternateName == nil || alternateName == "AppIconWhite"
             || alternateName == "AppIconWordmark" || alternateName == "AppIconWordmarkWhite"
@@ -46,18 +50,21 @@ struct AppIconOption: Identifiable {
 }
 
 enum AppIconCatalog {
-    /// サブスク失効時の巻き戻し (C1系、2026-07-29 実機バグFB): 失効してもホーム画面が
-    /// エリート限定アイコンのまま残っていた。現在の代替アイコンが有料ならプライマリへ戻す。
-    /// 呼び出しは ProAccess.reconcileEntitlementMirror の「新鮮フェッチで失効確定」経路のみ —
-    /// オフライン/キャッシュだけでの誤リバートは既存のC1ガードが防ぐ。
-    /// カタログに無い名前 (旧バージョンの残骸等) も有料扱いで戻す。
-    /// ⚠️ setAlternateIconName はOS標準の「アイコンを変更しました」アラートを出すが、
-    /// 特典失効をユーザーに知らせる通知を兼ねるため許容 (消す公開APIは無い)
+    /// Rollback on subscription expiry (C1 family, 2026-07-29 real device bug feedback): even after expiry,
+    /// the home screen kept the Elite-only icon. If the current alternate icon is paid, go back to the
+    /// primary.
+    /// Only called from the "expiry confirmed by a fresh fetch" path of
+    /// ProAccess.reconcileEntitlementMirror. The existing C1 guard prevents a wrong revert based only on
+    /// offline/cache data.
+    /// Names not in the catalog (leftovers from old versions etc.) are also treated as paid and reverted.
+    /// ⚠️ setAlternateIconName shows the OS standard "You have changed the icon" alert, but this is
+    /// accepted because it also serves as the notice that the perk expired (there is no public API to hide
+    /// it)
     @MainActor
     static func revertPaidIconIfLapsed() {
-        guard let current = UIApplication.shared.alternateIconName else { return } // プライマリ使用中
-        // 「今その名前が有料か」の判定なので、表示用の all ではなく定義の全量 catalog を見る
-        // (all は hidesPaidIcons で絞られるため)
+        guard let current = UIApplication.shared.alternateIconName else { return } // Using the primary
+        // This checks "is that name paid right now", so look at the full defined catalog instead of all,
+        // which is for display (all is filtered by hidesPaidIcons)
         let isFree = catalog.first(where: { $0.alternateName == current })?.isFree ?? false
         guard !isFree else { return }
         UIApplication.shared.setAlternateIconName(nil) { error in
@@ -69,26 +76,27 @@ enum AppIconCatalog {
         }
     }
 
-    /// 🔴 v1 では有料 (エリート限定) アイコン5種を出さない (2026-08-04 ユーザー判断:
-    /// 出せる出来のアイコンが揃うまで伏せる)。**このフラグを false に戻すだけで復活する** —
-    /// 定義も Assets も Info.plist の代替アイコン登録もそのまま残してあるので他は触らなくてよい。
-    /// この間の Pro 特典はスケジュール/位置の遮断のみになる
+    /// 🔴 v1 does not show the 5 paid (Elite-only) icons (2026-08-04 user decision:
+    /// hide them until we have icons good enough to ship). **Setting this flag back to false is all it
+    /// takes to bring them back**: the definitions, Assets and the alternate icon registration in
+    /// Info.plist are all left in place, so nothing else needs to be touched.
+    /// During this period the Pro perks are only schedule/location blocking
     private static let hidesPaidIcons = true
 
-    /// 画面に出すアイコン。伏せている間は無料4種 (クラシック/ホワイト/ワードマーク2種) だけ
+    /// Icons shown on screen. While the others are hidden, only the 4 free ones (Classic/White/2 Wordmarks)
     static let all: [AppIconOption] = hidesPaidIcons ? catalog.filter(\.isFree) : catalog
 
-    // 文言 (アイコン名) はユーザー添削待ち。
-    // プライマリ=クラシック (太字モノグラム黒、2026-07-25 ユーザー確定)
+    // Wording (icon names) is waiting for the user's review.
+    // Primary = Classic (bold monogram, black, confirmed by the user 2026-07-25)
     private static let catalog: [AppIconOption] = [
         AppIconOption(alternateName: nil, previewAssetName: "IconPreviewClassic",
                       originalAssetName: nil, nameJa: "クラシック", nameEn: "Classic"),
         AppIconOption(alternateName: "AppIconWhite", previewAssetName: "IconPreviewWhite",
                       originalAssetName: nil, nameJa: "ホワイト", nameEn: "White"),
         AppIconOption(alternateName: "AppIconWordmark", previewAssetName: "IconPreviewWordmark",
-                      originalAssetName: nil, nameJa: "ワードマーク", nameEn: "Wordmark"), // 文言はユーザー添削待ち
+                      originalAssetName: nil, nameJa: "ワードマーク", nameEn: "Wordmark"), // Wording is waiting for the user's review
         AppIconOption(alternateName: "AppIconWordmarkWhite", previewAssetName: "IconPreviewWordmarkWhite",
-                      originalAssetName: nil, nameJa: "ワードマーク・ホワイト", nameEn: "Wordmark White"), // 文言はユーザー添削待ち
+                      originalAssetName: nil, nameJa: "ワードマーク・ホワイト", nameEn: "Wordmark White"), // Wording is waiting for the user's review
         AppIconOption(alternateName: "AppIconLion", previewAssetName: "IconPreviewLion",
                       originalAssetName: "OriginalLion", nameJa: "ライオン", nameEn: "Lion"),
         AppIconOption(alternateName: "AppIconHuman", previewAssetName: "IconPreviewHuman",
@@ -134,7 +142,7 @@ struct AppIconPickerView: View {
                 }
                 .padding(20)
 
-                // 文言はユーザー添削待ち
+                // Wording is waiting for the user's review
                 Text(lang == .japanese
                      ? "アイコンは今後のアップデートで追加されます。"
                      : "More icons will arrive in future updates.")
@@ -143,7 +151,7 @@ struct AppIconPickerView: View {
                     .padding(.top, 4)
             }
         }
-        .navigationTitle(lang == .japanese ? "アプリアイコン" : "App Icon") // 文言はユーザー添削待ち
+        .navigationTitle(lang == .japanese ? "アプリアイコン" : "App Icon") // Wording is waiting for the user's review
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(item: $galleryItem) { item in
             IconGalleryView(
@@ -156,7 +164,7 @@ struct AppIconPickerView: View {
 
     private func iconCell(_ option: AppIconOption, index: Int) -> some View {
         let isCurrent = option.alternateName == currentAlternate
-        // アイコン切替はエリート特典 (クラシック/ホワイトは無料)。ギャラリー閲覧は誰でも可
+        // Switching icons is an Elite perk (Classic/White are free). Anyone can browse the gallery
         let isLocked = !proAccess.isPro && !isCurrent && !option.isFree
 
         return Button {
@@ -201,7 +209,7 @@ struct AppIconPickerView: View {
     }
 }
 
-// MARK: - Icon Gallery (中央モーダル + 左右送り + 背景に元アート)
+// MARK: - Icon Gallery (centered modal + left/right paging + original art in the background)
 
 private struct IconGalleryView: View {
     let startIndex: Int
@@ -216,25 +224,27 @@ private struct IconGalleryView: View {
     @State private var errorMessage: String?
 
     private var options: [AppIconOption] { AppIconCatalog.all }
-    /// 正方形モーダルの一辺 (左右の矢印ぶんの余白を確保)
+    /// Side length of the square modal (leaves room for the left/right arrows)
     private var cardSide: CGFloat { min(UIScreen.main.bounds.width - 104, 320) }
     private var option: AppIconOption { options[index] }
     private var isCurrent: Bool { option.alternateName == currentAlternate }
 
     var body: some View {
         ZStack {
-            // 暗幕バックドロップ (タップで閉じる)
+            // Dark backdrop (tap to close)
             Color.black.opacity(0.82)
                 .ignoresSafeArea()
                 .onTapGesture { dismiss() }
 
-            // 中央: 正方形モーダル (2026-07-25 ユーザー指定: 縦長の元画像も正方形に切り抜いて統一、
-            // アイコンはその中央、CTA はモーダルの外)。
-            // 送りは TabView ページング = 隣のカードが横からスライドしてくる (瞬間切替は却下)
+            // Center: square modal (2026-07-25 user request: even tall original images are cropped to squares
+            // for consistency, the icon is in their center, and the CTA is outside the modal).
+            // Paging uses TabView paging = the next card slides in from the side (instant switching was
+            // rejected)
             VStack(spacing: 20) {
-                // ビューポートは画面全幅 (2026-07-25 実機FB: カード幅の箱で見切れるのを却下)。
-                // 各ページ内でカードが中央寄せされるため、スワイプ時は隣のカードが
-                // 画面端の外から入ってきて画面端の外へ消えていく。スワイプ可能域も全幅に広がる
+                // The viewport is the full screen width (2026-07-25 real device feedback: cutting off in a card-width
+                // box was rejected). Cards are centered inside each page, so when swiping, the next card
+                // comes in from outside the screen edge and leaves past the screen edge. The swipeable area also
+                // becomes full width
                 TabView(selection: $index) {
                     ForEach(Array(options.enumerated()), id: \.offset) { i, opt in
                         galleryPage(opt).tag(i)
@@ -243,9 +253,9 @@ private struct IconGalleryView: View {
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .frame(maxWidth: .infinity)
                 .frame(height: cardSide)
-                // 矢印はカードの真横 (外側8pt)、Y=カード中央。ビューポートが全幅になったので
-                // カード幅の透明フレームを基準にして従来の見た目位置を維持する
-                // (Color.clear は hit 判定を持たないため TabView のスワイプは素通し)
+                // The arrows sit right beside the card (8pt outside), Y = card center. Since the viewport became full
+                // width, use a transparent card-width frame as the reference to keep the old visual position
+                // (Color.clear has no hit testing, so TabView swipes pass through)
                 .overlay {
                     Color.clear
                         .frame(width: cardSide, height: cardSide)
@@ -263,13 +273,13 @@ private struct IconGalleryView: View {
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(.white)
 
-                // CTA はモーダル (正方形カード) の外
+                // The CTA is outside the modal (the square card)
                 Button {
                     apply()
                 } label: {
                     Text(isCurrent
-                         ? (lang == .japanese ? "使用中" : "Current")  // 文言はユーザー添削待ち
-                         : (lang == .japanese ? "このアイコンにする" : "Use this icon"))  // 文言はユーザー添削待ち
+                         ? (lang == .japanese ? "使用中" : "Current")  // Wording is waiting for the user's review
+                         : (lang == .japanese ? "このアイコンにする" : "Use this icon"))  // Wording is waiting for the user's review
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundColor(isCurrent ? AppColors.textTertiary : AppColors.background)
                         .frame(maxWidth: .infinity)
@@ -283,7 +293,7 @@ private struct IconGalleryView: View {
                 .frame(width: cardSide)
             }
 
-            // 閉じる (右上)
+            // Close (top right)
             VStack {
                 HStack {
                     Spacer()
@@ -316,8 +326,8 @@ private struct IconGalleryView: View {
         }
     }
 
-    /// 1ページぶんの正方形カード。クラシック/ホワイト (元アート無し) は
-    /// 背景カードを敷かずアイコンだけを中央に置く (2026-07-25 ユーザー指定)
+    /// Square card for one page. Classic/White (no original art) do not
+    /// lay a background card. Only the icon is placed in the center (2026-07-25 user request)
     @ViewBuilder
     private func galleryPage(_ opt: AppIconOption) -> some View {
         ZStack {
@@ -361,7 +371,7 @@ private struct IconGalleryView: View {
     }
 
     private func apply() {
-        // 切替はエリート特典。ただしクラシック/ホワイトは無料 (2026-07-25 ユーザー確定)
+        // Switching is an Elite perk. But Classic/White are free (confirmed by the user 2026-07-25)
         guard proAccess.isPro || option.isFree else {
             showProPaywall = true
             return
@@ -371,14 +381,14 @@ private struct IconGalleryView: View {
             do {
                 try await UIApplication.shared.setAlternateIconName(target.alternateName)
                 currentAlternate = target.alternateName
-                // iOS標準の「アイコンを変更しました」アラートは消せない (公開APIなし) ため、
-                // ギャラリーを先に閉じてアラートが素の一覧画面の上に出るようにする
-                // (モーダルの上にモーダルが重なる違和感の解消、2026-07-25 実機FB)
+                // The iOS standard "You have changed the icon" alert cannot be hidden (no public API), so
+                // close the gallery first so the alert appears on top of the plain list screen
+                // (fixes the odd look of a modal stacked on a modal, 2026-07-25 real device feedback)
                 dismiss()
             } catch {
                 errorMessage = lang == .japanese
                     ? "アイコンを変更できませんでした"
-                    : "Couldn't change the app icon"  // 文言はユーザー添削待ち
+                    : "Couldn't change the app icon"  // Wording is waiting for the user's review
                 print("⚠️ setAlternateIconName failed: \(error)")
             }
         }

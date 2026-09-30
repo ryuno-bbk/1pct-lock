@@ -2,9 +2,9 @@
 //  FeedItem.swift
 //  AppBlocker
 //
-//  混在フィード用統一データ型 (公式 quotes + UGC user_posts)
-//  fetch_mixed_feed_random / fetch_following_feed / fetch_tag_feed RPC の戻り値
-//  投稿v2 (S18〜): title / imagePath は UGC 投稿のみセットされる。quote 側は常に nil。
+//  Unified data type for the mixed feed (official quotes + UGC user_posts)
+//  Return value of the fetch_mixed_feed_random / fetch_following_feed / fetch_tag_feed RPCs
+//  Posts v2 (S18 onward): title / imagePath are set only for UGC posts. Always nil on the quote side.
 //
 
 import Foundation
@@ -24,16 +24,17 @@ struct FeedItem: Identifiable, Decodable, Equatable {
     let authorAvatarUrl: String?
     let isOfficialAuthor: Bool
     let isProAuthor: Bool
-    /// UGC 投稿の場合のみセットされる背景画像 index (nil = item.itemId hash で自動割当)
+    /// Background image index, set only for UGC posts (nil = assigned automatically by the item.itemId hash)
     let backgroundId: Int?
-    /// 投稿v2: タイトル (# タグを含みうる、任意)。quote 側は常に nil
+    /// Posts v2: title (may contain # tags, optional). Always nil on the quote side
     let title: String?
-    /// 投稿v2: Storage `post-images` バケット内のパス。非nilなら焼き込み画像がカード全面背景になる
+    /// Posts v2: path in the Storage `post-images` bucket. If non-nil, the baked image becomes the full
+    /// background of the card
     let imagePath: String?
-    /// 複数枚投稿: 画像枚数 (1〜4)。quote 側 / 旧投稿は常に 1
+    /// Multi-image posts: number of images (1-4). Always 1 for quotes / old posts
     let imageCount: Int
 
-    /// kind 越境衝突を防ぐ Identifiable id
+    /// Identifiable id that prevents collisions across kinds
     var id: String { "\(kind.rawValue)-\(itemId.uuidString)" }
 
     enum Kind: String, Decodable, Equatable {
@@ -82,7 +83,7 @@ struct FeedItem: Identifiable, Decodable, Equatable {
         self.imageCount       = try c.decodeIfPresent(Int.self, forKey: .imageCount) ?? 1
     }
 
-    /// 直接初期化 (UserPost や Quote からの変換用)
+    /// Direct initialization (for conversion from UserPost or Quote)
     init(
         kind: Kind,
         itemId: UUID,
@@ -122,8 +123,8 @@ struct FeedItem: Identifiable, Decodable, Equatable {
     }
 }
 
-// MARK: - Hashable (navigationDestination(item:) 用。Equatable は全フィールド比較なので
-// id ハッシュで一貫性が保たれる)
+// MARK: - Hashable (for navigationDestination(item:). Equatable compares all fields, so
+// consistency is kept with the id hash)
 
 extension FeedItem: Hashable {
     func hash(into hasher: inout Hasher) {
@@ -131,10 +132,10 @@ extension FeedItem: Hashable {
     }
 }
 
-// MARK: - 言語別表示ヘルパー (Quote と同じインターフェース)
+// MARK: - Per-language display helpers (same interface as Quote)
 
 extension FeedItem {
-    /// メイン言語のテキスト (Quote.displayPrimary と同じロジック)
+    /// Text in the main language (same logic as Quote.displayPrimary)
     func displayPrimary(lang: AppLanguage, showOriginal: Bool) -> String {
         let jp = bodyJp ?? ""
         let en = bodyEn ?? ""
@@ -148,7 +149,7 @@ extension FeedItem {
         }
     }
 
-    /// 原文併記用サブテキスト (日本語メイン + 原文併記 ON のときのみ)
+    /// Sub text for showing the original (only when the main language is Japanese + show original is ON)
     func displaySecondary(lang: AppLanguage, showOriginal: Bool) -> String? {
         guard lang == .japanese, showOriginal,
               let jp = bodyJp, !jp.isEmpty,
@@ -156,32 +157,32 @@ extension FeedItem {
         return jp
     }
 
-    /// 表示用タグ (空配列 / nil カテゴリ "" は除外)
+    /// Tags for display (empty arrays / nil category "" are excluded)
     var displayTags: [String] {
         tags.filter { !$0.isEmpty }
     }
 
-    /// 表示用タイトル。保存時に #タグを含んだままの title が入っている (過去データ含む) ため、
-    /// tags に対応するハッシュタグ表示分と中身が空の単独 "#" を取り除いて返す
-    /// (除去ルールの詳細は Quote.displayTitle 参照。二重表示バグの表示側フィックス)
+    /// Title for display. The saved title still contains the #tags (including old data), so this
+    /// removes the hashtag parts that correspond to tags and any lone "#" with nothing after it
+    /// (for details of the removal rules see Quote.displayTitle. A display-side fix for the double display bug)
     var displayTitle: String? {
         Quote.displayTitle(from: title, tags: tags)
     }
 
-    /// 投稿v2: 焼き込み済み画像の Storage 公開URL (nil なら旧方式のテキスト投稿 or quote)
-    /// 複数枚投稿の場合は 1 枚目 (カバー) の URL
+    /// Posts v2: public Storage URL of the baked image (nil means an old-style text post or a quote)
+    /// For multi-image posts, the URL of the 1st image (cover)
     var imageUrl: URL? {
         guard let imagePath, !imagePath.isEmpty else { return nil }
         return try? SupabaseManager.shared.client.storage.from("post-images").getPublicURL(path: imagePath)
     }
 
-    /// 複数枚投稿: image_count 分の Storage 公開URL配列 (順序保持)。
-    /// パス規約: 1枚目 = imagePath そのもの、2枚目以降 = "{base}_2.jpg" 〜 "{base}_4.jpg"
+    /// Multi-image posts: array of public Storage URLs for image_count (order kept).
+    /// Path convention: 1st = imagePath itself, 2nd and later = "{base}_2.jpg" to "{base}_4.jpg"
     var imageUrls: [URL] {
         guard let imagePath, !imagePath.isEmpty, imagePath.hasSuffix(".jpg") else {
             return imageUrl.map { [$0] } ?? []
         }
-        let base = String(imagePath.dropLast(4)) // ".jpg" を除去
+        let base = String(imagePath.dropLast(4)) // Remove ".jpg"
         let count = max(imageCount, 1)
         let paths = (1...count).map { n in n == 1 ? imagePath : "\(base)_\(n).jpg" }
         return paths.compactMap { try? SupabaseManager.shared.client.storage.from("post-images").getPublicURL(path: $0) }

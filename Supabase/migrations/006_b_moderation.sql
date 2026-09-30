@@ -1,26 +1,26 @@
 -- ============================================================
--- Phase B-3: モデレーション (user_reports / user_blocks)
+-- Phase B-3: moderation (user_reports / user_blocks)
 -- ============================================================
--- 目的:
---   1. user_reports: 通報レコード（post / user / quote が対象）
---   2. user_blocks:  ブロック関係（一方向、Twitter 方式）
+-- Purpose:
+--   1. user_reports: report records (targets: post / user / quote)
+--   2. user_blocks:  block relationships (one-way, Twitter style)
 --
--- 設計判断:
---   - 通報対象は post / user / quote の 3 種（公式名言も通報可）
---   - 同じ人が同じ post/quote を 2 回通報できない（嫌がらせ通報スパム防止）
---   - ブロックは一方向、相手に通知しない（Twitter 方式）
---   - 自分自身をブロックできない
+-- Design decisions:
+--   - 3 report target types: post / user / quote (official quotes can also be reported)
+--   - The same person cannot report the same post/quote twice (prevents harassment report spam)
+--   - Blocking is one-way and the other side is not notified (Twitter style)
+--   - You cannot block yourself
 --
--- 通報通知の運用（Phase C で実装、このファイルでは構造のみ）:
---   - Database Webhook → Edge Function → メール (運営宛)
---   - もしくは Web 管理画面で status='pending' を定期確認
+-- Handling report notifications (implemented in Phase C; this file only has the structure):
+--   - Database Webhook → Edge Function → email (to the operator)
+--   - or periodically check status='pending' in a web admin screen
 --
--- 実行順序:
---   005 完了後（user_posts 参照のため）
+-- Execution order:
+--   After 005 is done (because it references user_posts)
 -- ============================================================
 
 -- ============================================
--- 1. user_reports テーブル
+-- 1. user_reports table
 -- ============================================
 CREATE TABLE IF NOT EXISTS public.user_reports (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -36,14 +36,14 @@ CREATE TABLE IF NOT EXISTS public.user_reports (
     created_at      timestamptz NOT NULL DEFAULT now(),
     resolved_at     timestamptz,
 
-    -- 対象は少なくとも 1 つ必須
+    -- At least 1 target is required
     CONSTRAINT user_reports_target_required CHECK (
         target_post_id IS NOT NULL
         OR target_user_id IS NOT NULL
         OR target_quote_id IS NOT NULL
     ),
 
-    -- 同一投稿の重複通報禁止（NULL は NULL と区別、重複なし扱い）
+    -- No duplicate reports on the same post (NULL is distinct from NULL, so treated as no duplicate)
     CONSTRAINT user_reports_unique_per_post
         UNIQUE NULLS NOT DISTINCT (reporter_id, target_post_id),
     CONSTRAINT user_reports_unique_per_quote
@@ -60,23 +60,23 @@ COMMENT ON TABLE public.user_reports IS '通報。target_post_id/target_user_id/
 -- ============================================
 ALTER TABLE public.user_reports ENABLE ROW LEVEL SECURITY;
 
--- SELECT: 自分の通報のみ閲覧可
+-- SELECT: only your own reports are visible
 DROP POLICY IF EXISTS "user_reports_select_own" ON public.user_reports;
 CREATE POLICY "user_reports_select_own"
     ON public.user_reports FOR SELECT
     USING (auth.uid() = reporter_id);
 
--- INSERT: 自分の reporter_id で通報
+-- INSERT: report with your own reporter_id
 DROP POLICY IF EXISTS "user_reports_insert_own" ON public.user_reports;
 CREATE POLICY "user_reports_insert_own"
     ON public.user_reports FOR INSERT
     WITH CHECK (auth.uid() = reporter_id);
 
--- UPDATE: 不可（status 変更は service_role/モデレーション RPC）
--- DELETE: 不可（通報の取り消しは認めない、運営側で dismiss）
+-- UPDATE: not allowed (status changes go through service_role / moderation RPC)
+-- DELETE: not allowed (withdrawing a report is not permitted; the operator dismisses it)
 
 -- ============================================
--- 3. user_blocks テーブル
+-- 3. user_blocks table
 -- ============================================
 CREATE TABLE IF NOT EXISTS public.user_blocks (
     blocker_id       uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
@@ -97,31 +97,31 @@ COMMENT ON TABLE public.user_blocks IS 'ブロック関係。一方向、相手�
 -- ============================================
 ALTER TABLE public.user_blocks ENABLE ROW LEVEL SECURITY;
 
--- SELECT: 自分がブロックしてる関係のみ閲覧可
--- ブロックされた側は誰がブロックしてるかわからない
+-- SELECT: only block relationships you created are visible
+-- The blocked side cannot see who is blocking them
 DROP POLICY IF EXISTS "user_blocks_select_own" ON public.user_blocks;
 CREATE POLICY "user_blocks_select_own"
     ON public.user_blocks FOR SELECT
     USING (auth.uid() = blocker_id);
 
--- INSERT: 自分の blocker_id でブロック追加
+-- INSERT: add a block with your own blocker_id
 DROP POLICY IF EXISTS "user_blocks_insert_own" ON public.user_blocks;
 CREATE POLICY "user_blocks_insert_own"
     ON public.user_blocks FOR INSERT
     WITH CHECK (auth.uid() = blocker_id);
 
--- DELETE: 自分のブロック解除のみ
+-- DELETE: only removing your own blocks
 DROP POLICY IF EXISTS "user_blocks_delete_own" ON public.user_blocks;
 CREATE POLICY "user_blocks_delete_own"
     ON public.user_blocks FOR DELETE
     USING (auth.uid() = blocker_id);
 
--- UPDATE: 不可
+-- UPDATE: not allowed
 
 -- ============================================
--- 5. ブロック時にフォロー関係も双方向解除する trigger
+-- 5. Trigger that also removes follow relationships in both directions on block
 -- ============================================
--- ユーザーが他人をブロックしたら、お互いのフォロー関係は強制解除
+-- When a user blocks someone, the follow relationships between them are forcibly removed
 CREATE OR REPLACE FUNCTION public.unfollow_on_block()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -129,11 +129,11 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 BEGIN
-    -- 自分 → 相手のフォロー削除
+    -- Delete the follow from you → them
     DELETE FROM public.user_follows
     WHERE follower_id = NEW.blocker_id
       AND followed_user_id = NEW.blocked_user_id;
-    -- 相手 → 自分のフォロー削除
+    -- Delete the follow from them → you
     DELETE FROM public.user_follows
     WHERE follower_id = NEW.blocked_user_id
       AND followed_user_id = NEW.blocker_id;

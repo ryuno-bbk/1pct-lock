@@ -1,24 +1,25 @@
 -- ============================================================
 -- 009_b_moderation_v2.sql
--- Phase B-4: モデレーション機能の RPC 追加 (006 の補完)
+-- Phase B-4: add RPCs for moderation (complements 006)
 -- ============================================================
--- 目的:
---   1. 008 で定義した 3 つのフィード RPC にブロック除外フィルタを追加
+-- Purpose:
+--   1. Add a block exclusion filter to the 3 feed RPCs defined in 008
 --      (fetch_mixed_feed_random / fetch_following_feed / fetch_tag_feed)
---   2. アカウント削除 RPC (delete_my_account) を追加
+--   2. Add the account deletion RPC (delete_my_account)
 --
--- 設計判断:
---   - ブロック対象は user_posts のみ (post 部分のみフィルタ)
---   - 偉人 (authors) はブロック対象外 (公式名言は通報のみで運営対応)
---   - アカウント削除は auth.users 削除 → public.users CASCADE で関連データ全消去
+-- Design decisions:
+--   - Blocking applies only to user_posts (only the post part is filtered)
+--   - Historical figures (authors) cannot be blocked (official quotes can only be reported, and the
+--     operator handles them)
+--   - Account deletion: delete auth.users → public.users CASCADE erases all related data
 --
--- 実行順序:
---   006 (user_reports / user_blocks テーブル定義) 完了後
---   何度実行しても安全 (CREATE OR REPLACE)
+-- Run order:
+--   after 006 (user_reports / user_blocks table definitions)
+--   safe to run any number of times (CREATE OR REPLACE)
 -- ============================================================
 
 -- ============================================
--- 1. fetch_mixed_feed_random (ブロック除外付き)
+-- 1. fetch_mixed_feed_random (with block exclusion)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.fetch_mixed_feed_random(limit_count integer DEFAULT 50)
 RETURNS TABLE (
@@ -83,7 +84,7 @@ REVOKE EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer) TO authenticated;
 
 -- ============================================
--- 2. fetch_following_feed (ブロック除外付き)
+-- 2. fetch_following_feed (with block exclusion)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.fetch_following_feed(limit_count integer DEFAULT 50)
 RETURNS TABLE (
@@ -156,7 +157,7 @@ REVOKE EXECUTE ON FUNCTION public.fetch_following_feed(integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.fetch_following_feed(integer) TO authenticated;
 
 -- ============================================
--- 3. fetch_tag_feed (ブロック除外付き)
+-- 3. fetch_tag_feed (with block exclusion)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.fetch_tag_feed(
     target_tag  text,
@@ -228,10 +229,10 @@ GRANT  EXECUTE ON FUNCTION public.fetch_tag_feed(text, integer) TO authenticated
 -- ============================================
 -- 4. delete_my_account RPC
 -- ============================================
--- 認証ユーザーが自分のアカウントを削除する。
--- auth.users 削除 → public.users CASCADE で全関連データ消去
+-- An authenticated user deletes their own account.
+-- Delete auth.users → public.users CASCADE erases all related data
 -- (user_posts / user_likes / user_follows / user_blocks / user_reports
---  / block_sessions 等すべて ON DELETE CASCADE で連鎖削除)
+--  / block_sessions etc. are all deleted in cascade by ON DELETE CASCADE)
 CREATE OR REPLACE FUNCTION public.delete_my_account()
 RETURNS void
 LANGUAGE plpgsql
@@ -245,10 +246,10 @@ BEGIN
         RAISE EXCEPTION 'Not authenticated';
     END IF;
 
-    -- public.users 削除 (CASCADE で関連データ消える)
+    -- Delete public.users (related data is removed by CASCADE)
     DELETE FROM public.users WHERE id = target_user_id;
 
-    -- auth.users 削除 (SECURITY DEFINER + postgres owner で許可される)
+    -- Delete auth.users (allowed through SECURITY DEFINER + postgres owner)
     DELETE FROM auth.users WHERE id = target_user_id;
 END;
 $$;

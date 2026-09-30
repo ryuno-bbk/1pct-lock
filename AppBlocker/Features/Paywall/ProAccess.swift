@@ -2,18 +2,19 @@
 //  ProAccess.swift
 //  AppBlocker
 //
-//  Pro 機能アクセスの判定。
-//  isPro はサーバー真実 (UserAuthService.isPro ← Supabase users.is_pro ← RevenueCat webhook) と
-//  RevenueCat entitlement のクライアント即時反映 (PurchaseService.entitlementIsPro) の OR。
-//  購入直後は webhook 到達前でも entitlement 側が先に true になるため即座に解放され、
-//  サーバー側の失効は次回 UserAuthService.refreshProfile() で反映される。
+//  Checks access to Pro features.
+//  isPro is the OR of the server truth (UserAuthService.isPro ← Supabase users.is_pro ← RevenueCat
+//  webhook) and the immediate client-side RevenueCat entitlement (PurchaseService.entitlementIsPro).
+//  Right after a purchase, the entitlement becomes true first, even before the webhook arrives, so
+//  access is unlocked immediately,
+//  and an expiry on the server side is applied on the next UserAuthService.refreshProfile().
 //
 
 import Foundation
 import SwiftUI
 import Combine
 
-/// Pro 機能アクセスの状態管理。
+/// State management for Pro feature access.
 @MainActor
 final class ProAccess: ObservableObject {
     private static let storageKey = "isPro"
@@ -28,23 +29,27 @@ final class ProAccess: ObservableObject {
     #endif
     private var cancellables = Set<AnyCancellable>()
 
-    /// C1: 直近の「新鮮な確定」時刻。scenePhase .active は頻発するため 1 時間スロットル
+    /// C1: time of the most recent "fresh confirmation". scenePhase .active fires often, so it is throttled
+    /// to 1 hour
     private var lastFreshReconcileAt: Date?
-    /// C1: リコンサイルの多重実行防止 (.task と scenePhase .active がほぼ同時に走るため)
+    /// C1: prevents running the reconcile more than once at a time (.task and scenePhase .active run almost
+    /// at the same time)
     private var isReconciling = false
 
     static let shared = ProAccess()
 
     private init() {
-        // オフライン起動用: 前回確定した merged (server || entitlement) 値をキャッシュから初期化
+        // For offline launch: initialize from the cache with the last confirmed merged (server || entitlement)
+        // value
         self.isPro = UserDefaults.standard.bool(forKey: Self.storageKey)
         #if DEBUG
         self.debugOverride = UserDefaults.standard.bool(forKey: Self.debugOverrideKey)
         #endif
 
-        // 注意: PurchaseService.shared の init は Purchases.shared (RevenueCat SDK) に触れない設計。
-        // そのため PurchaseService.configure() (アプリ起動時の SDK 初期化) より前にこの購読が
-        // 走っても安全 — Combine は現在値を即座に emit するので起動直後の状態も正しく反映される。
+        // Note: the init of PurchaseService.shared is designed not to touch Purchases.shared (RevenueCat SDK).
+        // So it is safe even if this subscription runs before PurchaseService.configure() (SDK
+        // initialization at app launch). Combine emits the current value immediately, so the state right
+        // after launch is also reflected correctly.
         UserAuthService.shared.$isPro
             .sink { [weak self] value in
                 self?.serverIsPro = value
@@ -62,13 +67,14 @@ final class ProAccess: ObservableObject {
 
     private func recompute() {
         let merged = serverIsPro || entitlementIsPro
-        // 永続化には DEBUG override を含めない (デバッグ抜けで本番同然になる事故を防ぐ)
+        // The DEBUG override is not persisted (prevents an accident where a leftover debug value makes it act
+        // like production)
         UserDefaults.standard.set(merged, forKey: Self.storageKey)
-        // C1: 正方向 (Pro 確定) だけは即ミラー反映 — 購入直後に entitlement が true になった瞬間、
-        // スケジュール/位置遮断の実行ゲートが待ちなしで開く。
-        // ⚠️ 負方向 (false) はここでは絶対に書かない: 起動直後の sink は必ず false/false で一度走るため、
-        // ここで false を書くとオフライン起動の Pro ユーザーの遮断が誤解除される。
-        // 失効の確定は reconcileEntitlementMirror の新鮮なフェッチのみが行う
+        // C1: only the positive direction (Pro confirmed) is mirrored immediately. The moment the entitlement
+        // becomes true right after a purchase, the run gate for schedule/location blocking opens with no wait.
+        // ⚠️ Never write the negative direction (false) here: the sink right after launch always runs once
+        // with false/false, so writing false here would wrongly unlock blocking for Pro users launching offline.
+        // Only the fresh fetch in reconcileEntitlementMirror confirms an expiry
         if merged {
             AppGroupStorage.shared.saveProBlockingEntitled(true)
         }
@@ -80,7 +86,8 @@ final class ProAccess: ObservableObject {
     }
 
     #if DEBUG
-    /// DEBUG ビルド専用: ペイウォールの「Pro として進む」ボタンから呼ばれる一時オーバーライド。
+    /// DEBUG builds only: a temporary override called from the paywall's "Pro として進む" ("Continue as Pro")
+    /// button.
     func setDebugOverride(_ on: Bool) {
         debugOverride = on
         UserDefaults.standard.set(on, forKey: Self.debugOverrideKey)
@@ -88,22 +95,25 @@ final class ProAccess: ObservableObject {
     }
     #endif
 
-    /// C1: 課金失効リコンサイル。起動時 (.task) とフォアグラウンド復帰時に呼ぶ。
-    /// 「server is_pro と RevenueCat entitlement の両方が新鮮なフェッチで false と確定した」
-    /// ときだけ App Group ミラーを false にし、Pro 遮断 (スケジュール/位置) の実行を止める。
-    /// - オフライン / 一時的な通信失敗では何も書かない (キャッシュのみでの強制 OFF 禁止)
-    /// - スケジュールの isEnabled / 場所の設定には一切触れない
-    ///   (設定は残り、再課金でミラーが true に戻れば自動復活する = サンクコスト型ペイウォール設計)
+    /// C1: purchase expiry reconcile. Called at launch (.task) and when returning to the foreground.
+    /// Only when "both server is_pro and the RevenueCat entitlement are confirmed false by fresh fetches"
+    /// is the App Group mirror set to false, which stops Pro blocking (schedule/location) from running.
+    /// - Nothing is written when offline / on a temporary network failure (no forced OFF based only on the
+    ///   cache)
+    /// - Never touch the schedule's isEnabled / the place settings
+    ///   (the settings remain, and if the mirror goes back to true on a new purchase, it comes back
+    ///   automatically = sunk-cost paywall design)
     func reconcileEntitlementMirror() async {
         #if DEBUG
         if debugOverride {
-            // デバッグ Pro 中に実フェッチの false で遮断が止まると検証にならないため許可で固定
+            // While debug Pro is on, blocking stopping because a real fetch returned false would make testing
+            // useless, so it is fixed to allowed
             AppGroupStorage.shared.saveProBlockingEntitled(true)
             return
         }
         #endif
 
-        // サインイン確定前は判定しない (H6: オフライン起動では userId が nil になり得る)
+        // Do not decide before sign-in is confirmed (H6: on offline launch userId can be nil)
         guard UserAuthService.shared.userId != nil else { return }
 
         guard !isReconciling else { return }
@@ -111,31 +121,34 @@ final class ProAccess: ObservableObject {
         isReconciling = true
         defer { isReconciling = false }
 
-        // 新鮮なフェッチ (それぞれ nil = 取得失敗 = 未確定)
+        // Fresh fetches (each nil = fetch failed = not confirmed)
         let freshServer = await UserAuthService.shared.fetchIsProFresh()
         let freshEntitlement = await PurchaseService.shared.fetchEntitlementIsProFresh()
 
         if freshServer == true || freshEntitlement == true {
-            // どちらかが新鮮に Pro と確定 → 許可 + 残存 ON の遮断を即時再適用 (再課金の自動復活)
+            // Either one is freshly confirmed as Pro → allow + immediately reapply blocking that is still ON
+            // (automatic return after a new purchase)
             lastFreshReconcileAt = Date()
             AppGroupStorage.shared.saveProBlockingEntitled(true)
             ScheduleManager.shared.checkScheduleState()
             LocationManager.shared.checkCurrentLocationAgainstAllGeofences()
         } else if freshServer == false && freshEntitlement == false {
-            // 両方が新鮮に非 Pro と確定 → 失効。shield だけ即時解除 (設定と isEnabled は残す)
+            // Both are freshly confirmed as not Pro → expired. Only remove the shield immediately (keep the settings
+            // and isEnabled)
             lastFreshReconcileAt = Date()
             AppGroupStorage.shared.saveProBlockingEntitled(false)
-            ScheduleManager.shared.checkScheduleState()   // reconcileShieldNow がゲートを見て解除方向に働く
+            ScheduleManager.shared.checkScheduleState()   // reconcileShieldNow checks the gate and works in the unlock direction
             LocationManager.shared.removeShield()
-            // エリート限定アイコンもプライマリへ巻き戻す (2026-07-29 実機バグFB:
-            // 失効後もホーム画面が有料アイコンのままだった)
+            // Also revert the Elite-only icon to the primary one (2026-07-29 real-device bug feedback:
+            // the home screen kept the paid icon after expiry)
             AppIconCatalog.revertPaidIconIfLapsed()
             print("🔒 Pro entitlement lapsed (fresh) — schedule/location blocking disabled")
         }
-        // それ以外 (片方でも未確定で true が無い) → 何も書かない = 前回の確定を維持
+        // Otherwise (at least one is not confirmed and there is no true) → write nothing = keep the last
+        // confirmed value
     }
 
-    /// 指定された BlockMode が Pro 限定機能か
+    /// Whether the given BlockMode is a Pro-only feature
     static func requiresPro(_ mode: BlockMode) -> Bool {
         switch mode {
         case .timer: return false
@@ -143,7 +156,7 @@ final class ProAccess: ObservableObject {
         }
     }
 
-    /// 指定された BlockMode が現状アクセス可能か
+    /// Whether the given BlockMode is currently accessible
     func canAccess(_ mode: BlockMode) -> Bool {
         !Self.requiresPro(mode) || isPro
     }

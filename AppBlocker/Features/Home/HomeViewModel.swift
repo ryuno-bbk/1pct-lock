@@ -2,7 +2,7 @@
 //  HomeViewModel.swift
 //  AppBlocker
 //
-//  ホーム画面のビジネスロジック
+//  Business logic of the home screen
 //
 
 import Foundation
@@ -34,7 +34,7 @@ final class HomeViewModel: ObservableObject {
 
     // MARK: - Public Methods
 
-    /// 初期データを読み込み
+    /// Load initial data
     @MainActor
     func loadInitialData() {
         currentQuote = quoteService.currentQuote ?? Quote.samples.first
@@ -48,7 +48,7 @@ final class HomeViewModel: ObservableObject {
         }
     }
 
-    /// 名言をシャッフル
+    /// Shuffle the quote
     func shuffleQuote() {
         quoteService.shuffleQuote()
         currentQuote = quoteService.currentQuote
@@ -58,7 +58,7 @@ final class HomeViewModel: ObservableObject {
         }
     }
 
-    /// 名言を選択
+    /// Select a quote
     func selectQuote(_ quote: Quote) {
         currentQuote = quote
         quoteService.selectQuote(quote)

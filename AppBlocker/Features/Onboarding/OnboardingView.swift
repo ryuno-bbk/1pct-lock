@@ -2,18 +2,19 @@
 //  OnboardingView.swift
 //  AppBlocker
 //
-//  オンボーディングフロー (2026-07-08 診断クイズ型に全面再設計、設計書 v3 準拠):
-//  Splash(モノグラム) → フィードプレビュー → 診断クイズ6問+ショック2拍+理想の未来
-//  → Dream → NameInput → AppleSignIn → FamilyControls → プラン生成 → Paywall → MainTab
+//  Onboarding flow (2026-07-08 fully redesigned as a diagnostic quiz, follows design doc v3):
+//  Splash (monogram) → feed preview → 6 diagnostic quiz questions + 2 shock beats + ideal future
+//  → Dream → NameInput → AppleSignIn → FamilyControls → plan generation → Paywall → MainTab
 //
-//  設計原則:
-//   - Cal AI / Opal 型「診断させて投資させる」構造。全質問はショック演出・プラン・
-//     将来のペイウォール文言のどれかに必ず接続する (使い道のない質問は置かない)
-//   - ショックは過去形 (「もう失った」)。依存年数 × 1日時間 → 総損失 → 資格の買い物カゴ
-//   - FamilyControls と AppleSignIn の順序: サインイン (小さなお願い) → Screen Time 権限
-//     (大きなお願い) のフット・イン・ザ・ドア。権限付与は必ずペイウォールより前
-//   - クイズ回答は @AppStorage 保持 → サインイン後に user_onboarding_profiles へ push
-//     (成功時のみ pending 消費)
+//  Design principles:
+//   - Cal AI / Opal style "make them diagnose, make them invest" structure. Every question must connect
+//     to at least one of: the shock scene, the plan, or future paywall copy (no question without a use)
+//   - The shock is in the past tense ("already lost"). Years of addiction × hours per day → total loss
+//     → a shopping cart of qualifications
+//   - Order of FamilyControls and AppleSignIn: sign-in (small ask) → Screen Time permission
+//     (big ask), foot-in-the-door. Permission is always granted before the paywall
+//   - Quiz answers are kept in @AppStorage → pushed to user_onboarding_profiles after sign-in
+//     (pending values are consumed only on success)
 //
 
 import SwiftUI
@@ -21,14 +22,16 @@ import AuthenticationServices
 import StoreKit
 import FamilyControls
 
-// MARK: - 流入元 (2026-07-17 追加)
+// MARK: - Referral source (added 2026-07-17)
 
-/// 「1%をどこで知ったか」。rawValue = 036_referral_source.sql の値と一致させること。
-/// OnboardingQuiz.swift は別エージェントが編集中のため、このファイルに定義する
-/// (QuizSingleChoiceStepView は Option: RawRepresentable & CaseIterable & Hashable, RawValue == String を要求するのみ)
+/// "Where did you hear about 1%?". rawValue must match the values in 036_referral_source.sql.
+/// Defined in this file because OnboardingQuiz.swift is being edited by another agent
+/// (QuizSingleChoiceStepView only requires Option: RawRepresentable & CaseIterable & Hashable,
+/// RawValue == String)
 enum QuizReferralSource: String, CaseIterable {
-    // 表示順 = allCases (宣言順)。2026-07-25 ユーザー指定で「友達・知人」を App Store の下へ移動。
-    // rawValue は 036_referral_source.sql と一致させること (順序を変えても DB 値は不変)
+    // Display order = allCases (declaration order). On 2026-07-25 the user asked to move
+    // "友達・知人" ("Friends or family") below App Store.
+    // rawValue must match 036_referral_source.sql (changing the order does not change the DB values)
     case tiktok    = "tiktok"
     case instagram = "instagram"
     case youtube   = "youtube"
@@ -39,18 +42,18 @@ enum QuizReferralSource: String, CaseIterable {
     func label(_ lang: AppLanguage) -> String {
         let jp = lang == .japanese
         switch self {
-        case .tiktok:    return "TikTok" // 文言はユーザー添削待ち
-        case .instagram: return "Instagram" // 文言はユーザー添削待ち
-        case .youtube:   return "YouTube" // 文言はユーザー添削待ち
-        case .friend:    return jp ? "友達・知人" : "Friends or family" // 文言はユーザー添削待ち
-        case .appStore:  return "App Store" // 2026-07-17 ユーザー添削済み (「で見つけた」削除)
-        case .other:     return jp ? "その他" : "Other" // 文言はユーザー添削待ち
+        case .tiktok:    return "TikTok" // Copy waiting for user review
+        case .instagram: return "Instagram" // Copy waiting for user review
+        case .youtube:   return "YouTube" // Copy waiting for user review
+        case .friend:    return jp ? "友達・知人" : "Friends or family" // Copy waiting for user review
+        case .appStore:  return "App Store" // Reviewed by the user on 2026-07-17 (removed "で見つけた" ("found on"))
+        case .other:     return jp ? "その他" : "Other" // Copy waiting for user review
         }
     }
 
-    // 行頭の本物ブランドアイコン (Assets/ReferralIcons、2026-07-25 実機FBでSF Symbols代替を
-    // 却下されgit履歴 13bb33b から復元)。TikTok/Instagram/YouTube は実アプリアイコン、
-    // App Store は Apple 公式素材
+    // Real brand icon at the start of the row (Assets/ReferralIcons. On 2026-07-25 real-device feedback
+    // rejected the SF Symbols substitute, so they were restored from git history 13bb33b).
+    // TikTok/Instagram/YouTube use the real app icons, App Store uses official Apple material
     var iconAsset: String? {
         switch self {
         case .tiktok:    return "referral-tiktok"
@@ -61,7 +64,7 @@ enum QuizReferralSource: String, CaseIterable {
         }
     }
 
-    /// ブランドアイコンが無い選択肢の SF Symbol
+    /// SF Symbol for options that have no brand icon
     var iconSystemName: String? {
         switch self {
         case .friend: return "person.2.fill"
@@ -74,66 +77,75 @@ enum QuizReferralSource: String, CaseIterable {
 // MARK: - Step
 
 enum OnboardingStep: Int, CaseIterable {
-    // PHASE 0 — フック
+    // PHASE 0: hook
     case splash
     case feedPreview
-    // 流入元 (2026-07-17 追加): 「どこで知ったか」はフィードプレビューの直後・記憶が
-    // 最も新しいタイミングで聞く。TikTok 広告の流入比率把握用 (036 SQL)
+    // Referral source (added 2026-07-17): "where did you hear about us" is asked right after the feed
+    // preview, when the memory is freshest. Used to measure the share of users coming from TikTok ads
+    // (036 SQL)
     case referralSource
     case moderationPolicy
-    // PHASE 1 — 権限プライミング (2026-07 再設計で診断より前に移動。
-    // Screen Time は「アプリの使用に必須」の単独ページとして先に片付ける)
+    // PHASE 1: permission priming (moved before the diagnosis in the 2026-07 redesign.
+    // Screen Time is handled first, as a standalone page saying it is "required to use the app")
     case familyControls
-    // PHASE 2 — 診断
+    // PHASE 2: diagnosis
     case quizBirthDate
     case quizGender
-    // quizOccupation (現在の立場) は 2026-07-19 ユーザー決定で削除 — QuizLossReport.build の
-    // occupation 引数は元々未使用で副作用ゼロ。user_onboarding_profiles.occupation は NULL になる
+    // quizOccupation (current status) was removed by user decision on 2026-07-19. The occupation argument
+    // of QuizLossReport.build was never used, so there are zero side effects.
+    // user_onboarding_profiles.occupation becomes NULL
     case quizDailyHours
     case usageReveal
-    // quizAddictionYears / shockAchievements は 2026-07-17 ユーザー承認で廃止
-    // (「今の1日時間×依存年数」の過去総額が数学的に無理くりのため。shockLoss = 80歳投影に一本化)
+    // quizAddictionYears / shockAchievements were dropped with user approval on 2026-07-17
+    // (the past total of "current hours per day × years of addiction" was mathematically far-fetched.
+    // shockLoss is now only the projection to age 80)
     case shockLoss
     case recovery
-    // 🔴 2026-08-06 追加: 3つのロックモードを1枚で見せる。
-    // オンボが「なぜやめるべきか」しか語らず、このアプリが何をするのかを一度も見せないまま
-    // ペイウォールに到達していたため (= 何を売っているか見せずに売っていた)。
-    // 置き場所は「ショック → 覚悟」の直後 = 「覚悟はできていますか?」の次に手段を出す並び。
-    // ⚠️ step は @State で永続化していないので、ここに case を挿しても rawValue のズレは無害
+    // 🔴 Added 2026-08-06: show the 3 lock modes on one page.
+    // Onboarding only talked about "why you should quit" and reached the paywall without ever showing what
+    // this app does (= it was selling without showing what it sells).
+    // Placement is right after "shock → resolve", so the means come right after
+    // "覚悟はできていますか?" ("Are you ready?").
+    // ⚠️ step is a @State and is not persisted, so the rawValue shift from inserting a case here is harmless
     case lockModes
-    // quizGoal (取り戻した時間で何を成し遂げますか? 6択) は 2026-07-19 ユーザー決定で削除 —
-    // 目標宣言 (dream) と実質重複のため。回答は user_onboarding_profiles.goal に NULL が入る
+    // quizGoal ("What will you achieve with the time you get back?", 6 choices) was removed by user
+    // decision on 2026-07-19, because it effectively duplicates the goal declaration (dream).
+    // The answer is stored as NULL in user_onboarding_profiles.goal
     case idealFuture
-    // PHASE 3 — 宣言 (既存資産)
+    // PHASE 3: declaration (existing assets)
     case dream
-    // 署名 (2026-07-17 追加): 宣言した目標に指で署名させ、コミットメントを再度刻ませる
+    // Signature (added 2026-07-17): have the user sign the declared goal with a finger to lock in the
+    // commitment again
     case signature
     case nameInput
     case appleSignIn
-    // PHASE 4 — ペイウォール直行 (2026-07-19 ユーザー決定: 「プラン構築」はこのアプリに合わないため
-    // .plan を除外。将来「スケジュール提案 → 手直し → 有効化はPro」ページに作り直す構想あり)
+    // PHASE 4: straight to the paywall (2026-07-19 user decision: "plan building" does not fit this app,
+    // so .plan is excluded. There is an idea to rebuild it later as a "schedule suggestion → edit →
+    // enabling it requires Pro" page)
     case paywall
-    // PHASE 5 — 初期セットアップ (2026-07-15 追加): 最初にロックするアプリを選ばせ、
-    // 3モード共通の初期値として保存する (診断で見せた「トップ3」の直後の記憶が残っているうちに)
+    // PHASE 5: initial setup (added 2026-07-15): have the user choose the first apps to lock, and save them
+    // as the shared initial value for all 3 modes (while the "top 3" shown in the diagnosis is still fresh
+    // in memory)
     case appSelect
-    // PHASE 6 — App Store 評価 (2026-07-19 新設。タイミングは「最後」がユーザー指定)
+    // PHASE 6: App Store rating (new on 2026-07-19. The user specified the timing as "last")
     case rating
-    // PHASE 7 — 最初のロックをその場で開始させる (2026-09-05 新設)。
-    // 🔴 enum の末尾に足すこと。途中に挿すと既存 case の rawValue が全部ずれて
-    //    advance()/retreat() の連番と progressFraction が壊れる
+    // PHASE 7: make the user start the first lock right there (new on 2026-09-05).
+    // 🔴 Add it at the end of the enum. Inserting it in the middle shifts the rawValue of every existing
+    //    case and breaks the sequential numbering in advance()/retreat() and progressFraction
     case firstLock
 
-    /// enum に残してあるがフローを通らない step。
-    /// 進捗バーの分母から外さないと、飛ばした分だけバーが飛び跳ねて見える。
-    /// (case ごと消さないのは、いつでも1行で復活できるようにしておくため)
+    /// Steps that remain in the enum but are not part of the flow.
+    /// If they are not removed from the progress bar denominator, the bar appears to jump by the skipped
+    /// amount.
+    /// (The cases are not deleted so they can be restored with one line at any time)
     static let excludedFromFlow: Set<OnboardingStep> = [
-        .quizGender,  // 2026-08-06 削除。収集していたがアプリのどこからも読んでいなかった
-        .nameInput,   // 2026-08-06 削除。Guideline 4 対応で入力欄を全廃
-        .rating       // 2026-08-06 削除。Guideline 5.6.3 でオンボ中の評価依頼が禁止
+        .quizGender,  // Removed 2026-08-06. It was collected but never read anywhere in the app
+        .nameInput,   // Removed 2026-08-06. All input fields were removed to address Guideline 4
+        .rating       // Removed 2026-08-06. Guideline 5.6.3 forbids rating requests during onboarding
     ]
 
-    /// 上部 2px 進捗バーの進捗率 (クイズ開始〜サインインで 0→1)。対象外ステップは nil。
-    /// 実際に通る step だけを数える (rawValue の連番ではない)
+    /// Progress of the 2px progress bar at the top (0→1 from quiz start to sign-in). nil for steps not
+    /// covered. Counts only the steps actually passed through (not the rawValue sequence)
     var progressFraction: Double? {
         let start = OnboardingStep.quizBirthDate.rawValue
         let end = OnboardingStep.appleSignIn.rawValue
@@ -152,40 +164,44 @@ struct OnboardingView: View {
     @StateObject private var familyControlsService = AuthorizationService.shared
     @StateObject private var userAuth = UserAuthService.shared
     @Binding var hasCompletedOnboarding: Bool
-    /// M8 (2026-07-22 監査): OnboardingView が画面に滞在している間 true。AppBlockerApp の
-    /// ルート条件に使い、再サインイン直後に条件が揃っても (返却フロー実行中は) MainTabView へ
-    /// 切り替わらないようにする。
+    /// M8 (2026-07-22 audit): true while OnboardingView is on screen. Used in the root condition of
+    /// AppBlockerApp so that the app does not switch to MainTabView right after re-sign-in even if the
+    /// conditions are met (while the returning-user flow is running).
     @Binding var onboardingActive: Bool
 
-    // 2026-07-29 ユーザー指示でスプラッシュ (刻印アニメ) を廃止し、ARISE型ヒーローから開始。
-    // .splash の enum case と MonogramSplashView はロールバック用に残置 (rawValue 順序も不変)
+    // On 2026-07-29 the splash (engraving animation) was removed on user instruction, and the flow now
+    // starts from the ARISE-style hero.
+    // The .splash enum case and MonogramSplashView are kept for rollback (rawValue order is unchanged too)
     @State private var step: OnboardingStep = .feedPreview
-    /// L17 (2026-07-20 監査): 直近の遷移が「戻る」(retreat) だったか。ShockLossStepView が
-    /// 80歳以上判定で onAppear 即スキップする際、前進 (advance) と後退 (retreat) を区別するために使う
+    /// L17 (2026-07-20 audit): whether the most recent transition was "back" (retreat). Used to tell forward
+    /// (advance) from backward (retreat) when ShockLossStepView skips immediately in onAppear for age 80+
     @State private var lastMoveWasBack = false
 
-    /// 「すでにアカウントを持っている」経路か。true の間は advance() が診断クイズ・プラン等を
-    /// スキップする短縮フロー (appleSignIn → familyControls → rating → paywall → appSelect) になる。
-    /// 2026-07-19 実機バグの根本原因: 旧実装はこの経路が familyControls を一度も通らず、
-    /// 完了時の表示条件 (isAuthorized) を満たせずに appSelect で無反応 (詰み) になっていた
+    /// Whether this is the "I already have an account" path. While true, advance() uses a short flow that
+    /// skips the diagnostic quiz, plan, etc. (appleSignIn → familyControls → rating → paywall → appSelect).
+    /// Root cause of the 2026-07-19 real-device bug: in the old implementation this path never went through
+    /// familyControls, so the display condition on completion (isAuthorized) was never met, and appSelect
+    /// did nothing (stuck)
     @State private var isReturningUser = false
-    /// M23 (2026-07-22 監査): 「すでにアカウントを持っている」を誤タップした経路の戻り先ステップ
-    /// (feedPreview/nameInput のどちらから来たか)。AppleSignInStepView の
-    /// 「アカウントを作成する」導線で、誤タップ前の画面へ戻すために使う。
+    /// M23 (2026-07-22 audit): the step to return to on the path where "I already have an account" was
+    /// tapped by mistake (whether the user came from feedPreview or nameInput). Used by the
+    /// "アカウントを作成する" ("Create account") link in AppleSignInStepView to go back to the screen before
+    /// the mistaken tap.
     @State private var returningEntryStep: OnboardingStep?
-    /// L7 (2026-07-22 監査): スクリーンタイム権限だけ後から取り消されたユーザー
-    /// (hasCompletedOnboarding=true, isSignedIn=true, isAuthorized=false) を、フル再オンボ+
-    /// Apple再サインインではなく familyControls だけの短縮経路に通すためのフラグ
+    /// L7 (2026-07-22 audit): flag that sends users whose Screen Time permission alone was revoked later
+    /// (hasCompletedOnboarding=true, isSignedIn=true, isAuthorized=false) through a short path with only
+    /// familyControls, instead of full re-onboarding + Apple re-sign-in
     @State private var isPermissionRecovery = false
 
-    // PHASE 2 の pending (従来どおり)
+    // pending values for PHASE 2 (same as before)
     @AppStorage("onboardingDisplayName") private var pendingDisplayName: String = ""
     @AppStorage("onboardingHandle") private var pendingHandle: String = ""
     @AppStorage("onboardingDream") private var pendingDream: String = ""
-    // 初期値は公開 ON (2026-07-19 ユーザー指定: プロフィール公開トグルはデフォルトオン、タップでオフ)
+    // Default is public ON (2026-07-19 user spec: the profile public toggle is on by default, tap to turn
+    // it off)
     @AppStorage("onboardingDreamPublic") private var pendingDreamPublic: Bool = true
 
-    // 診断クイズの pending (raw 値。サインイン後に user_onboarding_profiles へ push)
+    // pending values of the diagnostic quiz (raw values. Pushed to user_onboarding_profiles after sign-in)
     @AppStorage("onboardingBirthDate") private var pendingBirthDate: String = ""
     @AppStorage("onboardingGender") private var pendingGender: String = ""
     @AppStorage("onboardingOccupation") private var pendingOccupation: String = ""
@@ -202,10 +218,12 @@ struct OnboardingView: View {
         ZStack(alignment: .top) {
             AppColors.background.ignoresSafeArea()
 
-            // 実測レポートの事前暖機 (2026-07-25): 生年月日/性別の入力中 (ユーザーが時間を使う
-            // ステップ) に裏で拡張プロセス+クエリを暖め、usageReveal 到達時に1回目から実測を出す。
-            // familyControls (権限付与) より後のステップに限定。quizDailyHours では外す
-            // (usageReveal のレポートと遷移中も共存させない — 2個目白紙バグ回避)
+            // Pre-warming the usage report (2026-07-25): while the user enters birth date/gender (steps where the
+            // user spends time), warm up the extension process + query in the background so that usageReveal shows
+            // real measured data from the first try.
+            // Limited to steps after familyControls (permission grant). Not done on quizDailyHours
+            // (so it never coexists with the usageReveal report during the transition, to avoid the
+            // "second report is blank" bug)
             if step == .quizBirthDate || step == .quizGender {
                 UsageReportWarmUpView()
             }
@@ -218,7 +236,7 @@ struct OnboardingView: View {
                     FeedPreviewHookView(
                         onStart: advance,
                         onAlreadyHasAccount: {
-                            // M23: 誤タップ経路から戻れるよう、遷移前のステップを記録しておく
+                            // M23: record the step before the transition so the user can go back from the mistaken-tap path
                             returningEntryStep = step
                             isReturningUser = true
                             step = .appleSignIn
@@ -226,9 +244,10 @@ struct OnboardingView: View {
                     )
                 case .referralSource:
                     QuizSingleChoiceStepView<QuizReferralSource>(
-                        question: lang == .japanese ? "1%をどこで知りましたか?" : "Where did you hear about 1%?", // 文言はユーザー添削待ち
+                        question: lang == .japanese ? "1%をどこで知りましたか?" : "Where did you hear about 1%?", // Copy waiting for user review
                         labelProvider: { $0.label(lang) },
-                        // 2026-07-25: 本物ブランドアイコン再導入 (SF Symbols代替は実機FBで却下)
+                        // 2026-07-25: reintroduced the real brand icons (the SF Symbols substitute was rejected in real-device
+                        // feedback)
                         iconAssetProvider: { $0.iconAsset },
                         iconSystemNameProvider: { $0.iconSystemName },
                         selectionRaw: $pendingReferralSource,
@@ -245,7 +264,7 @@ struct OnboardingView: View {
                     QuizBirthDateStepView(birthDateRaw: $pendingBirthDate, onContinue: advance)
                 case .quizGender:
                     QuizSingleChoiceStepView<QuizGender>(
-                        question: lang == .japanese ? "性別を教えてください" : "How do you identify?", // 文言はユーザー添削待ち
+                        question: lang == .japanese ? "性別を教えてください" : "How do you identify?", // Copy waiting for user review
                         labelProvider: { $0.label(lang) },
                         selectionRaw: $pendingGender,
                         onContinue: advance
@@ -269,14 +288,14 @@ struct OnboardingView: View {
                         hoursLabel: hoursLabel,
                         dailyPaceLabel: QuizDailyHours(rawValue: pendingDailyHours)?.label(lang),
                         onContinue: advance,
-                        // L17: 80歳以上の自動スキップは「戻る」で再訪した場合、前進ではなく
-                        // usageReveal へ後退させる (でないと recovery との間で戻れず詰む)
+                        // L17: when the user comes back here with "back", the auto-skip for age 80+ goes backward to
+                        // usageReveal instead of forward (otherwise the user gets stuck, unable to go back past recovery)
                         onAutoSkipBack: shockLossAutoSkipBack
                     )
                 case .recovery:
                     RecoveryStepView(onContinue: advance)
                 case .lockModes:
-                    // 「覚悟はできていますか?」の次に、その手段 (3モード) を見せる (2026-08-06)
+                    // After "覚悟はできていますか?" ("Are you ready?"), show the means to do it (3 modes) (2026-08-06)
                     LockModesStepView(onContinue: advance)
                 case .idealFuture:
                     IdealFutureStepView(goal: selectedGoal, onContinue: advance)
@@ -291,11 +310,11 @@ struct OnboardingView: View {
                     SignatureStepView(dreamText: pendingDream, onContinue: advance)
                 case .nameInput:
                     NameInputStepView(
-                        // 表示名は Apple から受け取るのでここでは扱わない (2026-08-06)
+                        // The display name comes from Apple, so it is not handled here (2026-08-06)
                         handle: $pendingHandle,
                         onContinue: advance,
                         onAlreadyHasAccount: {
-                            // M23: 誤タップ経路から戻れるよう、遷移前のステップを記録しておく
+                            // M23: record the step before the transition so the user can go back from the mistaken-tap path
                             returningEntryStep = step
                             isReturningUser = true
                             step = .appleSignIn
@@ -310,21 +329,21 @@ struct OnboardingView: View {
                         pendingDream: pendingDream,
                         pendingDreamPublic: pendingDreamPublic,
                         onContinue: advance,
-                        // M23: 誤タップして来た場合に元の画面へ戻す
+                        // M23: if the user came here by a mistaken tap, return to the original screen
                         onCreateAccountInstead: {
                             isReturningUser = false
                             step = returningEntryStep ?? .feedPreview
                         },
-                        // M23: 「すでにアカウントを持っている」経路のまま新規 Apple ID でサインイン
-                        // してしまった場合、新規オンボ (13歳ゲート+診断+名前入力) へ回す
+                        // M23: if the user signs in with a new Apple ID while still on the "I already have an account" path,
+                        // send them to the new-user onboarding (age 13 gate + diagnosis + name input)
                         onDetectedNewAccount: {
                             isReturningUser = false
                             step = .quizBirthDate
                         }
                     )
                 case .paywall:
-                    // 実ペイウォール (RevenueCat 実配線済み)。閉じる/あとで/購入成功のすべてで
-                    // onClose → advance され、オンボが先へ進む (旧 PaywallPlaceholderStepView は廃止)
+                    // Real paywall (RevenueCat fully wired). Close / later / purchase success all call onClose → advance,
+                    // and onboarding moves on (the old PaywallPlaceholderStepView was removed)
                     ProPaywallView(triggeredBy: .schedule, onClose: advance)
                 case .appSelect:
                     AppSelectStepView(lang: lang, onFinish: advance)
@@ -335,15 +354,15 @@ struct OnboardingView: View {
                 }
             }
             .id(step)
-            // 非対称スライド: 新画面は右から 24pt + フェードで入り、旧画面は左へ 8pt 逃げる
+            // Asymmetric slide: the new screen enters from the right by 24pt + fade, the old screen moves 8pt left
             .transition(.asymmetric(
                 insertion: .offset(x: 24).combined(with: .opacity),
                 removal: .offset(x: -8).combined(with: .opacity)
             ))
 
-            // 上部ナビ (戻る + 2px 進捗バー)。診断フェーズ〜プランのみ表示。
-            // 戻るボタンと進捗バーを1つの HStack に統一し、常に同じ高さ・間隔で並べる
-            // (以前は個別 overlay で padding.top が 8 と 2 に食い違い、詰まって見えていた)
+            // Top nav (back + 2px progress bar). Shown only from the diagnosis phase to the plan.
+            // The back button and progress bar are combined into one HStack so they always have the same height
+            // and spacing (before, they were separate overlays with padding.top of 8 and 2, which looked cramped)
             if step.progressFraction != nil || canGoBack {
                 OnboardingTopNav(
                     fraction: step.progressFraction,
@@ -354,32 +373,34 @@ struct OnboardingView: View {
         }
         .animation(.spring(response: 0.42, dampingFraction: 0.9), value: step)
         .onAppear {
-            // M8: OnboardingView 表示中は MainTabView へ切り替えさせない
+            // M8: do not allow switching to MainTabView while OnboardingView is shown
             onboardingActive = true
-            // L7 (検知a): オンボ完了済み+サインイン済みユーザーがこの画面に居る場合の振り分け
+            // L7 (detection a): routing when a user who completed onboarding and is signed in is on this screen
             if hasCompletedOnboarding && userAuth.isSignedIn {
                 routeCompletedSignedInUser()
             }
         }
         .onChange(of: userAuth.isSignedIn) { _, signedIn in
-            // L7 (検知b): 起動直後は restoreSession() が未完了で isSignedIn=false のままのことがあり、
-            // 上の onAppear 時点では検知できない。まだ splash/feedPreview に居る間に signedIn に
-            // なった場合のみここで拾う (それ以降のステップに居れば、ユーザーは既に新規オンボ/
-            // 返却ユーザー選択などの別経路を選んでいるので上書きしない)
+            // L7 (detection b): right after launch, restoreSession() may not have finished and isSignedIn stays
+            // false, so the onAppear above cannot detect it. Only catch it here if signedIn becomes true while
+            // still on splash/feedPreview (if the user is on a later step, they already chose another path such as
+            // new-user onboarding or returning user, so do not override it)
             if signedIn && hasCompletedOnboarding && (step == .splash || step == .feedPreview) {
                 routeCompletedSignedInUser()
             }
         }
     }
 
-    /// L7/M8 (2026-07-22 Fableレビュー修正): オンボ完了済み+サインイン済みユーザーが
-    /// OnboardingView に居る場合の振り分け。
-    /// - 権限が生きている場合は即 completeOnboarding() して MainTabView へ流す。
-    ///   isSignedIn は毎起動 false から始まり restoreSession() で復元されるため、通常起動でも
-    ///   一瞬 OnboardingView (splash) が出る。M8 の onboardingActive がルートの自動切替を
-    ///   止めるようになったため、この即完了が無いと「毎起動 familyControls 画面で『次へ』を
-    ///   タップさせられる」退行になる (旧挙動 = 復元完了と同時にルートが自動で MainTabView)。
-    /// - 権限が失効している場合のみ familyControls 短縮経路 (真の L7 リカバリ) に入る。
+    /// L7/M8 (2026-07-22 Fable review fix): routing when a user who completed onboarding and is signed in is
+    /// on OnboardingView.
+    /// - If the permission is still valid, call completeOnboarding() right away and go to MainTabView.
+    ///   isSignedIn starts as false on every launch and is restored by restoreSession(), so even a normal
+    ///   launch shows OnboardingView (splash) for a moment. Since M8's onboardingActive now stops the
+    ///   automatic root switch, without this immediate completion there would be a regression where the user
+    ///   has to tap "次へ" ("Next") on the familyControls screen on every launch (old behavior = the root
+    ///   switched to MainTabView automatically as soon as the restore finished).
+    /// - Only if the permission has expired does it enter the familyControls short path (the real L7
+    ///   recovery).
     private func routeCompletedSignedInUser() {
         if familyControlsService.isAuthorized {
             completeOnboarding()
@@ -389,7 +410,8 @@ struct OnboardingView: View {
         }
     }
 
-    /// 戻れるステップか。splash/feedPreview と、副作用のある認証〜プラン以降は不可
+    /// Whether the user can go back from this step. Not allowed on splash/feedPreview, or from
+    /// authentication (which has side effects) through the plan and later
     private var canGoBack: Bool {
         switch step {
         case .splash, .feedPreview, .appleSignIn, .familyControls, .paywall, .appSelect, .rating, .firstLock:
@@ -399,8 +421,9 @@ struct OnboardingView: View {
         }
     }
 
-    /// L17: shockLoss の 80歳以上自動スキップに渡す方向付きコールバック。直近が「戻る」なら
-    /// retreat (後退)、それ以外 (通常の前進到達) なら nil を返し onContinue にフォールバックさせる
+    /// L17: direction-aware callback passed to the age-80+ auto-skip of shockLoss. If the latest move was
+    /// "back", return retreat (go backward). Otherwise (normal forward arrival) return nil and fall back to
+    /// onContinue
     private var shockLossAutoSkipBack: (() -> Void)? {
         if lastMoveWasBack {
             return { retreat() }
@@ -410,8 +433,8 @@ struct OnboardingView: View {
 
     private func retreat() {
         lastMoveWasBack = true
-        // 🔴 2026-08-06: advance 側で飛ばした .quizGender は戻る時も飛ばす。
-        // これが無いと「戻る」でフロー外の画面に着地してしまう
+        // 🔴 2026-08-06: .quizGender, which advance skips, is also skipped when going back.
+        // Without this, "back" lands on a screen that is outside the flow
         if step == .quizDailyHours {
             step = .quizBirthDate
             return
@@ -420,9 +443,9 @@ struct OnboardingView: View {
         step = prev
     }
 
-    // MARK: - 診断の派生値
+    // MARK: - Derived values of the diagnosis
 
-    /// 過去の総損失レポート (Q1年齢 + Q3時間 + Q4年数 + Q2立場から)
+    /// Total past loss report (from Q1 age + Q3 hours + Q4 years + Q2 status)
     private var lossReport: QuizLossReport {
         QuizLossReport.build(
             hours: QuizDailyHours(rawValue: pendingDailyHours) ?? .h4to6,
@@ -437,7 +460,7 @@ struct OnboardingView: View {
         QuizGoal(rawValue: pendingGoal) ?? .work
     }
 
-    /// 「1日5時間 × 4年」等 (ショック第1拍の内訳表示)
+    /// "5 hours a day × 4 years" etc. (breakdown shown in the first shock beat)
     private var hoursLabel: String {
         let h = QuizDailyHours(rawValue: pendingDailyHours) ?? .h4to6
         let y = QuizAddictionYears(rawValue: pendingAddictionYears) ?? .y3to5
@@ -448,14 +471,15 @@ struct OnboardingView: View {
 
     private func advance() {
         lastMoveWasBack = false
-        // L7: 権限回復の短縮経路。familyControls を通過 (= 再許可完了) したら即オンボ完了とする
+        // L7: short path for permission recovery. Once familyControls is passed (= permission granted again),
+        // finish onboarding immediately
         if isPermissionRecovery && step == .familyControls {
             completeOnboarding()
             return
         }
-        // 返却ユーザー (すでにアカウントを持っている) の短縮フロー。
-        // 診断クイズ・プラン構築は初回診断済みの前提でスキップし、
-        // 権限 (未許可の場合のみ) → 評価 → ペイウォール → アプリ選択 だけを通す
+        // Short flow for returning users (who already have an account).
+        // The diagnostic quiz and plan building are skipped on the assumption that the first diagnosis was
+        // already done, and only permission (only if not granted) → rating → paywall → app selection is shown
         if isReturningUser {
             switch step {
             case .appleSignIn:
@@ -465,37 +489,38 @@ struct OnboardingView: View {
                 step = .paywall
                 return
             default:
-                break  // paywall 以降 (appSelect → rating → 完了) は通常の連番と同じ
+                break  // After paywall (appSelect → rating → done) it is the same as the normal sequence
             }
         }
-        // 🔴 2026-08-06 ユーザー決定: 性別の質問 (.quizGender) をフローから外す。
-        // 収集して user_onboarding_profiles.gender に保存していたが、アプリのどこからも
-        // 読んでいなかった (既に削除済みの「立場」「目標」と同じ状態)。
-        // enum case と QuizGender はロールバック用に残置。⚠️ retreat 側にも同じ分岐が要る
+        // 🔴 2026-08-06 user decision: remove the gender question (.quizGender) from the flow.
+        // It was collected and saved to user_onboarding_profiles.gender, but never read anywhere in the app
+        // (the same situation as "status" and "goal", which were already removed).
+        // The enum case and QuizGender are kept for rollback. ⚠️ The same branch is also needed on the retreat
+        // side
         if step == .quizBirthDate {
             step = .quizDailyHours
             return
         }
-        // 🔴 2026-08-06 審査リジェクト対応 (Guideline 4 / Sign in with Apple) 第2弾:
-        // .nameInput (@ユーザーID 入力) をフローから外し、オンボから入力欄を全廃する。
-        //   - 表示名 → Apple が返した氏名を signInWithApple 内で自動採用
-        //   - @handle → AppleSignInStepView でサインイン成功後に user_xxxxxxxx を自動発番
-        // どちらも プロフィール編集 で後から変更できる (ProfileEditView に両方の編集UIあり)。
-        // ⚠️ .nameInput を消しても「既にアカウントをお持ちですか?」の復帰導線は生きている
-        //    (.feedPreview の FeedPreviewHookView にも同じ導線があるため)。
-        // enum case と NameInputStepView はロールバック用に残置 (rawValue 順序も不変)。
+        // 🔴 2026-08-06 App Review rejection fix (Guideline 4 / Sign in with Apple), part 2:
+        // remove .nameInput (@user ID input) from the flow, removing every input field from onboarding.
+        //   - Display name → the name returned by Apple is adopted automatically inside signInWithApple
+        //   - @handle → user_xxxxxxxx is issued automatically after sign-in succeeds in AppleSignInStepView
+        // Both can be changed later in profile editing (ProfileEditView has edit UI for both).
+        // ⚠️ Even with .nameInput removed, the "既にアカウントをお持ちですか?" ("Already have an account?")
+        //    return link still works (FeedPreviewHookView in .feedPreview has the same link).
+        // The enum case and NameInputStepView are kept for rollback (rawValue order is unchanged too).
         if step == .signature {
             step = .appleSignIn
             return
         }
-        // 🔴 2026-08-06 審査リジェクト対応 (Guideline 5.6.3 Developer Code of Conduct):
-        // 「オンボーディング中/初回起動時に評価を求めてはいけない。十分に使ってもらってから」。
-        // .rating ステップを飛ばしてオンボを終える。enum case と RatingStepView は
-        // ロールバック用に残置 (rawValue 順序も不変)。
-        // 評価依頼は「ロックセッションを一定回数完遂した後」など、価値が伝わった後に
-        // 出す形へ作り直すこと (ローンチ後の宿題)。
-        // .appSelect の次は .rating ではなく .firstLock (rawValue の連番では届かない)。
-        // 🔴 .rating は 5.6.3 対応で除外済みなので、ここで明示的に飛ばす
+        // 🔴 2026-08-06 App Review rejection fix (Guideline 5.6.3 Developer Code of Conduct):
+        // "Do not ask for a rating during onboarding / at first launch. Wait until the app has been used
+        // enough." Finish onboarding by skipping the .rating step. The enum case and RatingStepView are kept
+        // for rollback (rawValue order is unchanged too).
+        // Rebuild the rating request so it appears after the value is clear, for example "after completing a
+        // lock session a certain number of times" (post-launch homework).
+        // After .appSelect comes .firstLock, not .rating (the rawValue sequence does not reach it).
+        // 🔴 .rating is already excluded for 5.6.3, so skip it explicitly here
         if step == .appSelect {
             step = .firstLock
             return
@@ -512,16 +537,17 @@ struct OnboardingView: View {
     }
 
     private func completeOnboarding() {
-        // FamilyControls 権限が未取得のまま完了すると、App 側の表示条件
-        // (hasCompletedOnboarding && isAuthorized && isSignedIn) を満たせず
-        // 「ボタンを押しても何も起きない」詰みになる (2026-07-19 実機バグ)。権限取得へ差し戻す
+        // If onboarding completes without FamilyControls permission, the app-side display condition
+        // (hasCompletedOnboarding && isAuthorized && isSignedIn) is never met, and the user gets stuck with
+        // "nothing happens when I press the button" (2026-07-19 real-device bug). Send them back to get the
+        // permission
         guard familyControlsService.isAuthorized else {
-            isReturningUser = true  // 差し戻し後は短縮フロー (familyControls → rating → ...) で復帰
+            isReturningUser = true  // After being sent back, recover through the short flow (familyControls → rating → ...)
             step = .familyControls
             return
         }
-        // クイズ pending の消費はオンボ完了時。push 成功済み (onboardingQuizPushed) の場合のみ
-        // 消す — 失敗していた場合は残し、回答を無言で失わない
+        // Quiz pending values are consumed when onboarding completes. Delete them only if the push already
+        // succeeded (onboardingQuizPushed). If it failed, keep them so the answers are not silently lost
         let d = UserDefaults.standard
         if d.bool(forKey: "onboardingQuizPushed") {
             for key in ["onboardingBirthDate", "onboardingGender", "onboardingOccupation", "onboardingDailyHours",
@@ -530,9 +556,9 @@ struct OnboardingView: View {
                 d.removeObject(forKey: key)
             }
         }
-        // M8: MainTabView への切り替えを許可してから完了フラグを立てる
-        // (先に hasCompletedOnboarding を true にすると、onboardingActive がまだ true の
-        // 1フレームは意図通り MainTabView への切替を止めるが、順序を揃えておく方が安全)
+        // M8: allow switching to MainTabView first, then set the completion flag
+        // (if hasCompletedOnboarding were set to true first, the one frame where onboardingActive is still true
+        // would block the switch to MainTabView as intended, but keeping this order is safer)
         onboardingActive = false
         withAnimation(.easeInOut(duration: 0.3)) {
             hasCompletedOnboarding = true
@@ -540,10 +566,10 @@ struct OnboardingView: View {
     }
 }
 
-// MARK: - 上部ナビ (戻る + 2px 進捗バー) 統一レイアウト
+// MARK: - Top nav (back + 2px progress bar) unified layout
 
-/// 全クイズ/診断ページ共通の上部ナビ。戻るボタンは常に 44pt の領域を確保し (非表示時も
-/// 幅だけ残す)、進捗バーがボタンの有無で左右にジャンプしないようにする。
+/// Top nav shared by all quiz/diagnosis pages. The back button always reserves a 44pt area (the width
+/// stays even when hidden), so the progress bar does not jump left and right depending on the button.
 private struct OnboardingTopNav: View {
     let fraction: Double?
     let canGoBack: Bool
@@ -566,11 +592,12 @@ private struct OnboardingTopNav: View {
                     .frame(height: 2)
             }
         }
-        // バグ修正 (2026-07): 進捗バー (fraction != nil) がある画面では中の GeometryReader が
-        // HStack を可変幅にし、結果として左寄せに "見えていた" だけだった。fraction が nil の
-        // 画面 (例: moderationPolicy) では HStack がボタン分だけの固定幅に縮み、親の
-        // ZStack(alignment: .top) に中央寄せされてチェブロンが中央に浮いて見えるバグになっていた。
-        // 明示的に幅いっぱい + 左寄せにして、fraction の有無に関わらず常に左上固定にする。
+        // Bug fix (2026-07): on screens with a progress bar (fraction != nil), the GeometryReader inside made
+        // the HStack flexible width, so it only "looked" left-aligned. On screens where fraction is nil
+        // (e.g. moderationPolicy), the HStack shrank to a fixed width of just the button and was centered by
+        // the parent ZStack(alignment: .top), so the chevron appeared to float in the center.
+        // Set full width + left alignment explicitly so it is always fixed at the top left, with or without
+        // fraction.
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, 4)
         .padding(.trailing, 24)
@@ -626,7 +653,7 @@ private struct SplashStepView: View {
             Spacer()
         }
         .onAppear {
-            // 1.5 秒後に自動で次へ
+            // Automatically go to the next step after 1.5 seconds
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 onContinue()
             }
@@ -645,7 +672,7 @@ private struct ValuePropositionStepView: View {
         AppLanguage(rawValue: mainLanguageRaw) ?? .english
     }
 
-    // 2026-07 再設計: 旧「名言アプリ」の語りを廃し、SNS + 規律ステータスの訴求に刷新
+    // 2026-07 redesign: dropped the old "quote app" story and switched to the SNS + discipline status pitch
     private var pages: [ValuePage] {
         let jp = lang == .japanese
         return [
@@ -719,7 +746,7 @@ private struct ValuePageView: View {
         VStack(spacing: 32) {
             Spacer()
 
-            // 画像スロット: Assets に同名画像があれば表示、無ければ SF Symbol で代用
+            // Image slot: show the image with the same name if it exists in Assets, otherwise use an SF Symbol
             ZStack {
                 if UIImage(named: page.imageName) != nil {
                     Image(page.imageName)
@@ -754,18 +781,23 @@ private struct ValuePageView: View {
     }
 }
 
-// MARK: - 3. Dream (夢の宣言)
+// MARK: - 3. Dream (dream declaration)
 
-/// 2026-07 新設。「なりたい自分」を自由記述で宣言させる (サンクコスト/IKEA効果/目標設定)。
-/// 旧 CommitmentStepView (指署名キャンバス、何もDB保存しない空の儀式) を置き換える。
-/// ユーザー決定: 凝った署名儀式ではなく普通のテキスト入力。夢は @AppStorage に保持し、
-/// サインイン成功後に AppleSignInStepView で users.dream へ push する (サインイン前は行に書けないため)。
-/// 2026-07再設計: 入力必須化 (空では進めない) + 記入例チップで書き始めのハードルを下げる。
+/// New in 2026-07. Have the user declare "the person I want to become" as free text (sunk cost / IKEA
+/// effect / goal setting).
+/// Replaces the old CommitmentStepView (finger signature canvas, an empty ritual that saved nothing to
+/// the DB).
+/// User decision: a normal text input instead of an elaborate signature ritual. The dream is kept in
+/// @AppStorage and pushed to users.dream by AppleSignInStepView after sign-in succeeds (the row cannot
+/// be written before sign-in).
+/// 2026-07 redesign: input is required (cannot proceed if empty) + example chips lower the barrier to
+/// start writing.
 private struct DreamStepView: View {
     @Binding var dream: String
     @Binding var isPublic: Bool
-    /// 診断クイズ Q6 の回答。プレースホルダー/例文チップの出し分けにのみ使う
-    /// (2026-07-17 まで背景画像の敷き込みにも使っていたが、背景は真っ黒固定に変更)
+    /// Answer to diagnostic quiz Q6. Used only to choose the placeholder/example chips
+    /// (until 2026-07-17 it was also used to lay out the background image, but the background is now fixed
+    /// black)
     var goal: QuizGoal? = nil
     let onContinue: () -> Void
 
@@ -775,8 +807,8 @@ private struct DreamStepView: View {
         AppLanguage(rawValue: mainLanguageRaw) ?? .english
     }
 
-    /// フィールドの外側 (背景の余白) をタップした時にキーボードを閉じるための共有フォーカス。
-    /// DreamTextField 側の @FocusState をここへ引き上げ、親から false を書き込めるようにする。
+    /// Shared focus used to close the keyboard when the area outside the field (background margin) is
+    /// tapped. The @FocusState of DreamTextField is lifted here so the parent can write false to it.
     @FocusState private var isDreamFieldFocused: Bool
 
     private var trimmed: String {
@@ -792,7 +824,7 @@ private struct DreamStepView: View {
             : "e.g. Get lean and reclaim my confidence"
     }
 
-    /// 記入例チップ。タップでフィールドに反映され、そのまま自由編集できる
+    /// Example chips. Tapping one fills the field, and it can then be edited freely
     private var exampleChips: [String] {
         lang == .japanese
             ? ["東京大学に合格する", "司法試験に合格する", "朝5時に起きて勉強する", "半年で体を変える"]
@@ -804,14 +836,14 @@ private struct DreamStepView: View {
 
     var body: some View {
         ZStack {
-            // 背景は真っ黒に固定 (2026-07-17 ユーザー指定)。以前は IdealFutureBackdrop を
-            // 薄敷きしていたが、夢画像のデッキ化で背景のカードが動き続けてしまい
-            // 宣言 (目標入力) の集中を削ぐため廃止。goal はプレースホルダー出し分けにのみ使う
+            // The background is fixed black (2026-07-17 user spec). Before, IdealFutureBackdrop was laid thinly
+            // underneath, but after the dream images became a deck, the background cards kept moving and hurt
+            // focus on the declaration (goal input), so it was removed. goal is used only to choose the placeholder
             AppColors.background.ignoresSafeArea()
 
-            // 背景の余白タップでキーボードを閉じる透明レイヤー。content の下に置くことで、
-            // チップ/フィールド/トグル/ボタンなど content 自身の要素タップはそちらが優先して受け取り、
-            // Spacer 等の空白部分だけこのレイヤーがタップを拾ってフォーカスを外す。
+            // Transparent layer that closes the keyboard when the background margin is tapped. Because it is
+            // placed under content, taps on content's own elements (chips/field/toggle/buttons) are received by
+            // them first, and only empty areas such as Spacer are picked up by this layer, which removes focus.
             Color.clear
                 .contentShape(Rectangle())
                 .ignoresSafeArea()
@@ -819,7 +851,8 @@ private struct DreamStepView: View {
 
             content
         }
-        // キーボード上部に「完了」を常設 (NameInput と同じ洗練挙動、2026-07-17 キーボードUX監査)
+        // Always show "完了" ("Done") above the keyboard (same polished behavior as NameInput, 2026-07-17
+        // keyboard UX audit)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
@@ -841,7 +874,7 @@ private struct DreamStepView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
 
-            // 記入例チップ (タップでフィールドに反映、自由に編集できる)
+            // Example chips (tap to fill the field, can be edited freely)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(exampleChips, id: \.self) { example in
@@ -865,7 +898,7 @@ private struct DreamStepView: View {
             DreamTextField(text: $dream, placeholder: placeholder, isFocused: $isDreamFieldFocused)
                 .padding(.horizontal, 24)
 
-            // 公開トグル。夢が空のときは意味を持たないので無効化する
+            // Public toggle. Disabled when the dream is empty because it has no meaning then
             Toggle(isOn: $isPublic) {
                 Text(lang == .japanese ? "この目標をプロフィールに公開する" : "Show this goal on my profile")
                     .font(.system(size: 15, weight: .medium))
@@ -891,10 +924,11 @@ private struct DreamStepView: View {
     }
 }
 
-/// 夢入力の TextField を独立子View に局所化 (実機パフォーマンス対策)。120字上限。自動フォーカス。
-/// フォーカスは親 (DreamStepView) の @FocusState を FocusState.Binding で受け取る形に変更。
-/// バグ修正 (2026-07): 以前は @FocusState がこの View にローカルに閉じており、親から
-/// 「背景タップで閉じる」を実装できず、一度キーボードを開くと閉じる手段が無かった。
+/// The dream TextField is isolated in its own child View (real-device performance fix). 120 character
+/// limit. Auto focus.
+/// Focus now comes from the parent's (DreamStepView) @FocusState as a FocusState.Binding.
+/// Bug fix (2026-07): before, @FocusState was local to this View, so the parent could not implement
+/// "close on background tap", and once the keyboard was open there was no way to close it.
 private struct DreamTextField: View {
     @Binding var text: String
     let placeholder: String
@@ -924,8 +958,8 @@ private struct DreamTextField: View {
             }
             .onChange(of: text) { _, newValue in
                 var next = newValue
-                // axis: .vertical の TextField は Return キーで改行が入り onSubmit が
-                // 発火しないため、末尾の改行を「確定操作」として検知しフォーカスを外す
+                // A TextField with axis: .vertical inserts a newline on Return and does not fire onSubmit, so a
+                // trailing newline is detected as the "confirm" action and focus is removed
                 if next.hasSuffix("\n") {
                     next.removeLast()
                     isFocused.wrappedValue = false
@@ -940,7 +974,7 @@ private struct DreamTextField: View {
     }
 }
 
-// MARK: - 3(旧). Commitment (Signature) — 未使用 (DreamStepView が置換。参照はされないが削除しない)
+// MARK: - 3(old). Commitment (Signature), unused (replaced by DreamStepView. Not referenced, but not deleted)
 
 private struct CommitmentStepView: View {
     let onContinue: () -> Void
@@ -966,7 +1000,7 @@ private struct CommitmentStepView: View {
                     .foregroundColor(AppColors.textSecondary)
             }
 
-            // 署名キャンバス
+            // Signature canvas
             ZStack(alignment: .bottomLeading) {
                 RoundedRectangle(cornerRadius: 16)
                     .fill(AppColors.cardBackground)
@@ -994,7 +1028,7 @@ private struct CommitmentStepView: View {
                         }
                 )
 
-                // 下線（署名欄を示すライン）
+                // Underline (the line that marks the signature field)
                 Rectangle()
                     .fill(AppColors.textTertiary.opacity(0.4))
                     .frame(height: 1)
@@ -1004,7 +1038,7 @@ private struct CommitmentStepView: View {
             }
             .padding(.horizontal, 24)
 
-            // クリアボタン
+            // Clear button
             if hasSignature {
                 Button {
                     paths.removeAll()
@@ -1033,11 +1067,11 @@ private struct CommitmentStepView: View {
 
 // MARK: - 3.5. Name Input (S15)
 
-/// 🔴 2026-08-06 審査リジェクト対応 (Guideline 4 Design / Sign in with Apple):
-/// 「Authentication Services が名前を提供しているのに、ユーザーに名前を入力させている」と
-/// 指摘されたため、**表示名の入力欄を撤去**しユーザーIDのみを決めるステップにした。
-/// 表示名は UserAuthService.signInWithApple() が Apple の fullName から設定する。
-/// ⚠️ ユーザーIDは Apple から取得できない情報なので、ここで聞くのは要件違反にならない。
+/// 🔴 2026-08-06 App Review rejection fix (Guideline 4 Design / Sign in with Apple):
+/// We were told "Authentication Services provides the name, but the app makes the user enter a name",
+/// so **the display name input field was removed** and this step now only picks the user ID.
+/// The display name is set by UserAuthService.signInWithApple() from Apple's fullName.
+/// ⚠️ The user ID is not available from Apple, so asking for it here does not violate the requirement.
 private struct NameInputStepView: View {
     @Binding var handle: String
     let onContinue: () -> Void
@@ -1061,8 +1095,8 @@ private struct NameInputStepView: View {
         !normalizedHandle.isEmpty && HandleValidator.isValidFormat(normalizedHandle)
     }
 
-    /// ハンドルが有効フォーマット + サーバー可用性チェック済み (.available) の時のみ進める。
-    /// (表示名の条件は 2026-08-06 に撤去 — Apple から受け取るため)
+    /// Can proceed only when the handle has a valid format + the server availability check passed
+    /// (.available). (The display name condition was removed on 2026-08-06, because it comes from Apple)
     private var canContinue: Bool {
         handleFormatValid && handleCheckState == .available
     }
@@ -1084,17 +1118,17 @@ private struct NameInputStepView: View {
                     }
 
                     VStack(spacing: 12) {
-                        // 見出しは既存の文字列を流用 (ユーザーID / Username)。
-                        // 🔴 文言はユーザー添削待ち — 「あなたの名前を教えてください」は
-                        // 名前欄の撤去に伴い使えなくなったため差し替えた
+                        // The heading reuses an existing string ("ユーザーID" / "Username").
+                        // 🔴 Copy waiting for user review. "あなたの名前を教えてください" ("Tell us your name") could no longer
+                        // be used after the name field was removed, so it was replaced
                         Text(OnboardingHandleStrings.label(lang))
                             .font(AppTypography.title1)
                             .foregroundColor(AppColors.textPrimary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
 
-                        // 「投稿やプロフィールに表示されます。後から変更できます。」は
-                        // ユーザーIDにもそのまま当てはまるので流用する
+                        // "投稿やプロフィールに表示されます。後から変更できます。" ("Shown on your posts and profile. You can change it
+                        // later.") also applies to the user ID as is, so it is reused
                         Text(L.onboardingNameSubtitle(lang))
                             .font(AppTypography.body)
                             .foregroundColor(AppColors.textSecondary)
@@ -1103,8 +1137,8 @@ private struct NameInputStepView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
-                        // 小見出しは撤去 (2026-08-06): 名前欄が無くなり、
-                        // 大見出しが同じ「ユーザーID」になったため重複する
+                        // The subheading was removed (2026-08-06): the name field is gone, and the main heading became the same
+                        // "ユーザーID" ("User ID"), so it would be a duplicate
                         OnboardingHandleField(
                             text: $handle,
                             placeholder: OnboardingHandleStrings.placeholder(lang)
@@ -1115,15 +1149,15 @@ private struct NameInputStepView: View {
                     .padding(.horizontal, 24)
                 }
                 .padding(.bottom, 16)
-                // 余白タップでキーボードを閉じる (2026-07-17 キーボードUX監査。
-                // TextField / ボタン自身のタップはそれぞれが先に消費するため干渉しない)
+                // Tapping the margin closes the keyboard (2026-07-17 keyboard UX audit.
+                // Taps on the TextField / buttons are consumed by them first, so there is no interference)
                 .contentShape(Rectangle())
                 .onTapGesture { NameInputStepView.dismissKeyboard() }
             }
             .frame(maxHeight: .infinity)
-            // 下スワイプでもキーボードを閉じられるように (標準の洗練挙動)
+            // Also lets the user close the keyboard by swiping down (standard polished behavior)
             .scrollDismissesKeyboard(.interactively)
-            // キーボード上部に「完了」を常設 (どのフィールドからでも閉じられる)
+            // Always show "完了" ("Done") above the keyboard (can close it from any field)
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -1143,8 +1177,8 @@ private struct NameInputStepView: View {
             }
             .padding(.horizontal, 24)
 
-            // 既存アカウント向けリンク (NameInput をスキップしてサインインへ)
-            // → 再オンボ時に AppStorage の古い名前で users.display_name を上書きしないためのフォールバック
+            // Link for existing accounts (skips NameInput and goes to sign-in)
+            // → fallback so that re-onboarding does not overwrite users.display_name with an old name in AppStorage
             Button {
                 onAlreadyHasAccount()
             } label: {
@@ -1162,8 +1196,8 @@ private struct NameInputStepView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 isFocused = true
             }
-            // 未入力なら候補をプレフィル (ワンタップで進める逃げ道)。
-            // 入力済みハンドルがあれば (再表示時など) 上書きしない。
+            // If empty, prefill a suggestion (an escape hatch to proceed with one tap).
+            // If a handle has already been entered (e.g. when shown again), do not overwrite it.
             if HandleValidator.normalized(handle).isEmpty {
                 handle = "user_" + UUID().uuidString.prefix(8).lowercased()
             }
@@ -1174,8 +1208,8 @@ private struct NameInputStepView: View {
         }
     }
 
-    /// フォーカス状態の所在に依存しない確実なキーボード閉じ
-    /// (name / handle どちらのフィールドがアクティブでも効く)
+    /// Reliable keyboard dismissal that does not depend on where the focus state lives
+    /// (works whichever field, name or handle, is active)
     static func dismissKeyboard() {
         UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
@@ -1206,8 +1240,8 @@ private struct NameInputStepView: View {
                 .font(.system(size: 12))
                 .foregroundColor(AppColors.error)
         case .error:
-            // 通信エラーは「使用中」と区別してリトライ導線を出す
-            // (オフライン/Supabase pause でオンボが「使用できません」のまま詰まらないように)
+            // Network errors are shown separately from "in use", with a retry option
+            // (so onboarding does not get stuck on "使用できません" ("Not available") when offline / Supabase is paused)
             Button {
                 scheduleHandleCheck()
             } label: {
@@ -1226,7 +1260,7 @@ private struct NameInputStepView: View {
         }
     }
 
-    /// ハンドル入力を 400ms デバウンスして可用性チェック (ProfileEditView と同じ挙動)。
+    /// Debounce handle input by 400ms and check availability (same behavior as ProfileEditView).
     private func scheduleHandleCheck() {
         handleCheckTask?.cancel()
 
@@ -1258,7 +1292,7 @@ private struct NameInputStepView: View {
     }
 }
 
-// MARK: - Onboarding Name Field (TextField 局所化)
+// MARK: - Onboarding Name Field (TextField isolated)
 
 private struct OnboardingNameField: View {
     @Binding var text: String
@@ -1287,7 +1321,7 @@ private struct OnboardingNameField: View {
     }
 }
 
-// MARK: - Onboarding Handle Field (TextField 局所化)
+// MARK: - Onboarding Handle Field (TextField isolated)
 
 private struct OnboardingHandleField: View {
     @Binding var text: String
@@ -1327,12 +1361,12 @@ private enum OnboardingHandleCheckState: Equatable {
     case checking
     case available
     case unavailable
-    /// サーバー可用性チェックの通信エラー (使用中とは区別してリトライ導線を出す)
+    /// Network error in the server availability check (shown separately from "in use", with a retry option)
     case error
     case invalid
 }
 
-// MARK: - Onboarding Handle Strings (このファイル限定)
+// MARK: - Onboarding Handle Strings (this file only)
 
 private enum OnboardingHandleStrings {
     static func label(_ lang: AppLanguage) -> String {
@@ -1366,11 +1400,13 @@ private enum OnboardingHandleStrings {
     }
 }
 
-// MARK: - 4. FamilyControls (StayLocked型 最小黒画面。2026-07 再設計で PHASE 1 = 診断より前に移動)
+// MARK: - 4. FamilyControls (StayLocked-style minimal black screen. Moved to PHASE 1, before diagnosis, in 2026-07)
 
-/// 権限プライミングの単独ページ。診断より前に来るため夢等のパーソナライズ材料はまだ無く、
-/// 汎用の1文だけで完結させる (競合 StayLocked を参照: 黒背景 + 大きく平易な見出し + 明るいCTA1つ)。
-/// システムの認証ダイアログは CTA タップ後にのみ発火する (service.requestAuthorization() 呼び出し時)。
+/// Standalone page for permission priming. It comes before the diagnosis, so there is no personalization
+/// material such as the dream yet, and it is done with just one generic sentence (see competitor
+/// StayLocked: black background + large plain heading + one bright CTA).
+/// The system authorization dialog fires only after the CTA is tapped (when
+/// service.requestAuthorization() is called).
 private struct FamilyControlsStepView: View {
     @ObservedObject var service: AuthorizationService
     let onContinue: () -> Void
@@ -1406,8 +1442,8 @@ private struct FamilyControlsStepView: View {
             Spacer()
 
             VStack(spacing: 14) {
-                // 失敗/拒否状態: プレーンなリトライ導線 (拒否済みの場合はOSの都合で再度ダイアログが
-                // 出ないため、設定アプリへの導線を出す。既存の openSettingsURLString パターンを踏襲)
+                // Failed/denied state: a plain retry option (if already denied, the OS does not show the dialog again,
+                // so a link to the Settings app is shown instead. Follows the existing openSettingsURLString pattern)
                 if isDenied {
                     Text(lang == .japanese
                          ? "アクセスがまだ有効になっていません。設定から許可してください。"
@@ -1430,7 +1466,7 @@ private struct FamilyControlsStepView: View {
                         .foregroundColor(AppColors.textTertiary)
                 }
 
-                // CTA はオフホワイト1色 (競合のオレンジは踏襲しない)
+                // The CTA is a single off-white color (we do not copy the competitor's orange)
                 PrimaryButton(
                     service.isAuthorized
                         ? (lang == .japanese ? "次へ" : "Next")
@@ -1474,18 +1510,18 @@ private struct FamilyControlsStepView: View {
 
 private struct AppleSignInStepView: View {
     @ObservedObject var userAuth: UserAuthService
-    /// 「すでにアカウントを持っている」経路なら見出しを「サインイン」に切り替える
+    /// On the "I already have an account" path, switch the heading to "sign in"
     let isReturningUser: Bool
     let pendingDisplayName: String
     let pendingHandle: String
     let pendingDream: String
     let pendingDreamPublic: Bool
     let onContinue: () -> Void
-    /// M23 (2026-07-22 監査): 「すでにアカウントを持っている」経路の誤タップから戻る導線。
-    /// isReturningUser の時のみ表示するため、通常フローの呼び出し元では省略できる。
+    /// M23 (2026-07-22 audit): link to go back from a mistaken tap on the "I already have an account" path.
+    /// Shown only when isReturningUser, so callers in the normal flow can omit it.
     var onCreateAccountInstead: (() -> Void)? = nil
-    /// M23: isReturningUser のまま新規 Apple ID でサインインしてしまった (誤タップ) を検知した時の
-    /// コールバック。全呼び出し元で必須の配線 (デフォルトなし)。
+    /// M23: callback when we detect that the user signed in with a new Apple ID while isReturningUser was
+    /// still set (a mistaken tap). Required wiring for every caller (no default).
     var onDetectedNewAccount: () -> Void
 
     @AppStorage("mainLanguage") private var mainLanguageRaw = AppLanguage.deviceDefault.rawValue
@@ -1509,7 +1545,8 @@ private struct AppleSignInStepView: View {
             }
 
             VStack(spacing: 16) {
-                // 文言はユーザー添削待ち (旧「あなたの記録と名言を保存します」は名言時代の残骸のため撤去)
+                // Copy waiting for user review (the old "あなたの記録と名言を保存します" ("We save your records and
+                // quotes") was removed because it was left over from the quote era)
                 Text(isReturningUser
                      ? (lang == .japanese ? "サインイン" : "Sign in")
                      : (lang == .japanese ? "アカウントを作成" : "Create your account"))
@@ -1539,67 +1576,69 @@ private struct AppleSignInStepView: View {
                     .padding(.horizontal, 24)
             }
 
-            // Apple 提供の SignInWithAppleButton (ASAuthorizationAppleIDButton)
-            // 実際の認証フローは UserAuthService 側で ASAuthorizationController を使う
+            // Apple-provided SignInWithAppleButton (ASAuthorizationAppleIDButton)
+            // The actual authentication flow uses ASAuthorizationController in UserAuthService
             Button {
                 Task {
-                    // M23: appleSignIn ステップに「既にサインイン済み」で再到達するケース
-                    // (誤タップ→新規アカウント検知→新規オンボ完走→ここへ戻る) では、
-                    // 二重サインインを避けて既存セッションのまま先へ進む
+                    // M23: when the appleSignIn step is reached again while "already signed in"
+                    // (mistaken tap → new account detected → new-user onboarding completed → back here),
+                    // avoid a double sign-in and move on with the existing session
                     if !userAuth.isSignedIn {
                         await userAuth.signInWithApple()
                     }
                     guard userAuth.isSignedIn else { return }
-                    // M23: 「すでにアカウントを持っている」経路のまま、未登録の新規 Apple ID で
-                    // サインインしてしまった誤タップを検知。pending 永続化より前に early return し、
-                    // 新規オンボ (13歳ゲート+診断) へ回す。
+                    // M23: detect a mistaken tap where the user, still on the "I already have an account" path, signed in
+                    // with a new unregistered Apple ID. Return early before persisting pending values, and send them to
+                    // new-user onboarding (age 13 gate + diagnosis).
                     //
-                    // 🔴 2026-08-06: 判定から display_name の条件を外した。
-                    // 同日の リジェクト対応 第1弾 で「Apple が返した氏名を signInWithApple 内で
-                    // 自動採用」するようにしたため、新規 Apple ID でも display_name が埋まるように
-                    // なり、旧条件 (display_name と handle が両方空) が永久に成立しなくなっていた
-                    // = 誤タップ検知が丸ごと死んでいた (1.0(3) 時点のバグ)。
-                    // handle は Apple から取れず、アカウント作成時にしか付かないので、
-                    // 「handle が空 = このアプリでまだアカウントを作っていない」が正しい判定になる。
+                    // 🔴 2026-08-06: removed the display_name condition from the check.
+                    // The same day's rejection fix part 1 made signInWithApple adopt "the name returned by Apple"
+                    // automatically, so display_name is filled even for a new Apple ID, and the old condition
+                    // (display_name and handle both empty) could never be true again
+                    // = the mistaken-tap detection was completely dead (bug as of 1.0(3)).
+                    // handle is not available from Apple and is only set when an account is created, so
+                    // "handle is empty = no account has been created in this app yet" is the correct check.
                     if isReturningUser
                         && (userAuth.handle ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         onDetectedNewAccount()
                         return
                     }
-                    // S15: オンボーディング nameInput で入力した名前を users.display_name に保存。
-                    // ただし「再ログイン時に AppStorage の古い名前で上書き」しないよう、
-                    // users.display_name が既に設定されている場合はスキップ (signInWithApple 内で
-                    // refreshProfile が走っているので auth.displayName は最新の DB 値を反映済み)。
+                    // S15: save the name entered in the onboarding nameInput to users.display_name.
+                    // However, to avoid "overwriting it with an old name in AppStorage on re-login",
+                    // skip it if users.display_name is already set (refreshProfile runs inside signInWithApple, so
+                    // auth.displayName already reflects the latest DB value).
                     let trimmed = pendingDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
                     let existing = userAuth.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     if !trimmed.isEmpty && existing.isEmpty {
                         _ = try? await userAuth.setDisplayName(trimmed)
                     }
-                    // @handle も同様に、既存値が無い場合のみ設定する。
-                    // 🔴 2026-08-06 リジェクト対応 第2弾: @ユーザーID の入力ステップ (.nameInput) を
-                    // オンボから撤去したため、通常は pendingHandle が空で到達する。
-                    // その場合はここで自動発番する — 撤去後は他に発番する場所が無い
-                    // (旧発番点は NameInputStepView.onAppear のプレフィルだった)。
+                    // @handle is also set only if there is no existing value.
+                    // 🔴 2026-08-06 rejection fix part 2: the @user ID input step (.nameInput) was removed from onboarding,
+                    // so normally we get here with pendingHandle empty.
+                    // In that case it is issued automatically here, because after the removal there is no other place that
+                    // issues it (the old place was the prefill in NameInputStepView.onAppear).
                     let normalizedHandle = HandleValidator.normalized(pendingHandle)
                     let existingHandle = userAuth.handle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     let handleSaved: Bool
                     if !existingHandle.isEmpty {
-                        handleSaved = true  // 既存値あり (再サインイン) — 触らない
+                        handleSaved = true  // Existing value present (re-sign-in), do not touch it
                     } else if !normalizedHandle.isEmpty {
-                        // 撤去前のオンボを途中まで進めていた端末など、入力済みの値があれば尊重する
+                        // If a value was already entered (e.g. a device that got partway through the onboarding before the
+                        // removal), respect it
                         handleSaved = await userAuth.updateHandle(normalizedHandle)
                     } else {
                         handleSaved = await Self.assignGeneratedHandle(userAuth)
                     }
-                    // 🔴 2026-08-06: Apple が氏名を返さなかった場合の表示名フォールバック。
-                    // Apple が fullName を返すのは「そのApple IDでこのアプリを初めて承認した時」
-                    // だけで、2回目以降 (アカウントを消して作り直した等) は必ず nil。
-                    // 名前欄を撤去した今のオンボでは display_name が永久に空のままになり、
-                    // プロフィールが「未設定」+ ヒーローに「—」になる (2026-08-06 実機で確認)。
-                    // 発番済みの @ユーザーID を初期値として入れて、空の状態を作らない。
-                    // ⚠️ Apple が名前を返した場合は signInWithApple 内で先に保存されているので、
-                    //    ここは空の時しか動かない = Apple の名前を上書きしない。
-                    // ⚠️ handle より後に置くこと (handle が未発番だと入れる値が無い)。
+                    // 🔴 2026-08-06: display name fallback when Apple does not return a name.
+                    // Apple returns fullName only "the first time this Apple ID authorizes this app",
+                    // and it is always nil from the second time on (e.g. after deleting and recreating the account).
+                    // With the current onboarding, which no longer has a name field, display_name would stay empty forever,
+                    // and the profile would show "未設定" ("Not set") + a dash placeholder in the hero (confirmed on a real
+                    // device on 2026-08-06).
+                    // Put the issued @user ID in as the initial value so there is never an empty state.
+                    // ⚠️ If Apple returned a name, it has already been saved inside signInWithApple,
+                    //    so this only runs when it is empty = it does not overwrite Apple's name.
+                    // ⚠️ Keep this after the handle (if the handle has not been issued, there is no value to put in).
                     let currentName = (userAuth.displayName ?? "")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     let currentHandle = (userAuth.handle ?? "")
@@ -1607,8 +1646,8 @@ private struct AppleSignInStepView: View {
                     if currentName.isEmpty && !currentHandle.isEmpty {
                         _ = try? await userAuth.setDisplayName(currentHandle)
                     }
-                    // 夢も同様に、既存値が無い場合のみオンボーディングで宣言した値を保存
-                    // (サインイン前は users 行に書けないため、ここまで @AppStorage に保持していた)
+                    // Likewise for the dream, save the value declared in onboarding only if there is no existing value
+                    // (it cannot be written to the users row before sign-in, so it was kept in @AppStorage until now)
                     let trimmedDream = pendingDream.trimmingCharacters(in: .whitespacesAndNewlines)
                     let existingDream = userAuth.dream?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     let dreamSaved: Bool
@@ -1617,11 +1656,11 @@ private struct AppleSignInStepView: View {
                     } else {
                         dreamSaved = true
                     }
-                    // Shield (案A) のサブタイトル用に App Group へミラー
+                    // Mirror it to the App Group for the Shield (plan A) subtitle
                     AppGroupStorage.shared.saveUserDream(userAuth.dream)
-                    // pending 値の消費は保存成功時のみ (次回オンボに古い値を持ち越さない)。
-                    // 失敗時 (ユニーク衝突/マイグレーション未適用/通信断) に消すと
-                    // 入力した夢・ハンドルが無言で失われる (2026-07-07 Fable レビュー指摘)
+                    // pending values are consumed only when saving succeeds (so old values do not carry over to the next
+                    // onboarding). Deleting them on failure (unique conflict / migration not applied / network loss)
+                    // would silently lose the entered dream and handle (2026-07-07 Fable review finding)
                     UserDefaults.standard.removeObject(forKey: "onboardingDisplayName")
                     if handleSaved {
                         UserDefaults.standard.removeObject(forKey: "onboardingHandle")
@@ -1630,18 +1669,18 @@ private struct AppleSignInStepView: View {
                         UserDefaults.standard.removeObject(forKey: "onboardingDream")
                         UserDefaults.standard.removeObject(forKey: "onboardingDreamPublic")
                     }
-                    // 診断クイズの回答を user_onboarding_profiles へ push (026 SQL)。
-                    // pending の削除はここではしない — この後のプラン画面が回答を表示に使うため、
-                    // 消費はオンボ完了時 (completeOnboarding) に行う。push 失敗時 (026 未適用/
-                    // 通信断) はフラグを立てず、pending を残して回答を失わない
+                    // Push the diagnostic quiz answers to user_onboarding_profiles (026 SQL).
+                    // pending values are not deleted here, because the plan screen after this uses the answers for
+                    // display. They are consumed when onboarding completes (completeOnboarding). If the push fails (026 not
+                    // applied / network loss), the flag is not set and pending values are kept so no answers are lost
                     if let uid = userAuth.userId {
                         let d = UserDefaults.standard
-                        // M22 (2026-07-20 監査): push 失敗のまま残った pending は、端末を共有した
-                        // 別アカウントの次回サインインでそのまま upsert され、他人の生年月日等が
-                        // 混入しうる。所有者刻印 (サインイン成功直後・push 前) を持たせ、現在の uid
-                        // と食い違う場合は別アカウントの残骸とみなして push せず破棄する。
-                        // 刻印が空 (初回 or 前回消費済み) or 現在の uid と一致する場合は通常どおり
-                        // push する — 正常フロー (新規ユーザーが quiz→サインイン→push) は無変更
+                        // M22 (2026-07-20 audit): pending values left over after a failed push could be upserted as is on the
+                        // next sign-in of another account sharing the device, mixing in someone else's birth date etc.
+                        // Give them an owner stamp (right after sign-in succeeds, before the push), and if it differs from the
+                        // current uid, treat them as leftovers of another account and discard them without pushing.
+                        // If the stamp is empty (first time or already consumed last time) or matches the current uid, push as
+                        // usual. The normal flow (new user: quiz → sign-in → push) is unchanged
                         let owner = d.string(forKey: "onboardingPendingOwnerUserId") ?? ""
                         if !owner.isEmpty && owner != uid.uuidString {
                             for key in ["onboardingBirthDate", "onboardingGender", "onboardingOccupation",
@@ -1652,7 +1691,7 @@ private struct AppleSignInStepView: View {
                             }
                             print("⚠️ [Onboarding] 別アカウントのクイズ pending を検知、push せず破棄 (owner=\(owner), current=\(uid))")
                         } else {
-                            // UUID は plist 非対応型なので必ず uuidString で保存する (比較側も uuidString)
+                            // UUID is not a plist type, so always save it as uuidString (the comparison side also uses uuidString)
                             d.set(uid.uuidString, forKey: "onboardingPendingOwnerUserId")
                             let quizSaved = await OnboardingProfileService.push(
                                 userId: uid,
@@ -1661,7 +1700,7 @@ private struct AppleSignInStepView: View {
                                 occupationRaw: d.string(forKey: "onboardingOccupation") ?? "",
                                 dailyHoursRaw: d.string(forKey: "onboardingDailyHours") ?? "",
                                 addictionYearsRaw: d.string(forKey: "onboardingAddictionYears") ?? "",
-                                // Q5 (溶かしアプリ) は廃止。wasted_apps 列は残すが常に空 (NULL) を送る
+                                // Q5 (apps that ate your time) was dropped. The wasted_apps column is kept but always sent empty (NULL)
                                 wastedAppsRaw: "",
                                 goalRaw: d.string(forKey: "onboardingGoal") ?? "",
                                 referralSourceRaw: d.string(forKey: "onboardingReferralSource") ?? ""
@@ -1680,10 +1719,10 @@ private struct AppleSignInStepView: View {
                         Image(systemName: "applelogo")
                             .font(.system(size: 18, weight: .medium))
                     }
-                    // M23: appleSignIn に「既にサインイン済み」で再到達した場合は Apple ロゴなしの
-                    // 「続ける」に切り替える (Apple 認証 UI を再度見せる必要がないため)
+                    // M23: when appleSignIn is reached again while "already signed in", switch to "続ける" ("Continue")
+                    // without the Apple logo (there is no need to show the Apple authentication UI again)
                     Text(userAuth.isSignedIn
-                         ? (lang == .japanese ? "続ける" : "Continue") // 文言はユーザー添削待ち
+                         ? (lang == .japanese ? "続ける" : "Continue") // Copy waiting for user review
                          : (lang == .japanese ? "Apple でサインイン" : "Sign in with Apple"))
                         .font(.system(size: 17, weight: .semibold))
                 }
@@ -1696,21 +1735,24 @@ private struct AppleSignInStepView: View {
             .disabled(userAuth.isSigningIn)
             .padding(.horizontal, 24)
 
-            // 画面下部のクラスタ (2026-07-31 実機FB「下がダサい」→ 作り直し)。
-            // 旧: 下線付きの「アカウントを作成する」+ 同意文 + その下に同じ語をもう一度並べた
-            //     下線リンク行 (利用規約/プライバシーポリシーが画面内に2回出る二段構成)。
-            // 新: ①リンクは同意文の中にインラインで1回だけ ②下線を全廃 ③2要素の間隔を
-            //     32→16 に詰めて「下部の締め」として1つの塊に見せる
+            // Cluster at the bottom of the screen (rebuilt after 2026-07-31 real-device feedback "the bottom looks
+            // bad").
+            // Old: an underlined "アカウントを作成する" ("Create account") + consent text + below it an underlined
+            //     link row repeating the same words (a two-tier layout where Terms/Privacy Policy appeared twice
+            //     on the screen).
+            // New: (1) the links appear only once, inline in the consent text (2) all underlines removed (3) the
+            //     gap between the 2 elements was tightened from 32→16 so they look like one block that "closes"
+            //     the bottom
             VStack(spacing: 16) {
-                // M23: 「すでにアカウントを持っている」経路の誤タップから戻れるようにする導線
+                // M23: link that lets the user go back from a mistaken tap on the "I already have an account" path
                 if isReturningUser {
                     Button {
                         onCreateAccountInstead?()
                     } label: {
                         HStack(spacing: 5) {
-                            Text(lang == .japanese ? "アカウントをお持ちでない方は" : "Don't have an account?") // 文言はユーザー添削待ち
+                            Text(lang == .japanese ? "アカウントをお持ちでない方は" : "Don't have an account?") // Copy waiting for user review
                                 .foregroundColor(AppColors.textTertiary)
-                            Text(lang == .japanese ? "新規作成" : "Create one") // 文言はユーザー添削待ち
+                            Text(lang == .japanese ? "新規作成" : "Create one") // Copy waiting for user review
                                 .fontWeight(.semibold)
                                 .foregroundColor(AppColors.textPrimary)
                         }
@@ -1718,8 +1760,8 @@ private struct AppleSignInStepView: View {
                     }
                 }
 
-                // M6/M15 (2026-07-22 監査): 規約同意の定番文言。
-                // 2026-07-31: 文中インラインリンク (Markdown) に統合。tint がリンク色になる
+                // M6/M15 (2026-07-22 audit): standard wording for agreeing to the terms.
+                // 2026-07-31: merged into inline links in the sentence (Markdown). tint becomes the link color
                 Text(consentText)
                     .font(.system(size: 11))
                     .foregroundColor(AppColors.textTertiary)
@@ -1732,14 +1774,16 @@ private struct AppleSignInStepView: View {
         }
     }
 
-    /// @ユーザーID の自動発番 (2026-08-06 リジェクト対応 第2弾)。
-    /// オンボから入力ステップを撤去したため、アカウント作成時にここで一意な handle を確定させる。
-    /// 形式は `user_` + UUID 先頭8桁 (例 `user_a3f9b2c1`) — 13文字で `^[a-z0-9._]{3,20}$` を満たし、
-    /// 予約語とも衝突しない。
+    /// Automatic issuing of the @user ID (2026-08-06 rejection fix part 2).
+    /// The input step was removed from onboarding, so a unique handle is fixed here when the account is
+    /// created.
+    /// Format is `user_` + first 8 characters of a UUID (e.g. `user_a3f9b2c1`). At 13 characters it matches
+    /// `^[a-z0-9._]{3,20}$` and does not collide with reserved words.
     ///
-    /// ⚠️ `updateHandle` は失敗理由を返さない (ユニーク衝突も通信断も false) ため、
-    /// 別候補で数回リトライして衝突だけを吸収する。全部落ちた場合は handle 未設定のまま先へ進む
-    /// (users.handle は NULL 許容。本人が プロフィール編集 → ユーザーID で後から付けられる)。
+    /// ⚠️ `updateHandle` does not return the reason for failure (both a unique conflict and a network loss
+    /// return false), so retry a few times with other candidates to absorb only conflicts. If all fail,
+    /// move on with no handle set
+    /// (users.handle allows NULL. The user can set it later in profile editing → User ID).
     private static func assignGeneratedHandle(_ userAuth: UserAuthService) async -> Bool {
         for _ in 0..<3 {
             let candidate = "user_" + UUID().uuidString.prefix(8).lowercased()
@@ -1749,11 +1793,11 @@ private struct AppleSignInStepView: View {
         return false
     }
 
-    /// 同意文。利用規約/プライバシーポリシーを文中のリンクにする (別行に並べない)。
-    /// Markdown の解釈に失敗した場合はリンク無しのプレーン文へフォールバックする
+    /// Consent text. Terms of Service / Privacy Policy are links inside the sentence (not on a separate
+    /// row). If the Markdown fails to parse, fall back to plain text without links
     private var consentText: AttributedString {
         let markdown = lang == .japanese
-            ? "続行すると、[利用規約](\(LegalLinks.termsURL))と[プライバシーポリシー](\(LegalLinks.privacyURL))に同意したものとみなされます" // 文言はユーザー添削待ち
+            ? "続行すると、[利用規約](\(LegalLinks.termsURL))と[プライバシーポリシー](\(LegalLinks.privacyURL))に同意したものとみなされます" // Copy waiting for user review
             : "By continuing, you agree to the [Terms of Service](\(LegalLinks.termsURL)) and [Privacy Policy](\(LegalLinks.privacyURL))"
         if let attributed = try? AttributedString(markdown: markdown) {
             return attributed
@@ -1764,16 +1808,20 @@ private struct AppleSignInStepView: View {
     }
 }
 
-// MARK: - 6. Rating (App Store 評価リクエスト、2026-07-19 新設)
+// MARK: - 6. Rating (App Store rating request, new on 2026-07-19)
 
-/// サインイン直後 (新規/返却ユーザー両経路が必ず通る位置) に App Store 評価を依頼するページ。
-/// 表示から少し置いて OS 標準の評価ダイアログ (requestReview) を出す。OS 側のスロットリングで
-/// ダイアログが出ないことがあるため、ページ自体は「続ける」でいつでも先へ進める。
-/// 2026-07-31 実機FB「もうちょっとかっこよく」対応。足したのは3つだけ:
-///   1. 背景をヒーロー/公式プロフィールと同じ動く煙にしてブランドの面に乗せる
-///   2. 星の後ろに金のごく淡いグロウ (色を足すのでなく、光を1枚敷く)
-///   3. 星が左から順に灯る (0.09秒差のスケール+フェード。跳ね返り・回転・光沢は不使用)
-/// 却下済みの文法 (描き起こし/バウンス/シマー) には触れない。ReduceMotion では即点灯
+/// Page that asks for an App Store rating right after sign-in (a point both the new and returning user
+/// paths always pass). After a short delay from display, the OS standard rating dialog (requestReview)
+/// is shown. OS-side throttling can prevent the dialog from appearing, so the page itself can always be
+/// passed with "続ける" ("Continue").
+/// Response to 2026-07-31 real-device feedback "make it a bit cooler". Only 3 things were added:
+///   1. The background uses the same moving smoke as the hero/official profile, to put it on the brand
+///      surface
+///   2. A very faint gold glow behind the stars (not adding a color, just one layer of light)
+///   3. The stars light up one by one from the left (scale + fade with a 0.09 s offset. No bounce,
+///      rotation or shine)
+/// Styles already rejected (draw-on/bounce/shimmer) are not used. With ReduceMotion they light up
+/// instantly
 private struct RatingStepView: View {
     let lang: AppLanguage
     let onContinue: () -> Void
@@ -1784,17 +1832,17 @@ private struct RatingStepView: View {
 
     private var reduceMotion: Bool { UIAccessibility.isReduceMotionEnabled }
 
-    /// 評価の星。SF Symbol (平板) → 絵文字 (「絵文字はダサい」) と2回却下されたため、
-    /// 実素材に差し替え: Microsoft Fluent Emoji の 3D 星 (MIT ライセンス、商用可。
-    /// 出典と条文は Docs/third_party_licenses.md)。差し替えたい時は RatingStar.imageset の
-    /// 画像を置き換えるだけでよい (コード変更不要)。素材が無い環境では絵文字にフォールバック
+    /// Rating stars. SF Symbol (flat) → emoji ("emoji look cheap") were both rejected, so they were replaced
+    /// with real assets: the 3D star from Microsoft Fluent Emoji (MIT license, commercial use allowed.
+    /// Source and license text in Docs/third_party_licenses.md). To change it, just replace the image in
+    /// RatingStar.imageset (no code change needed). Falls back to the emoji where the asset is missing
     @ViewBuilder
     private var ratingStar: some View {
         if UIImage(named: "RatingStar") != nil {
             Image("RatingStar")
                 .resizable()
                 .scaledToFit()
-                // 素材自体が上下左右 6% ずつ余白を持つため、見た目を揃えるぶん大きめに取る
+                // The asset itself has 6% padding on every side, so it is sized larger to make the look match
                 .frame(width: 40, height: 40)
         } else {
             Text("⭐️")
@@ -1809,7 +1857,7 @@ private struct RatingStepView: View {
             VStack(spacing: 0) {
                 Spacer()
 
-                // アプリアイコン (角丸くり抜き) を星の上に (2026-07-19 ユーザー指定)
+                // The app icon (rounded-corner cutout) above the stars (2026-07-19 user spec)
                 Image("OnePercentIcon")
                     .resizable()
                     .scaledToFill()
@@ -1829,14 +1877,14 @@ private struct RatingStepView: View {
                     }
                 }
 
-                // 文言はユーザー添削待ち
+                // Copy waiting for user review
                 Text(lang == .japanese ? "1% の評価をお願いします" : "Rate 1% on the App Store")
                     .font(.system(size: 26, weight: .bold))
                     .foregroundColor(AppColors.textPrimary)
                     .multilineTextAlignment(.center)
                     .padding(.top, 28)
 
-                // 文言はユーザー添削待ち
+                // Copy waiting for user review
                 Text(lang == .japanese
                      ? "あなたの評価が、1% を続ける力になります。"
                      : "Your rating keeps 1% going.")
@@ -1853,7 +1901,7 @@ private struct RatingStepView: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 40)
             }
-            // 画面全体はボケ→結像 (ヒーローと同じ登場の文法)
+            // The whole screen goes from blurred to sharp (the same entrance style as the hero)
             .blur(radius: contentIn ? 0 : 6)
             .opacity(contentIn ? 1 : 0)
         }
@@ -1866,32 +1914,36 @@ private struct RatingStepView: View {
                 return
             }
             withAnimation(.easeOut(duration: 0.45)) { contentIn = true }
-            // 星を左から順に灯す
+            // Light up the stars one by one from the left
             for i in 1...5 {
                 try? await Task.sleep(nanoseconds: 90_000_000)
                 withAnimation(.easeOut(duration: 0.22)) { starsLit = i }
             }
-            // ページの意図が伝わってからダイアログを出す (表示直後だと文脈なく被さる)
+            // Show the dialog after the purpose of the page is clear (right after display it would cover the page
+            // with no context)
             try? await Task.sleep(nanoseconds: 700_000_000)
             requestReview()
         }
     }
 }
 
-// MARK: - 7. App Select (初期セットアップ 2026-07-15)
+// MARK: - 7. App Select (initial setup 2026-07-15)
 
-/// オンボ末尾: 最初にロックするアプリを選ばせる。選択は 3 モード共通の初期値として保存
-/// (BlockingService.saveInitialSharedSelection)。以後は各モード画面で個別に変更できる。
-/// FamilyControls 権限はオンボ前半 (.familyControls) で取得済みの前提
+/// End of onboarding: have the user choose the first apps to lock. The selection is saved as the
+/// shared initial value for all 3 modes
+/// (BlockingService.saveInitialSharedSelection). After that it can be changed separately on each mode
+/// screen.
+/// Assumes FamilyControls permission was already obtained earlier in onboarding (.familyControls)
 private struct AppSelectStepView: View {
     let lang: AppLanguage
     let onFinish: () -> Void
 
     @State private var selection = FamilyActivitySelection()
     @State private var showPicker = false
-    /// L18 (2026-07-22 監査): ピッカーを開いた瞬間の選択状態を退避しておく。閉じた時に
-    /// これと差分が無ければ「キャンセル相当」とみなし、保存も次画面への前進もしない
-    /// (何も選ばず/変えずに閉じただけで誤って先へ進んでしまうのを防ぐ)
+    /// L18 (2026-07-22 audit): save the selection state at the moment the picker opens. When it closes, if
+    /// there is no difference from this, treat it as "equivalent to cancel" and neither save nor move to the
+    /// next screen
+    /// (prevents moving on by mistake when the picker was just closed without choosing/changing anything)
     @State private var selectionAtPickerOpen = FamilyActivitySelection()
 
     private var totalCount: Int {
@@ -1902,14 +1954,14 @@ private struct AppSelectStepView: View {
         VStack(spacing: 0) {
             Spacer()
 
-            // 文言はユーザー添削待ち
+            // Copy waiting for user review
             Text(lang == .japanese ? "最初にロックする\nアプリを選ぶ" : "Choose the first apps\nto lock")
                 .font(.system(size: 26, weight: .bold))
                 .foregroundColor(AppColors.textPrimary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // 文言はユーザー添削待ち
+            // Copy waiting for user review
             Text(lang == .japanese
                  ? "いつでも変更できます。\nまずは一番時間を奪っているものから。"
                  : "You can change this anytime.\nStart with what eats the most time.")
@@ -1920,7 +1972,7 @@ private struct AppSelectStepView: View {
                 .padding(.top, 14)
 
             if totalCount > 0 {
-                Text(lang == .japanese ? "\(totalCount)個を選択中" : "\(totalCount) selected") // 文言はユーザー添削待ち
+                Text(lang == .japanese ? "\(totalCount)個を選択中" : "\(totalCount) selected") // Copy waiting for user review
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
                     .foregroundColor(AppColors.textPrimary)
@@ -1932,20 +1984,20 @@ private struct AppSelectStepView: View {
             VStack(spacing: 12) {
                 PrimaryButton(
                     totalCount > 0
-                        ? (lang == .japanese ? "この選択で始める" : "Start with these") // 文言はユーザー添削待ち
-                        : (lang == .japanese ? "アプリを選択" : "Select apps") // 文言はユーザー添削待ち
+                        ? (lang == .japanese ? "この選択で始める" : "Start with these") // Copy waiting for user review
+                        : (lang == .japanese ? "アプリを選択" : "Select apps") // Copy waiting for user review
                 ) {
                     if totalCount > 0 {
                         BlockingService.shared.saveInitialSharedSelection(selection)
                         onFinish()
                     } else {
-                        // L18: 差分検知の基準として、開く直前の選択状態を退避
+                        // L18: save the selection state right before opening, as the baseline for detecting a difference
                         selectionAtPickerOpen = selection
                         showPicker = true
                     }
                 }
 
-                Button(lang == .japanese ? "あとで選ぶ" : "Later") { // 文言はユーザー添削待ち
+                Button(lang == .japanese ? "あとで選ぶ" : "Later") { // Copy waiting for user review
                     onFinish()
                 }
                 .font(AppTypography.footnote)
@@ -1955,11 +2007,13 @@ private struct AppSelectStepView: View {
             .padding(.bottom, 40)
         }
         .familyActivityPicker(isPresented: $showPicker, selection: $selection)
-        // ピッカーの右上チェックで閉じた瞬間、選択があればそのまま次へ進む
-        // (「チェック→さらに下のボタン」の二度手間を廃止、2026-07-19 ユーザーFB)
+        // The moment the picker is closed with the check at the top right, if there is a selection, go straight
+        // to the next step
+        // (removes the double step "check → then the button further down", 2026-07-19 user feedback)
         .onChange(of: showPicker) { _, isPresented in
-            // L18: 開いた時点の選択 (selectionAtPickerOpen) と差分が無ければキャンセル相当
-            // (何も選ばず/変えずに閉じた) とみなし、保存も次画面への前進もしない
+            // L18: if there is no difference from the selection when it opened (selectionAtPickerOpen), treat it
+            // as equivalent to cancel (closed without choosing/changing anything), and neither save nor move to
+            // the next screen
             if !isPresented && totalCount > 0 && selection != selectionAtPickerOpen {
                 BlockingService.shared.saveInitialSharedSelection(selection)
                 onFinish()

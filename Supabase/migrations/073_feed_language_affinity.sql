@@ -1,59 +1,63 @@
 -- ============================================================================
 -- 073_feed_language_affinity.sql
--- フィードで「閲覧者と同じ言語の投稿」を優先できる土台を追加する (2026-08-01)
+-- Add the groundwork for the feed to prioritize "posts in the same language as the viewer"
+-- (2026-08-01)
 -- ============================================================================
 --
--- 【目的】
--- 投稿者の端末言語 (user_posts.lang) と閲覧者の端末言語 (users.lang) を保存し、
--- fetch_mixed_feed_random のスコアリングに「同じ言語ならボーナス」の項を追加する。
--- ただし本ファイル適用直後の重みは 0 (無効) にして出荷する。理由は §3 参照。
+-- [Purpose]
+-- Store the poster's device language (user_posts.lang) and the viewer's device language (users.lang),
+-- and add a "bonus if the same language" term to the scoring of fetch_mixed_feed_random.
+-- However, it ships with the weight at 0 (disabled) right after this file is applied. See §3 for why.
 --
--- 【🔴 絶対厳守: 引数も RETURNS TABLE も変えない】
--- fetch_mixed_feed_random(limit_count integer DEFAULT 50, seed text DEFAULT NULL) の
--- シグネチャと戻り値の列は 063_feed_seeded_shuffle.sql から一切変更しない。
--- CREATE OR REPLACE FUNCTION のみで完結させる (DROP FUNCTION は書かない)。
--- CREATE OR REPLACE なら既存の GRANT/REVOKE (064 で修正した権限) がそのまま維持される
--- ため、064 のような「置換後に anon が実行可能に戻ってしまう」事故が起きない。
--- ⚠️ もし将来この関数の引数や戻り値を変える必要が出たら、DROP FUNCTION が必須になり、
--- 064 と同じ REVOKE FROM PUBLIC / FROM anon + GRANT TO authenticated を
--- 必ず同じファイルの末尾に書くこと (063 が一度これを漏らして本番で全投稿が
--- 未認証で読める状態を作った教訓)。
+-- [🔴 Strictly required: do not change the arguments or RETURNS TABLE]
+-- The signature and return columns of
+-- fetch_mixed_feed_random(limit_count integer DEFAULT 50, seed text DEFAULT NULL)
+-- are not changed at all from 063_feed_seeded_shuffle.sql.
+-- Everything is done with CREATE OR REPLACE FUNCTION only (no DROP FUNCTION is written).
+-- With CREATE OR REPLACE, the existing GRANT/REVOKE (the permissions fixed in 064) are kept as they
+-- are, so an accident like the one in 064 ("anon can execute it again after the replacement") cannot
+-- happen.
+-- ⚠️ If the arguments or return value of this function ever need to change, DROP FUNCTION becomes
+-- required, and the same REVOKE FROM PUBLIC / FROM anon + GRANT TO authenticated as in 064
+-- must be written at the end of the same file (the lesson from 063, which missed this once and left
+-- all posts readable without authentication in production).
 --
--- 【設計判断】
---   1. lang 列は user_posts / users の2つだけに追加する。quotes には追加しない
---      (公式名言は特定の投稿者の端末言語という概念が無いため、同一言語ボーナスの
---      対象は UGC 投稿 (kind='post') のみで良い)。
---   2. CHECK 制約は付けない。AppLanguage enum (en/ja) は将来 case が増える前提の設計
---      (AppLanguage.swift のコメント参照) で、CHECK を付けると新言語追加のたびに
---      マイグレーションが必要になり ADD COLUMN の "詰みにくさ" と矛盾する。
---      想定値は AppLanguage の rawValue ("en" / "ja" / 将来の追加分) だが、
---      DB 側では自由な text として保持する。
---   3. 重み w_same_lang の初期値は 0。ローンチ時点のコーパスはほぼ100%日本語
---      (法務URL公開までの経緯・実名廃止等、直近のコミット群参照) で、
---      「同じ言語を優先した結果フィードの多様性やエンゲージメントがどう動くか」を
---      判断できるデータが無い。0 なら本ファイル適用前後でフィードの出力が
---      完全に同一になることを検証できる (§5 の検証手順 (C))。英語圏の投稿が
---      増えてきたら SQL Editor で本関数を CREATE OR REPLACE し、w_same_lang の
---      数値を上げるだけで有効化できる。アプリ側の変更・再デプロイは不要
---      (029/063 と同じ「params CTE だけ書き換えれば良い」設計を踏襲)。
---   4. 閲覧者の言語は引数を増やさず (SELECT u.lang FROM public.users u WHERE u.id = auth.uid())
---      で取得する。auth.uid() は本関数がすでに follow/block フィルタで使っている
---      (063:137-139, 154-158) ので SECURITY DEFINER 下でも問題なく解決できる。
---   5. インデックスは追加しない。fetch_mixed_feed_random は user_posts.lang を
---      WHERE 句の絞り込み条件ではなく scored CTE 内の CASE 式 (スコア加点) でしか
---      参照しない。本関数は既に created_at > now() - interval '30 days' で
---      絞り込んだ上で残り全行を毎回スキャンする設計 (063:164, idx_user_posts_created_at
---      を使う想定) なので、lang 単体の部分インデックスを足しても本関数の実行計画は
---      変わらない (絞り込みに使われないインデックスは意味が無い)。将来 lang を
---      WHERE 句で使うようになったら (例: 「この言語だけ表示」フィルタ機能) その時点で
---      idx_user_posts_created_at のような複合/部分インデックスを検討すればよい。
+-- [Design decisions]
+--   1. The lang column is added only to user_posts / users. It is not added to quotes
+--      (official quotes have no concept of a specific poster's device language, so the
+--      same-language bonus only needs to target UGC posts (kind='post')).
+--   2. No CHECK constraint. The AppLanguage enum (en/ja) is designed on the assumption that more
+--      cases will be added (see the comment in AppLanguage.swift). A CHECK would require a
+--      migration for every new language, which contradicts ADD COLUMN being "hard to get stuck".
+--      The expected values are AppLanguage rawValues ("en" / "ja" / future additions), but
+--      the DB side keeps it as free text.
+--   3. The initial value of the weight w_same_lang is 0. At launch the corpus is almost 100%
+--      Japanese (see the recent commits: the history up to publishing the legal URLs, dropping
+--      real names, etc.), and there is no data to judge "how feed diversity and engagement change
+--      when the same language is prioritized". With 0, we can verify that the feed output is
+--      exactly the same before and after applying this file (§5 verification step (C)). Once
+--      English-language posts increase, it can be enabled just by running CREATE OR REPLACE on this
+--      function in the SQL Editor and raising the w_same_lang value. No app change or redeploy is
+--      needed (follows the same "only rewrite the params CTE" design as 029/063).
+--   4. The viewer's language is fetched without adding an argument, using
+--      (SELECT u.lang FROM public.users u WHERE u.id = auth.uid()). auth.uid() is already used by
+--      this function in the follow/block filters (063:137-139, 154-158), so it resolves fine
+--      under SECURITY DEFINER too.
+--   5. No index is added. fetch_mixed_feed_random references user_posts.lang only in a CASE
+--      expression (score bonus) inside the scored CTE, not as a WHERE filter condition. This
+--      function already filters with created_at > now() - interval '30 days' and then scans all
+--      remaining rows every time (063:164, expected to use idx_user_posts_created_at), so adding a
+--      partial index on lang alone would not change this function's execution plan (an index
+--      that is not used for filtering is pointless). If lang is ever used in a WHERE clause
+--      (e.g. a "show only this language" filter feature), consider a composite/partial index
+--      like idx_user_posts_created_at at that point.
 --
--- 実行順序: 072 完了後。何度実行しても安全 (ADD COLUMN IF NOT EXISTS +
--- CREATE OR REPLACE FUNCTION の冪等パターン)。
+-- Execution order: after 072 is done. Safe to run any number of times (idempotent pattern of
+-- ADD COLUMN IF NOT EXISTS + CREATE OR REPLACE FUNCTION).
 -- ============================================================================
 
 -- ============================================================================
--- 1. lang 列の追加
+-- 1. Add the lang column
 -- ============================================================================
 ALTER TABLE public.user_posts ADD COLUMN IF NOT EXISTS lang text;
 ALTER TABLE public.users      ADD COLUMN IF NOT EXISTS lang text;
@@ -74,12 +78,13 @@ COMMENT ON COLUMN public.users.lang IS
     '未同期のユーザーは NULL (同一言語ボーナスは常に0扱い)';
 
 -- ============================================================================
--- 2. fetch_mixed_feed_random: 同一言語ボーナス項を追加 (CREATE OR REPLACE のみ)
+-- 2. fetch_mixed_feed_random: add the same-language bonus term (CREATE OR REPLACE only)
 -- ============================================================================
--- 063 の現行定義を丸ごとコピーし、変更点は以下の2箇所のみ:
---   (a) params CTE に w_same_lang (初期値0) と viewer_lang を追加
---   (b) post 分岐のスコア式に「up.lang が viewer_lang と一致すれば w_same_lang を加点」を追加
--- それ以外 (quote 分岐 / ranked / quota / 最終 SELECT / ORDER BY / LIMIT) は無変更。
+-- Copies the current definition from 063 in full. The only changes are these 2 places:
+--   (a) add w_same_lang (initial value 0) and viewer_lang to the params CTE
+--   (b) in the score expression of the post branch, add "add w_same_lang if up.lang matches
+--       viewer_lang"
+-- Everything else (quote branch / ranked / quota / final SELECT / ORDER BY / LIMIT) is unchanged.
 CREATE OR REPLACE FUNCTION public.fetch_mixed_feed_random(
     limit_count integer DEFAULT 50,
     seed text DEFAULT NULL
@@ -107,24 +112,24 @@ LANGUAGE sql VOLATILE SECURITY DEFINER
 SET search_path = public
 AS $$
     WITH params AS MATERIALIZED (
-        -- ============ チューニング用重み (ここだけ書き換えて CREATE OR REPLACE すれば調整可) ============
+        -- ============ Tuning weights (adjust by rewriting only this part and running CREATE OR REPLACE) ============
         SELECT
-            3.0  ::double precision AS w_recency,          -- 投稿の新しさの最大点 (投稿直後)
-            24.0 ::double precision AS recency_half_hours, -- この時間経過で新しさ点が半減
-            0.5  ::double precision AS w_like,             -- ln(1+like_count) の係数
-            0.7  ::double precision AS w_comment,          -- ln(1+comment_count) の係数 (コメントはいいねより強い関心)
-            1.2  ::double precision AS w_follow,           -- フォロー中の投稿者へのボーナス
-            1.0  ::double precision AS w_seen,             -- ln(1+自分の閲覧回数) の既読ペナルティ係数 (減点)
-            1.5  ::double precision AS w_jitter,           -- ジッターの最大値 (探索性)
-            0.45 ::double precision AS quote_base,         -- 062: 名言はユーザー投稿より控えめに
-            2    ::integer          AS author_cap,         -- 1フィードあたり同一投稿者の最大件数 (postsのみ)
-            15   ::integer          AS quote_cap,          -- 062: 投稿が十分ある時の名言枠の下限 (適応型)
-            -- 063: 並びの種。アプリが毎回新しい値を渡す。省略時はサーバーで1つ作る
+            3.0  ::double precision AS w_recency,          -- Max recency score (right after posting)
+            24.0 ::double precision AS recency_half_hours, -- The recency score halves after this much time
+            0.5  ::double precision AS w_like,             -- Coefficient of ln(1+like_count)
+            0.7  ::double precision AS w_comment,          -- Coefficient of ln(1+comment_count) (a comment shows stronger interest than a like)
+            1.2  ::double precision AS w_follow,           -- Bonus for posters you follow
+            1.0  ::double precision AS w_seen,             -- Coefficient of the read penalty ln(1+own view count) (deduction)
+            1.5  ::double precision AS w_jitter,           -- Max jitter (exploration)
+            0.45 ::double precision AS quote_base,         -- 062: quotes are weighted lower than user posts
+            2    ::integer          AS author_cap,         -- Max number of posts from the same poster per feed (posts only)
+            15   ::integer          AS quote_cap,          -- 062: minimum quote slots when there are enough posts (adaptive)
+            -- 063: seed for the order. The app passes a new value every time. If omitted, the server creates one
             COALESCE(seed, gen_random_uuid()::text) AS shuffle_seed,
-            -- 073: 同一言語ボーナス。初期値0 = 無効 (有効化のしかたはファイル末尾を参照)
+            -- 073: same-language bonus. Initial value 0 = disabled (see the end of the file for how to enable it)
             0.0  ::double precision AS w_same_lang,
-            -- 073: 閲覧者(自分)の端末言語。引数を増やさずサブクエリで取得する。
-            -- users.lang が未同期 (NULL) なら同一言語ボーナスは常に0扱いになる
+            -- 073: the viewer's (own) device language. Fetched with a subquery, without adding an argument.
+            -- If users.lang is not synced (NULL), the same-language bonus is always treated as 0
             (SELECT u.lang FROM public.users u WHERE u.id = auth.uid()) AS viewer_lang
     ),
     scored AS (
@@ -150,7 +155,8 @@ AS $$
                 p.quote_base
                 + p.w_like * ln(1 + q.like_count)
                 + p.w_comment * ln(1 + q.comment_count)
-                -- 063: seed 由来の一様ジッター (同じ seed なら同じ並び / 変えれば必ず変わる)
+                -- 063: uniform jitter derived from the seed (the same seed gives the same order / a different seed
+                -- always changes it)
                 + p.w_jitter * (
                     ('x' || substr(md5(q.id::text || p.shuffle_seed), 1, 8))::bit(32)::bigint::double precision
                     / 4294967296.0
@@ -195,8 +201,9 @@ AS $$
                     ELSE 0
                   END
                 - p.w_seen * ln(1 + COALESCE(pv.view_count, 0))
-                -- 073: 投稿者の言語 (up.lang) が閲覧者の言語 (p.viewer_lang) と一致すれば加点。
-                -- どちらかが NULL (旧投稿 / lang 未同期ユーザー) なら加点しない (0のまま、減点もしない)
+                -- 073: add points if the poster's language (up.lang) matches the viewer's language (p.viewer_lang).
+                -- If either is NULL (old posts / users whose lang is not synced), no points are added (stays 0, no
+                -- deduction either)
                 + CASE
                     WHEN up.lang IS NOT NULL AND up.lang = p.viewer_lang THEN p.w_same_lang
                     ELSE 0
@@ -224,8 +231,8 @@ AS $$
           AND up.created_at > now() - interval '30 days'
     ),
     ranked AS (
-        -- posts: 同一投稿者の連投キャップ (052)。
-        -- quotes: kind 単位の1パーティション = フィード全体の名言キャップ (062)
+        -- posts: cap on consecutive posts from the same poster (052).
+        -- quotes: one partition per kind = the quote cap for the whole feed (062)
         SELECT s.*,
                row_number() OVER (
                    PARTITION BY s.kind,
@@ -235,7 +242,7 @@ AS $$
         FROM scored s
     ),
     quota AS (
-        -- 適応型の名言枠 (062): 投稿候補が limit_count に足りない分は名言で満たす
+        -- Adaptive quote slots (062): fill the shortfall of post candidates below limit_count with quotes
         SELECT GREATEST(
             p.quote_cap,
             limit_count - (
@@ -258,18 +265,19 @@ AS $$
     LIMIT limit_count;
 $$;
 
--- ⚠️ CREATE OR REPLACE FUNCTION は既存の GRANT/REVOKE を保持する (DROP しない限り
--- 権限テーブルは触られない)。したがって 064 で設定した
+-- ⚠️ CREATE OR REPLACE FUNCTION keeps the existing GRANT/REVOKE (the privilege tables are not
+-- touched unless you DROP). So the following, set in 064,
 --   REVOKE ... FROM PUBLIC, anon / GRANT ... TO authenticated
--- はここでは何もしなくても維持される。§5 の検証クエリ (B) で実際に維持されている
--- ことを確認すること。
--- ⚠️ 再警告: もし将来この関数を DROP FUNCTION してから作り直す必要が出たら、
--- 063→064 の顛末 (DROP 後に GRANT/REVOKE を書き忘れて未認証で全投稿が読める
--- 状態になった) と同じ事故を避けるため、DROP した同じファイルの末尾に必ず
+-- is kept here without doing anything. Confirm with verification query (B) in §5 that it is
+-- actually kept.
+-- ⚠️ Warning again: if this function ever needs to be dropped with DROP FUNCTION and recreated,
+-- then to avoid the same accident as 063→064 (GRANT/REVOKE was forgotten after the DROP, so all
+-- posts became readable without authentication), always put the following at the end of the same
+-- file that does the DROP:
 --   REVOKE EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer, text) FROM PUBLIC;
 --   REVOKE EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer, text) FROM anon;
 --   GRANT  EXECUTE ON FUNCTION public.fetch_mixed_feed_random(integer, text) TO authenticated;
--- を書くこと。
+-- Write these lines.
 
 COMMENT ON FUNCTION public.fetch_mixed_feed_random(integer, text) IS
     'おすすめフィード (名言+投稿の混合、スコアリング+seed 由来ジッター)。'
@@ -279,11 +287,11 @@ COMMENT ON FUNCTION public.fetch_mixed_feed_random(integer, text) IS
     '有効化できる。有効化のしかたは本ファイル末尾のコメント参照)';
 
 -- ============================================================================
--- 3. 有効化のしかた (w_same_lang を 0 から上げるときに読む)
+-- 3. How to enable (read this when raising w_same_lang from 0)
 -- ============================================================================
--- 前提: 十分な数のユーザーで user_posts.lang / users.lang が埋まっていること。
--- 具体的には以下の SQL で「lang が NULL の行の割合」を見て、大半のアクティブな
--- 投稿・ユーザーで埋まっていることを確認してから有効化すること:
+-- Prerequisite: user_posts.lang / users.lang must be filled in for enough users.
+-- Specifically, check "the share of rows where lang is NULL" with the SQL below, and enable it only
+-- after confirming that it is filled in for most active posts and users:
 --
 --   SELECT
 --     (SELECT count(*) FILTER (WHERE lang IS NULL) FROM public.user_posts
@@ -295,31 +303,32 @@ COMMENT ON FUNCTION public.fetch_mixed_feed_random(integer, text) IS
 --     (SELECT count(*) FROM public.users
 --        WHERE total_block_seconds > 0)                   AS users_total_active;
 --
--- 有効化は本関数を CREATE OR REPLACE FUNCTION で再実行し、params CTE の
+-- To enable, re-run this function with CREATE OR REPLACE FUNCTION and, in this line of the params CTE,
 --   0.0  ::double precision AS w_same_lang,
--- の "0.0" だけを書き換える (引数・RETURNS TABLE は変えないので既存の
--- GRANT/REVOKE はここでも維持される)。
+-- rewrite only the "0.0" (the arguments and RETURNS TABLE do not change, so the existing
+-- GRANT/REVOKE is kept here too).
 --
--- 数値の目安 (既存の重みとの相対関係):
---   - w_follow = 1.2 (フォロー中の投稿者への定数ボーナス) が「明確に効くが支配的ではない」
---     水準の参考値。同一言語ボーナスも似た性格の項 (関心の強い個別シグナルではなく
---     属性ベースの緩やかな傾斜) なので、まずは 0.3〜0.8 程度から試すことを推奨する。
---   - w_recency の最大値 3.0 や、いいね/コメントの ln() 項 (人気が出れば 0.5〜0.7 × ln(N+1)
---     で simple に 2〜3 点まで積み上がる) と比べて極端に大きくしない限り、
---     新しさ・人気の順位を丸ごと覆すことはない。
---   - w_jitter (最大1.5) より大きい値にすると、同一言語であること自体が探索性ジッターより
---     支配的な要因になる。「言語が違うだけで露出がほぼゼロになる」ような分断を避けたい
---     場合は w_jitter 程度 (1.5 前後) を上限の目安にする。
---   - 1.2 (w_follow) を明確に超える値 (例: 2.0 以上) にすると、「フォローしていない
---     同言語の投稿」が「フォロー中の他言語の投稿」より優先されるようになる。これが
---     意図通りか (言語の壁 > 人間関係) は運用judgement。
---   - 上げすぎた場合の症状: 特定言語のユーザーのフィードが同言語の投稿ばかりになり、
---     多言語コミュニティとしての混在が失われる。異常を感じたら 0 に戻せば即座に
---     旧挙動 (063 相当) に復帰する。
+-- Guide for the value (relative to the existing weights):
+--   - w_follow = 1.2 (constant bonus for posters you follow) is a reference for a level that
+--     "clearly has an effect but does not dominate". The same-language bonus is a similar kind of
+--     term (a gentle attribute-based tilt, not a strong individual interest signal), so starting
+--     from about 0.3 to 0.8 is recommended.
+--   - Unless it is made extremely large compared with the w_recency max of 3.0 or the ln() terms
+--     for likes/comments (once popular, 0.5 to 0.7 × ln(N+1) simply adds up to 2 to 3 points),
+--     it will not completely overturn the recency/popularity ranking.
+--   - A value larger than w_jitter (max 1.5) makes being in the same language a more dominant
+--     factor than the exploration jitter. To avoid a split where "exposure is almost zero just
+--     because the language differs", use about w_jitter (around 1.5) as a rough upper limit.
+--   - A value clearly above 1.2 (w_follow) (e.g. 2.0 or more) makes "same-language posts from
+--     people you do not follow" rank above "other-language posts from people you follow". Whether
+--     that is intended (language barrier > relationships) is an operational judgment.
+--   - Symptom of raising it too far: the feed of users of a given language becomes only posts in
+--     that language, and the mix of a multilingual community is lost. If something looks wrong,
+--     setting it back to 0 immediately restores the old behavior (equivalent to 063).
 -- ============================================================================
 
 -- ============================================================================
--- 4. 検証クエリ (A): lang 列が両テーブルに追加されているか
+-- 4. Verification query (A): are the lang columns added to both tables
 -- ============================================================================
 -- SELECT table_name, column_name, data_type, is_nullable
 -- FROM information_schema.columns
@@ -327,48 +336,52 @@ COMMENT ON FUNCTION public.fetch_mixed_feed_random(integer, text) IS
 --   AND table_name IN ('user_posts', 'users')
 --   AND column_name = 'lang'
 -- ORDER BY table_name;
--- 期待結果: user_posts.lang / users.lang の2行、どちらも data_type = 'text', is_nullable = 'YES'
+-- Expected result: 2 rows, user_posts.lang / users.lang, both data_type = 'text', is_nullable = 'YES'
 
 -- ============================================================================
--- 5. 検証クエリ (B): CREATE OR REPLACE 後も権限が維持されているか
---    (065/068 の aclexplode チェックと同じ形。fetch_mixed_feed_random に絞って確認)
+-- 5. Verification query (B): are the permissions kept after CREATE OR REPLACE
+--    (same form as the aclexplode check in 065/068, narrowed to fetch_mixed_feed_random)
 -- ============================================================================
 -- SELECT p.proname,
 --        pg_get_function_identity_arguments(p.oid) AS args,
 --        CASE
 --          WHEN EXISTS (SELECT 1 FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
 --                       WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')
---               THEN '🔴 PUBLIC(未認証でも実行可)'
+--               THEN '🔴 PUBLIC (executable even without authentication)'
 --          WHEN EXISTS (SELECT 1 FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
 --                       WHERE a.grantee = 'anon'::regrole::oid AND a.privilege_type = 'EXECUTE')
---               THEN '🟠 anon に付与'
+--               THEN '🟠 granted to anon'
 --          WHEN EXISTS (SELECT 1 FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
 --                       WHERE a.grantee = 'authenticated'::regrole::oid AND a.privilege_type = 'EXECUTE')
---               THEN '✅ 閉じている (authenticated のみ)'
---          ELSE '⚠️ authenticated にも付与されていない (退行の可能性)'
+--               THEN '✅ closed (authenticated only)'
+--          ELSE '⚠️ not granted to authenticated either (possible regression)'
 --        END AS verdict
 -- FROM pg_proc p
 -- JOIN pg_namespace n ON n.oid = p.pronamespace
 -- WHERE n.nspname = 'public' AND p.proname = 'fetch_mixed_feed_random';
--- 期待結果: verdict = '✅ 閉じている (authenticated のみ)' の1行 (anon には絶対に付かないこと)
+-- Expected result: 1 row with verdict = '✅ closed (authenticated only)' (it must never be granted to
+-- anon)
 
 -- ============================================================================
--- 6. 検証クエリ (C): w_same_lang = 0 の状態でフィード出力が変わっていないことの確認
+-- 6. Verification query (C): confirm that the feed output has not changed with w_same_lang = 0
 -- ============================================================================
--- 本ファイル適用前後で同じ seed を渡し、結果が完全一致することを確認する:
+-- Pass the same seed before and after applying this file, and confirm that the results match
+-- exactly:
 --
---   -- 適用前 (072 まで適用済みの状態) に SQL Editor で実行し、結果を保存しておく:
---   SELECT kind, item_id, score IS NOT NULL AS has_score  -- score は戻り値に含まれないため item_id の並び順のみを比較
+--   -- Run in the SQL Editor before applying (with everything up to 072 applied) and save the result:
+--   SELECT kind, item_id, score IS NOT NULL AS has_score  -- score is not in the return value,
+--   -- so only the order of item_id is compared
 --   FROM fetch_mixed_feed_random(30, 'verify-073-fixed-seed');
 --
---   -- 073 適用後、同じ seed で再実行:
+--   -- After applying 073, rerun with the same seed:
 --   SELECT kind, item_id
 --   FROM fetch_mixed_feed_random(30, 'verify-073-fixed-seed');
 --
--- item_id の並び順 (1件目から30件目まで) が完全に一致すれば、w_same_lang=0 の項が
--- スコアに何も足していないことが実証される (CASE の ELSE 0 が効いているだけで、
--- 加算対象自体が0なので浮動小数点の丸め誤差すら生まれない)。
--- 差分を機械的に見たい場合は、両方の結果を一時テーブルに保存して
+-- If the order of item_id (from the 1st to the 30th item) matches exactly, it proves that the
+-- w_same_lang=0 term adds nothing to the score (only the CASE's ELSE 0 is in effect, and the value
+-- being added is itself 0, so not even floating-point rounding error appears).
+-- If you want to check the difference mechanically, you can also save both results to temporary
+-- tables and confirm that
 --   SELECT * FROM before_result EXCEPT SELECT * FROM after_result;
--- が0行になることを確認してもよい。
+-- returns 0 rows.
 -- ============================================================================

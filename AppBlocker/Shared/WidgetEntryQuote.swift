@@ -2,15 +2,17 @@
 //  WidgetEntryQuote.swift
 //  AppBlocker + AreteWidget
 //
-//  メインアプリと AreteWidget 拡張で共有する軽量モデル + App Group のキー。
-//  Quote / UserPost / FeedItem を JSON で App Group に書き出し、ウィジェット側はここから読み込む。
-//  ⚠️ Target Membership: AppBlocker (main) と AreteWidget の両方にチェック必須。
+//  Lightweight model + App Group keys shared by the main app and the AreteWidget extension.
+//  Quote / UserPost / FeedItem are written to the App Group as JSON, and the widget side reads
+//  them from here.
+//  ⚠️ Target Membership: must be checked for both AppBlocker (main) and AreteWidget.
 //
 
 import Foundation
 
-/// ウィジェットに表示する 1 アイテム分の最小データ。
-/// 両言語のテキスト + 著者名 + 公式フラグだけを持つ (画像 URL は今回未対応)。
+/// Minimal data for 1 item shown in the widget.
+/// Holds only the text in both languages + author name + official flag (image URLs not supported
+/// this time).
 struct WidgetEntryQuote: Codable, Identifiable, Equatable, Hashable {
     let id: String
     let textJp: String
@@ -26,7 +28,7 @@ struct WidgetEntryQuote: Codable, Identifiable, Equatable, Hashable {
         self.isOfficial = isOfficial
     }
 
-    /// 言語に応じた本文。空文字なら他方にフォールバック。
+    /// Body text for the language. If empty, fall back to the other one.
     func displayText(jaPreferred: Bool) -> String {
         if jaPreferred {
             return textJp.isEmpty ? textEn : textJp
@@ -36,12 +38,12 @@ struct WidgetEntryQuote: Codable, Identifiable, Equatable, Hashable {
     }
 }
 
-/// App Group UserDefaults でウィジェットキャッシュをやり取りするキー。
+/// Keys for exchanging the widget cache through App Group UserDefaults.
 enum WidgetCacheKey {
-    /// ランダムプール (公式 quote + 全 UGC の混在、最大 N 件)
+    /// Random pool (mix of official quotes + all UGC, up to N items)
     static let randomPool = "widget_random_pool_v1"
-    /// お気に入りプール (いいね済み quote + post)
+    /// Favorites pool (liked quotes + posts)
     static let favoritePool = "widget_favorite_pool_v1"
-    /// 現在の表示言語 ("ja" / "en")
+    /// Current display language ("ja" / "en")
     static let language = "widget_language_v1"
 }

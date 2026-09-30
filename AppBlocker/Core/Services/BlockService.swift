@@ -2,7 +2,7 @@
 //  BlockService.swift
 //  AppBlocker
 //
-//  ユーザーブロック管理サービス (Supabase user_blocks)
+//  User block management service (Supabase user_blocks)
 //
 
 import Foundation
@@ -48,8 +48,8 @@ final class BlockService: ObservableObject {
                 .insert(row)
                 .execute()
 
-            // trigger unfollow_on_block で双方向フォローが解除されたので
-            // フォロー状態を再ロード
+            // The trigger unfollow_on_block removed the follows in both directions, so
+            // reload the follow state
             await FollowService.shared.loadFollowedAuthors()
 
             print("🚫 Blocked user: \(userId)")
@@ -107,7 +107,7 @@ final class BlockService: ObservableObject {
         }
     }
 
-    /// ブロック中ユーザーの display_name / avatar_url を取得 (BlockedAccountsView 用)
+    /// Fetch display_name / avatar_url of blocked users (for BlockedAccountsView)
     func fetchBlockedUsers() async -> [BlockedUser] {
         guard !blockedUserIds.isEmpty else { return [] }
 

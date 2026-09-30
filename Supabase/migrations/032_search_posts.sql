@@ -1,35 +1,35 @@
 -- ============================================================
 -- 032_search_posts.sql
--- 投稿検索: search_posts RPC
+-- Post search: search_posts RPC
 -- ============================================================
--- 背景 (2026-07-15 検索タブ実装):
---   検索タブを「アカウント / 投稿」2セグメント制で新設する。アカウント検索は
---   022_sns_minimum.sql + 025_search_users_escape.sql の search_users を
---   そのまま流用するため、本ファイルは search_posts のみを追加する
---   (アカウント検索用の新規 RPC は作らない)。
+-- Background (2026-07-15 search tab implementation):
+--   A new search tab is added with 2 segments, "アカウント / 投稿" ("Accounts / Posts"). Account
+--   search reuses search_users from 022_sns_minimum.sql + 025_search_users_escape.sql
+--   as is, so this file only adds search_posts
+--   (no new RPC for account search).
 --
--- 設計判断:
---   - 戻り値の列は 029_recommend_feed.sql の fetch_mixed_feed_random と
---     完全に同じ 17 列にする。Swift 側の FeedItem デコーダをそのまま使い回し、
---     検索結果を FeedCardListView にそのまま渡せるようにするため
---     (新しい Decodable 型を作らない)。kind は常に 'post' 固定。
---   - マッチ対象は user_posts.title (部分一致) と tags (前方一致) の2つ。
---     本文 (text_jp/text_en) は対象にしない (仕様通り、キャプション/タグのみ)。
---   - クエリ正規化は 025 と同じ LIKE エスケープ (\ % _) に加え、先頭の '#' を
---     除去する (ハッシュタグ入力 "#朝活" のような入力でもタグ前方一致にヒットさせる)。
---   - post 枝の WHERE (ブロックフィルタ / モデレーションフィルタ) は
---     029 の post 枝と一言一句同じにする。検索経由で層1/層2フィルタが抜け穴に
---     ならないようにするため。
---   - 空クエリ (正規化後 '') は 0 行を返すガードを入れる (全件スキャン防止)。
---   - 並び順: タグ完全一致 (大文字小文字無視) を最優先、次にいいね数、次に新しさ。
---     "検索語そのものと同じタグを持つ投稿" が最も意図に近いと判断。
+-- Design decisions:
+--   - The return columns are exactly the same 17 columns as fetch_mixed_feed_random in
+--     029_recommend_feed.sql. So the Swift FeedItem decoder can be reused as is, and
+--     search results can be passed straight to FeedCardListView
+--     (no new Decodable type). kind is always fixed to 'post'.
+--   - Matching targets are user_posts.title (substring match) and tags (prefix match).
+--     The body (text_jp/text_en) is not searched (per the spec, caption/tags only).
+--   - Query normalization uses the same LIKE escaping as 025 (\ % _), plus removing a leading '#'
+--     (so hashtag input such as "#朝活" ("#morningroutine") also hits the tag prefix match).
+--   - The WHERE of the post branch (block filter / moderation filter) is
+--     word for word the same as the post branch in 029, so that search does not become a loophole
+--     around the layer 1/layer 2 filters.
+--   - An empty query ('' after normalization) has a guard that returns 0 rows (prevents a full scan).
+--   - Order: exact tag match (case-insensitive) first, then like count, then recency.
+--     "Posts with a tag identical to the search term" were judged closest to the intent.
 --
--- 適用方法:
---   Supabase Dashboard の SQL Editor で貼り付け実行、または
+-- How to apply:
+--   paste and run in the SQL Editor of Supabase Dashboard, or
 --   `NEW_DB_URL=... bash apply_sql.sh Supabase/migrations/032_search_posts.sql`
 --
--- 実行順序: 027 の後 (moderation_config / moderation_status に依存)。何度実行しても安全
--- (CREATE OR REPLACE、新テーブル・新列は追加しない)。
+-- Execution order: after 027 (depends on moderation_config / moderation_status). Safe to run any
+-- number of times (CREATE OR REPLACE, no new tables or columns are added).
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.search_posts(
@@ -61,9 +61,9 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
     WITH normalized AS (
-        -- 先頭の '#' を除去 (ハッシュタグ入力対応) してから LIKE 特殊文字をエスケープ。
-        -- raw はエスケープ前の文字列。ORDER BY のタグ完全一致判定は LIKE パターンでなく
-        -- 等値比較なので、エスケープ済み q を使うと '_' '%' '\' を含むタグが一致しなくなる
+        -- Remove a leading '#' (for hashtag input), then escape LIKE special characters.
+        -- raw is the string before escaping. The exact tag match check in ORDER BY is an equality comparison,
+        -- not a LIKE pattern, so using the escaped q would make tags containing '_' '%' '\' fail to match
         SELECT
             s.stripped AS raw,
             replace(replace(replace(s.stripped, '\', '\\'), '%', '\%'), '_', '\_') AS q
@@ -127,7 +127,8 @@ REVOKE EXECUTE ON FUNCTION public.search_posts(text, integer) FROM anon;
 GRANT  EXECUTE ON FUNCTION public.search_posts(text, integer) TO authenticated;
 
 -- ============================================================
--- 動作確認用クエリ (実行不要、コメント)
+-- Queries for checking behavior (no need to run, comments only)
 -- ============================================================
 -- SELECT kind, item_id, title, tags, like_count FROM search_posts('朝活', 20);
--- SELECT kind, item_id, title, tags, like_count FROM search_posts('#朝活', 20); -- '#' を除去して同じ結果になること
+-- SELECT kind, item_id, title, tags, like_count FROM search_posts('#朝活', 20);
+-- -- '#' is removed, so this must return the same result as the line before

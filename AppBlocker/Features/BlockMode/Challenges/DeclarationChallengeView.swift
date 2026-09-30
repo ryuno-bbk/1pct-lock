@@ -2,18 +2,20 @@
 //  DeclarationChallengeView.swift
 //  AppBlocker
 //
-//  解除課題「次にやることを書く」= 実行意図 (if-then プラン)。
+//  Unlock challenge "次にやることを書く" ("Write what you will do next") = implementation
+//  intention (if-then plan).
 //
-//  根拠: Gollwitzer & Sheeran (2006) のメタ分析で d=0.65 (94試験)。
-//  2024年の更新版では642試験。行動変容で最も実証された技法。
+//  Basis: meta-analysis by Gollwitzer & Sheeran (2006), d=0.65 (94 studies).
+//  The 2024 update covers 642 studies. The best-proven technique for behavior change.
 //
-//  🔴 聞く内容がこの機能の全て:
-//    「解除したら何をするか」ではなく「**休憩が終わったら何をやるか**」を聞く。
-//    前者の正直な答えは「スクロールする」で、聞く意味が無い (2026-08-29 ユーザー指摘)。
-//    スクロールしたい衝動は認めた上で、その先に作業を置かせる。
+//  🔴 What it asks is the whole feature:
+//    Ask not "what will you do after unlocking" but "**what will you do when the break is over**".
+//    The honest answer to the first is "scroll", so there is no point asking it (2026-08-29 user
+//    feedback). Accept the urge to scroll, and make the user put the work after it.
 //
-//  ⚠️ TextField は必ずこの小さな View に閉じ込めておくこと。
-//     大きな View に直接置くと実機で描画が重くなる (feedback_swiftui_performance)。
+//  ⚠️ Always keep the TextField inside this small View.
+//     Placing it directly in a large View makes rendering heavy on a real device
+//     (feedback_swiftui_performance).
 //
 
 import SwiftUI
@@ -21,9 +23,9 @@ import SwiftUI
 struct DeclarationChallengeView: View {
 
     let lang: AppLanguage
-    /// 書き終えて解除に進む
+    /// Finished writing, go on to unlock
     let onCompleted: () -> Void
-    /// やめて中断画面に戻る
+    /// Give up and go back to the interruption screen
     let onCancel: () -> Void
 
     @State private var text: String = ""
@@ -31,7 +33,7 @@ struct DeclarationChallengeView: View {
 
     private var ja: Bool { lang == .japanese }
 
-    /// 空白だけで通せないようにする。長さは求めない (書く行為自体が目的)
+    /// Do not allow only whitespace. No length required (the act of writing is the point)
     private var canConfirm: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -52,7 +54,7 @@ struct DeclarationChallengeView: View {
             .padding(.vertical, 32)
         }
         .task {
-            // 開いた瞬間に入力できる状態にする (1タップ減らす)
+            // Make it ready for input the moment it opens (one less tap)
             try? await Task.sleep(nanoseconds: 350_000_000)
             isFocused = true
         }
@@ -70,7 +72,7 @@ struct DeclarationChallengeView: View {
         }
     }
 
-    // ⚠️ 文言はユーザー添削待ち
+    // ⚠️ Wording is waiting for the user's review
     private var prompt: some View {
         VStack(spacing: 10) {
             Text(ja ? "休憩が終わったら、何をやりますか" : "After the break, what will you do?")
@@ -107,7 +109,7 @@ struct DeclarationChallengeView: View {
             isFocused = false
             onCompleted()
         } label: {
-            Text(ja ? "ロックを解除する" : "Unlock") // 文言はユーザー添削待ち
+            Text(ja ? "ロックを解除する" : "Unlock") // Wording is waiting for the user's review
                 .font(.system(size: 16, weight: .bold))
                 .foregroundColor(canConfirm ? .black : .white.opacity(0.35))
                 .frame(maxWidth: .infinity)

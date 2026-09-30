@@ -1,21 +1,21 @@
 -- ============================================================
 -- 025_search_users_escape.sql
--- search_users の LIKE ワイルドカード未エスケープ修正
+-- Fix unescaped LIKE wildcards in search_users
 -- ============================================================
--- 背景 (2026-07-07 Fable レビュー指摘):
---   022 の search_users は query をそのまま LIKE / ILIKE パターンに連結しており、
---   「%」「_」を含む検索語で意図しない全件マッチ的な結果が返る
---   (例: 「_」1文字で全ハンドルが前方一致扱いになる)。
---   セキュリティ問題ではない (返るのは元々公開のプロフィール情報のみ) が、
---   検索結果が壊れるためエスケープを追加して関数を差し替える。
---   ロジックはそれ以外 022 と同一 (handle 前方一致優先 + display_name 部分一致、
---   自分がブロックした相手を除外)。
+-- Background (pointed out in the 2026-07-07 Fable review):
+--   search_users in 022 concatenated query directly into the LIKE / ILIKE pattern, so
+--   search terms with "%" or "_" returned unintended match-everything results
+--   (e.g. a single "_" made every handle count as a prefix match).
+--   Not a security problem (only already public profile info is returned), but
+--   the search results break, so the function is replaced with escaping added.
+--   Otherwise the logic is the same as 022 (handle prefix match first + display_name partial match,
+--   excluding users you blocked).
 --
--- 適用方法:
---   022 適用済みの環境に対し、Supabase Dashboard の SQL Editor で貼り付け実行、
---   または `NEW_DB_URL=... bash apply_sql.sh Supabase/migrations/025_search_users_escape.sql`
+-- How to apply:
+--   On an environment with 022 applied, paste and run it in the SQL Editor of the Supabase
+--   Dashboard, or `NEW_DB_URL=... bash apply_sql.sh Supabase/migrations/025_search_users_escape.sql`
 --
--- 実行順序: 022 の後 (023/024 との前後は問わない)。何度実行しても安全
+-- Run order: after 022 (order relative to 023/024 does not matter). Safe to run any number of times
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.search_users(
@@ -35,7 +35,7 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
     WITH escaped AS (
-        -- LIKE 特殊文字 (\ % _) をエスケープしてリテラル扱いにする
+        -- Escape LIKE special characters (\ % _) so they are treated as literals
         SELECT replace(replace(replace(trim(query), '\', '\\'), '%', '\%'), '_', '\_') AS q
     )
     SELECT
@@ -60,7 +60,7 @@ AS $$
     LIMIT limit_count;
 $$;
 
--- GRANT は 022 と同一 (authenticated のみ)。CREATE OR REPLACE では権限は維持されるが、
--- 冪等性と明示性のため再宣言する。
+-- GRANT is the same as 022 (authenticated only). CREATE OR REPLACE keeps privileges, but
+-- they are declared again for idempotency and clarity.
 REVOKE EXECUTE ON FUNCTION public.search_users(text, integer) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.search_users(text, integer) TO authenticated;

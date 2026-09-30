@@ -6,19 +6,19 @@
 	<true/>
 	<key>CFBundleDisplayName</key>
 	<string>1%</string>
-	<!-- 輸出コンプライアンス (2026-07-31): 本アプリの暗号化は HTTPS/TLS (OS 標準) のみで、
-	     独自実装や非免除アルゴリズムは使っていない = 免除対象。このキーを入れておくと
-	     TestFlight/App Store へビルドを上げるたびに暗号化の質問が出るのを止められる -->
+	<!-- Export compliance (2026-07-31): the only encryption in this app is HTTPS/TLS (provided by the OS).
+	     It uses no custom implementation and no non-exempt algorithm, so it is exempt. With this key set,
+	     the encryption question no longer comes up every time a build is uploaded to TestFlight/App Store -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<!-- AdMob (2026-07-31): フィード内ネイティブ広告のみ。ATTは出さない = NSUserTrackingUsageDescription を
-	     絶対に追加しない (追加すると SDK が IDFA 取得を試み、App Privacy の「トラッキング=いいえ」が崩れる)。
-	     アプリIDは本番値 (2026-07-31 取得)。広告ユニットIDは NativeAdService.swift 側にあり、
-	     デバッグビルドではテストユニットへ自動で切り替わる -->
+	<!-- AdMob (2026-07-31): native ads in the feed only. No ATT prompt, so NEVER add NSUserTrackingUsageDescription
+	     (if it is added, the SDK tries to get the IDFA, and the App Privacy answer "Tracking = No" stops being true).
+	     The app ID is the production value (obtained 2026-07-31). The ad unit ID is in NativeAdService.swift,
+	     and Debug builds switch to a test unit automatically -->
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-5685067595656519~9751225878</string>
-	<!-- SKAdNetworkItems: Google 公式ドキュメント掲載の一覧 (2026-07-31 時点)。Google 本体 (cstr6suwn9) +
-	     主要バイヤー。ATT なし運用でも SKAdNetwork 経由の成果計測に必要 (プライバシー保護型でIDFA不使用) -->
+	<!-- SKAdNetworkItems: the list from Google's official documentation (as of 2026-07-31). Google itself (cstr6suwn9) +
+	     major buyers. Needed for conversion measurement through SKAdNetwork even without ATT (privacy-preserving, no IDFA) -->
 	<key>SKAdNetworkItems</key>
 	<array>
 		<dict>
@@ -209,9 +209,9 @@
 	<key>UIAppFonts</key>
 	<array>
 		<string>Montserrat-BlackItalic.ttf</string>
-		<!-- 投稿エディタの手書きフォント (Yusei Magic / SIL Open Font License 1.1)。
-		     ライセンス全文は Resources/Fonts/YuseiMagic-OFL.txt に同梱している。
-		     日本語グリフを自前で持つ数少ない手書き書体で、かつ太いので写真の上でも読める -->
+		<!-- Handwriting font for the post editor (Yusei Magic / SIL Open Font License 1.1).
+		     The full license text is included at Resources/Fonts/YuseiMagic-OFL.txt.
+		     It is one of the few handwriting typefaces with its own Japanese glyphs, and it is bold enough to read on top of photos -->
 		<string>YuseiMagic-Regular.ttf</string>
 	</array>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>

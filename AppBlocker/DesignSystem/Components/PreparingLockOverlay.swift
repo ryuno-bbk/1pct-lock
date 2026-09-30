@@ -2,12 +2,13 @@
 //  PreparingLockOverlay.swift
 //  AppBlocker
 //
-//  ロック開始直後に最低 ~1.8s 表示する「準備中」オーバーレイ。
-//  目的は2つ:
-//   1. shield 適用直後にホームへ遷移すると固まる症状の緩和 (揮発ウィンドウ中の操作を封じる)
-//   2. 待たされる体感を「準備している」フィードバックに変える
-//  BlockingService.isPreparingLock フラグで表示制御する。
-//  完全モノクロ (AppColors 準拠、金色不使用)。
+//  A "preparing" overlay shown for at least ~1.8s right after a lock starts.
+//  2 purposes:
+//   1. Ease the freeze that happens when navigating home right after the shield is applied (blocks
+//      input during the volatile window)
+//   2. Turn the feeling of waiting into "it's preparing" feedback
+//  Display is controlled by the BlockingService.isPreparingLock flag.
+//  Fully monochrome (follows AppColors, no gold).
 //
 
 import SwiftUI
@@ -30,7 +31,7 @@ struct PreparingLockOverlay: View {
                     .foregroundColor(AppColors.textPrimary)
             }
         }
-        // オーバーレイ自体がヒットテストを奪い、下の UI への操作を封じる (遷移レース防止)
+        // The overlay itself takes the hit testing and blocks input to the UI below (prevents a navigation race)
         .contentShape(Rectangle())
         .transition(.opacity)
     }

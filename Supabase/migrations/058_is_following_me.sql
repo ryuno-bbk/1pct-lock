@@ -1,16 +1,16 @@
 -- ============================================================
 -- 058_is_following_me.sql
--- 相互フォロー表示用 RPC (2026-07-30 D案プロフィール改修とセット)
+-- RPC for showing mutual follows (goes with the 2026-07-30 plan D profile rework)
 -- ============================================================
--- 背景: 他人プロフィールのフォローボタンを、相手が自分をフォローしている場合に
--- 「相互フォロー」表示へ変える (ユーザー要望「相互フォローが分かると絆が生まれる」)。
--- user_follows の他人行は RLS で読めないため、boolean だけを返す SECURITY DEFINER RPC で
--- 最小開示にする (誰が誰をフォローしているかの一覧は開示しない。
--- 「相手→自分」の1ビットのみ、かつ呼び出し元は自分の分しか聞けない)。
+-- Background: change the follow button on another user's profile to show "相互フォロー" ("Mutual
+-- follow") when that user follows you (user request: "knowing it is a mutual follow creates a bond").
+-- Other people's rows in user_follows cannot be read under RLS, so a SECURITY DEFINER RPC that returns
+-- only a boolean keeps disclosure minimal (it does not disclose the list of who follows whom.
+-- Only 1 bit, "them → me", and the caller can only ask about themself).
 --
--- クライアント: FollowService.isFollowedBy → UserProfileView のボタン表示。
--- 未適用でもクライアントは false 扱い (通常のフォロー中表示) で壊れない。
--- 冪等。ロールバック: DROP FUNCTION public.is_following_me(uuid);
+-- Client: FollowService.isFollowedBy → button display in UserProfileView.
+-- If not applied, the client treats it as false (normal Following display) and does not break.
+-- Idempotent. Rollback: DROP FUNCTION public.is_following_me(uuid);
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION public.is_following_me(p_user_id uuid)

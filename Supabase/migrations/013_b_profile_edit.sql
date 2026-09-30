@@ -1,25 +1,25 @@
 -- ============================================================
 -- 013_b_profile_edit.sql
--- S15 プロフィール編集: Storage avatars バケット + RLS
+-- S15 profile edit: Storage avatars bucket + RLS
 -- ============================================================
--- 目的:
---   1. Supabase Storage に public バケット `avatars` を作成
---   2. オブジェクトレベル RLS:
---      - SELECT: 誰でも (public バケット相当)
---      - INSERT/UPDATE/DELETE: 自分の {uid}/ フォルダ配下のみ
---   3. ファイル命名規則は Swift 側で `{uid}/avatar.jpg` 固定
---      (キャッシュ無効化は Swift 側で URL に ?v=timestamp 付与)
+-- Purpose:
+--   1. Create a public bucket `avatars` in Supabase Storage
+--   2. Object-level RLS:
+--      - SELECT: anyone (equivalent to a public bucket)
+--      - INSERT/UPDATE/DELETE: only under your own {uid}/ folder
+--   3. The file naming rule is fixed to `{uid}/avatar.jpg` on the Swift side
+--      (cache invalidation is done on the Swift side by adding ?v=timestamp to the URL)
 --
--- users テーブル側は変更なし:
---   - display_name / avatar_url 列は 001_a_auth.sql で既に作成済
---   - is_pro 列は 010_b_pro_badge.sql で追加済
---   - 3 フィード RPC は author_avatar_url を 010 から既に返している
+-- No change on the users table side:
+--   - the display_name / avatar_url columns already exist from 001_a_auth.sql
+--   - the is_pro column was added in 010_b_pro_badge.sql
+--   - the 3 feed RPCs already return author_avatar_url since 010
 --
--- 実行順序: 012 完了後。再実行可能 (ON CONFLICT + DROP POLICY IF EXISTS)
+-- Run order: after 012. Can be re-run (ON CONFLICT + DROP POLICY IF EXISTS)
 -- ============================================================
 
 -- ============================================
--- 1. avatars バケット作成 (public, 5MB 上限, jpeg/png/webp)
+-- 1. Create the avatars bucket (public, 5MB limit, jpeg/png/webp)
 -- ============================================
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
@@ -35,24 +35,24 @@ ON CONFLICT (id) DO UPDATE SET
     allowed_mime_types  = EXCLUDED.allowed_mime_types;
 
 -- ============================================
--- 2. RLS ポリシー
+-- 2. RLS policies
 -- ============================================
--- storage.objects は Supabase が RLS 有効化済み (前提)
--- ポリシー名衝突を防ぐため DROP IF EXISTS から
+-- storage.objects already has RLS enabled by Supabase (assumption)
+-- Start with DROP IF EXISTS to avoid policy name collisions
 
 DROP POLICY IF EXISTS "avatars_public_read"    ON storage.objects;
 DROP POLICY IF EXISTS "avatars_owner_insert"   ON storage.objects;
 DROP POLICY IF EXISTS "avatars_owner_update"   ON storage.objects;
 DROP POLICY IF EXISTS "avatars_owner_delete"   ON storage.objects;
 
--- 2-1. 誰でも read 可 (public バケットなので Supabase publicURL でも参照可)
+-- 2-1. Anyone can read (it is a public bucket, so it can also be referenced via the Supabase publicURL)
 CREATE POLICY "avatars_public_read"
     ON storage.objects
     FOR SELECT
     USING (bucket_id = 'avatars');
 
--- 2-2. 自分の uid フォルダ配下のみ INSERT 可
--- パス例: "{uid}/avatar.jpg" → (storage.foldername(name))[1] が uid
+-- 2-2. INSERT allowed only under your own uid folder
+-- Path example: "{uid}/avatar.jpg" → (storage.foldername(name))[1] is the uid
 CREATE POLICY "avatars_owner_insert"
     ON storage.objects
     FOR INSERT
@@ -61,7 +61,7 @@ CREATE POLICY "avatars_owner_insert"
         AND auth.uid()::text = (storage.foldername(name))[1]
     );
 
--- 2-3. 自分の uid フォルダ配下のみ UPDATE 可 (上書きアップロード用)
+-- 2-3. UPDATE allowed only under your own uid folder (for overwrite uploads)
 CREATE POLICY "avatars_owner_update"
     ON storage.objects
     FOR UPDATE
@@ -70,7 +70,7 @@ CREATE POLICY "avatars_owner_update"
         AND auth.uid()::text = (storage.foldername(name))[1]
     );
 
--- 2-4. 自分の uid フォルダ配下のみ DELETE 可 (アバター削除用)
+-- 2-4. DELETE allowed only under your own uid folder (for deleting the avatar)
 CREATE POLICY "avatars_owner_delete"
     ON storage.objects
     FOR DELETE
@@ -80,10 +80,10 @@ CREATE POLICY "avatars_owner_delete"
     );
 
 -- ============================================
--- 3. 動作確認用クエリ (実行不要、コメント)
+-- 3. Queries for checking behavior (no need to run, comments)
 -- ============================================
--- バケット確認:
+-- Check the bucket:
 --   SELECT id, public, file_size_limit FROM storage.buckets WHERE id = 'avatars';
--- ポリシー確認:
+-- Check the policies:
 --   SELECT policyname, cmd FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects'
 --   AND policyname LIKE 'avatars%';

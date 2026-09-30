@@ -2,9 +2,9 @@
 //  UsageReportExtension.swift
 //  UsageReportExtension
 //
-//  オンボーディング診断用のレポート拡張エントリポイント。
-//  本体アプリ側の DeviceActivityReport(...) の Context と rawValue が一致した
-//  シーンだけがシステムに描画される。
+//  Report extension entry point for the onboarding diagnosis.
+//  Only scenes whose Context rawValue matches the DeviceActivityReport(...) in the main app
+//  are drawn by the system.
 //
 
 import DeviceActivity
@@ -14,9 +14,9 @@ import SwiftUI
 @main
 struct UsageReportExtension: DeviceActivityReportExtension {
     var body: some DeviceActivityReportScene {
-        // シーンは2つだが、本体側の DeviceActivityReport は常に単一インスタンスで
-        // context を切り替える (実機検証で確定した唯一動く構成。詳細は
-        // TotalActivityReport.swift のコメント参照)
+        // There are 2 scenes, but the main app's DeviceActivityReport is always a single instance that
+        // switches context (the only setup confirmed to work in real-device testing. For details see the
+        // comments in TotalActivityReport.swift)
         OnboardingComparisonReport { config in
             ComparisonReportView(config: config)
         }

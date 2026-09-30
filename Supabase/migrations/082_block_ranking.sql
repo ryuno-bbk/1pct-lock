@@ -1,38 +1,40 @@
 -- ============================================================
 -- 082_block_ranking.sql
--- ランキング (累計ロック時間) + 上位% の母数を「全実ユーザー」へ変更
+-- Ranking (total lock time) + change the top percentile population to "all real users"
 -- ============================================================
--- ユーザー決定 (2026-09-05):
+-- User decisions (2026-09-05):
 --
---   1. 🔴 上位% の母数に「一度もロックしていない人」も入れる。
---      016 では母数 = total_block_seconds > 0 の人だけだった。
---      → 全実ユーザーに変える。
---      理由: 0時間の人より上なのは事実であり嘘ではない。母数が増えるほど
---            「上位◯%」の見え方が良くなり、TOP10%バッジを持てる人数も増える。
+--   1. 🔴 The top percentile population also includes "people who have never locked".
+--      In 016 the population was only people with total_block_seconds > 0.
+--      → Changed to all real users.
+--      Reason: being above people with 0 hours is a fact, not a lie. The larger the population,
+--            the better "top ◯%" looks, and the more people can hold the TOP10% badge.
 --
---      🔴 ただし本人が 0 秒の場合は has_data=false のまま。
---        ロックしたことがない人に「上位28%」と出すと、何もしないことを
---        称える表示になってしまう。
+--      🔴 However, if the user themselves has 0 seconds, has_data stays false.
+--        Showing "top 28%" to someone who has never locked would be a display that praises
+--        doing nothing.
 --
---   2. 🔴 種アカウント (`%@seed.invalid`) は母数からも一覧からも外す。
---      ランキングに名前が並ぶ画面を作る以上、実在しない人を混ぜない。
+--   2. 🔴 Seed accounts (`%@seed.invalid`) are excluded from both the population and the list.
+--      Since we are building a screen that lists names in a ranking, we do not mix in people who do
+--      not exist.
 --
---   3. ⚠️ チート対策は入れない (ユーザー判断)。
---      `block_sessions` は端末申告なので、順位は改ざんに強くない。
---      016 の設計メモの警告は生きているが、「ユーザーが増えてから対策する。
---      変な稼ぎ方をする人が居ても、周りを引き立ててくれるならそれでいい」との判断。
---      🔴 順位を強く見せる機能を足すときは、この判断を再検討すること。
+--   3. ⚠️ No anti-cheat measures are added (user's decision).
+--      `block_sessions` is self-reported by the device, so the ranking is not robust against tampering.
+--      The warning in 016's design memo still stands, but the decision was: "we'll add measures once
+--      there are more users. Even if someone games it, that's fine as long as it makes the others
+--      look good".
+--      🔴 When adding features that show the rank more prominently, reconsider this decision.
 --
--- 実行順序: 081 の後。何度実行しても安全
--- 戻すとき: 016 の get_block_percentile 定義を再適用し、
+-- Run order: after 081. Safe to run any number of times
+-- To revert: re-apply the get_block_percentile definition from 016, and
 --           drop function if exists public.get_block_ranking(integer);
 -- ============================================================
 
 -- ============================================
--- 1. 実ユーザー判定のヘルパー
+-- 1. Helper that checks for a real user
 -- ============================================
--- auth.users を参照するので SECURITY DEFINER が要る。
--- 🔴 公開しない (誰がどの認証情報を持つかを推測させないため)
+-- It reads auth.users, so SECURITY DEFINER is needed.
+-- 🔴 Not public (so nobody can infer who has which credentials)
 CREATE OR REPLACE FUNCTION public.is_real_user(target_user_id uuid)
 RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER
@@ -48,7 +50,7 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.is_real_user(uuid) FROM PUBLIC, anon, authenticated;
 
 -- ============================================
--- 2. get_block_percentile を母数変更版に差し替え (シグネチャ不変)
+-- 2. Replace get_block_percentile with the version with the new population (signature unchanged)
 -- ============================================
 CREATE OR REPLACE FUNCTION public.get_block_percentile(target_user_id uuid)
 RETURNS jsonb
@@ -63,19 +65,20 @@ BEGIN
     SELECT total_block_seconds INTO my_total
     FROM public.users WHERE id = target_user_id;
 
-    -- 🔴 本人にロック実績が無い場合は今までどおり非表示。
-    --    母数に入れることと、本人に順位を見せることは別 (何もしない人を称えない)
+    -- 🔴 If the user themselves has no lock record, keep it hidden as before.
+    --    Including them in the population and showing them a rank are separate things (we do not praise
+    --    people who do nothing)
     IF my_total IS NULL OR my_total = 0 THEN
         RETURN jsonb_build_object('has_data', false);
     END IF;
 
-    -- 母数 = 全実ユーザー (0秒の人も含む / 種アカは除く)
+    -- Population = all real users (including people with 0 seconds / excluding seed accounts)
     SELECT count(*) INTO active_count
     FROM public.users u
     JOIN auth.users a ON a.id = u.id
     WHERE a.email IS NULL OR a.email NOT LIKE '%@seed.invalid';
 
-    -- 自分より多い実ユーザーの数
+    -- Number of real users with more than you
     SELECT count(*) INTO higher_count
     FROM public.users u
     JOIN auth.users a ON a.id = u.id
@@ -98,11 +101,12 @@ COMMENT ON FUNCTION public.get_block_percentile(uuid)
     IS '累計ロック時間の順位。母数=全実ユーザー(0秒含む/種除く)。本人が0秒なら has_data=false (082)';
 
 -- ============================================
--- 3. ランキング一覧 RPC
+-- 3. Ranking list RPC
 -- ============================================
--- 🔴 出すのは「上位10%に入っている人」だけ (ユーザー決定)。
---    母数が増えるほど掲載人数も増える。
---    自分の順位はプロフィールから見られるので、圏外の人をここに出す必要はない。
+-- 🔴 Only "people in the top 10%" are shown (user's decision).
+--    The larger the population, the more people are listed.
+--    Users can see their own rank from their profile, so there is no need to show people outside the
+--    range here.
 CREATE OR REPLACE FUNCTION public.get_block_ranking(p_limit integer DEFAULT 50)
 RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER
@@ -123,7 +127,8 @@ BEGIN
     JOIN auth.users a ON a.id = u.id
     WHERE a.email IS NULL OR a.email NOT LIKE '%@seed.invalid';
 
-    -- 上位10% (最低でも10人は出す。母数が小さいうちに1〜2人しか出ないと画面が成立しない)
+    -- Top 10% (show at least 10 people. While the population is small, showing only 1 or 2 people would
+    -- not make a usable screen)
     v_cutoff := GREATEST(10, CEIL(v_total * 0.10)::integer);
     v_cutoff := LEAST(v_cutoff, v_limit);
 
@@ -169,7 +174,7 @@ COMMENT ON FUNCTION public.get_block_ranking(integer)
     IS '累計ロック時間の上位10% (最低10人)。種アカウントは除外。自分の順位は get_block_percentile 側';
 
 -- ============================================
--- 4. 動作確認用 (実行不要)
+-- 4. For checking behavior (no need to run)
 -- ============================================
 -- select public.get_block_ranking(50);
 -- select public.get_block_percentile((select id from public.users order by total_block_seconds desc limit 1));

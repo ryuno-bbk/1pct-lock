@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  App Extension 用プライバシーマニフェスト (2026-07-31 追加)。
-  この Extension は App Group 共有の UserDefaults (AppGroupStorage) のみを使い、
-  UserDefaults.standard は使わない。よって理由は 1C8F.1 のみ
-  (= 同一 App Group のアプリ/Extension からのみアクセスできる情報の読み書き)。
-  データ収集は行わない (端末外への送信経路を持たない) ため
-  NSPrivacyCollectedDataTypes は空。
+  App Extension privacy manifest (added 2026-07-31).
+  This extension only uses the UserDefaults shared through the App Group (AppGroupStorage),
+  not UserDefaults.standard. So the only reason code is 1C8F.1
+  (= reading/writing data that only apps/extensions in the same App Group can access).
+  It collects no data (it has no way to send anything off the device), so
+  NSPrivacyCollectedDataTypes is empty.
 -->
 <plist version="1.0">
 <dict>

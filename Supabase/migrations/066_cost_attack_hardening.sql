@@ -1,55 +1,57 @@
 -- ============================================================================
 -- 066_cost_attack_hardening.sql
--- 第1弾: コスト攻撃を止める (2026-08-01)
+-- Phase 1: stop cost attacks (2026-08-01)
 -- ============================================================================
--- 設計: Fable 5 / 実装: Sonnet 5 / レビュー: Fable 5
--- 設計書: Docs/design_phase1_cost_attack_2026_08_01.md
--- 引き継ぎ: Docs/handoff_to_fable_2026_08_01.md #1〜#4
+-- Design: Fable 5 / Implementation: Sonnet 5 / Review: Fable 5
+-- Design doc: Docs/design_phase1_cost_attack_2026_08_01.md
+-- Handoff: Docs/handoff_to_fable_2026_08_01.md #1-#4
 --
--- 背景:
---   試算では10万MAUでも Anthropic 費は月¥1.5〜4万で問題ない設計だが、それは
---   「1人が月2投稿」前提。以下が生きている限り悪意ある1人が10万人分の審査費を
---   1日で焼ける:
---     #1 moderation_status:'approved' の自己申告による審査バイパス (INSERT/UPDATE 両方)
---     #2 created_at 偽装によるレート制限無効化 + 削除→再投稿による枠復活
---     #3 user_reports / user_appeals の無制限発火 (どちらも通報/申し立て1件ごとに Sonnet が走る)
---     #4 overlays / user_reports.detail の無制限な長さによる AI 入力膨張
---   本ファイルはこの4点をまとめて塞ぐ。
+-- Background:
+--   The estimate says the Anthropic cost is fine even at 100k MAU (¥15,000-40,000 per month), but that
+--   assumes "2 posts per user per month". As long as the holes below exist, one malicious user can burn
+--   the moderation cost of 100k users in a single day:
+--     #1 Moderation bypass by self-declaring moderation_status:'approved' (both INSERT and UPDATE)
+--     #2 Disabling the rate limit by faking created_at, plus getting quota back by delete → re-post
+--     #3 Unlimited firing of user_reports / user_appeals (Sonnet runs for every report/appeal)
+--     #4 AI input inflation through the unlimited length of overlays / user_reports.detail
+--   This file closes all 4 points together.
 --
--- ★最重要: 免除条件は auth.uid() IS NULL を使う (rolbypassrls は使わない)。
---   既存の 037 lock_user_reports_insert 等は rolbypassrls で免除しているが、
---   この方式を user_comments / user_appeals に流用すると無効化される。
---   create_comment (014) / file_appeal (039) はどちらも SECURITY DEFINER
---   (postgres 所有) なので、rolbypassrls 判定だと current_user が常に postgres に
---   化けて必ず「免除」に落ちる = 制限が丸ごと素通りする (046 の冒頭コメントが
---   同じ罠を記録している)。auth.uid() はセッションの JWT クレームを読むため、
---   SECURITY DEFINER の内側でも「実際に呼び出したユーザー」の ID が残る
---   (current_user と違って所有者に化けない)。SQL Editor / service_role からの
---   バックエンド操作は JWT クレームが無いため auth.uid() IS NULL になり、
---   自然に免除される (詳細は設計書 §1)。
+-- ★Most important: the exemption condition uses auth.uid() IS NULL (not rolbypassrls).
+--   Existing triggers such as 037 lock_user_reports_insert use rolbypassrls for the exemption,
+--   but reusing that approach for user_comments / user_appeals would disable the limits.
+--   create_comment (014) / file_appeal (039) are both SECURITY DEFINER
+--   (owned by postgres), so with a rolbypassrls check current_user always turns into postgres
+--   and always falls into "exempt" = the limit is bypassed completely (the header comment of 046
+--   records the same trap). auth.uid() reads the JWT claims of the session, so
+--   even inside SECURITY DEFINER the ID of "the user who actually called" is kept
+--   (unlike current_user, it does not turn into the owner). Backend operations from SQL Editor /
+--   service_role have no JWT claims, so auth.uid() IS NULL and they are
+--   exempted naturally (details in design doc §1).
 --
--- DROP FUNCTION は使わない (既存関数はすべて CREATE OR REPLACE)。
---   DROP すると権限がリセットされる。063 で実際にこれが出荷ブロッカーを作った
---   (未認証で全投稿が読める状態になった。064 で修正)。
+-- Do not use DROP FUNCTION (all existing functions use CREATE OR REPLACE).
+--   DROP resets the privileges. In 063 this actually created a ship blocker
+--   (all posts became readable without auth. Fixed in 064).
 -- ============================================================================
 
 BEGIN;
 
 -- ============================================================================
--- §2-1. user_posts: BEFORE INSERT 列ガード (#1 審査バイパス + #2 created_at偽装 + 他人画像)
+-- §2-1. user_posts: BEFORE INSERT column guard
+-- (#1 moderation bypass + #2 faked created_at + other users' images)
 -- ============================================================================
--- 骨格は 037_moderation_visibility_fixes.sql の lock_user_reports_insert を流用。
--- UserPostService.swift:301-318 で確認済みの実際の INSERT 列 (id, user_id, title,
--- tags, image_path, image_count, overlays) だけを送ってくる経路にとっては、
--- ここで固定する列 (created_at/moderation_*/各カウンタ) はそもそも送られてこない
--- ので完全な no-op。挙動は変わらない。
+-- The skeleton is reused from lock_user_reports_insert in 037_moderation_visibility_fixes.sql.
+-- For the path that only sends the actual INSERT columns confirmed in UserPostService.swift:301-318
+-- (id, user_id, title, tags, image_path, image_count, overlays), the columns fixed here
+-- (created_at, moderation_* and each counter) are never sent in the first place, so this is a
+-- complete no-op. Behavior does not change.
 --
--- ⚠️トリガー名 user_posts_lock_insert は user_posts_rate_limit より辞書順で前
--- ('l' < 'r')。PostgreSQL の BEFORE トリガーは名前の辞書順に発火するため、
--- レート制限 (§3-3、rate_events 台帳を読む) より先に列固定が走る。
--- (台帳方式への切替後は created_at 偽装によるレート制限回避そのものは成立しなく
--- なっているが、created_at は「未来日付でフィード先頭に固定する」別の攻撃にも
--- 使えるため、列固定は独立して必要。名前の順序も設計書の指示どおり維持する)
+-- ⚠️The trigger name user_posts_lock_insert sorts before user_posts_rate_limit
+-- ('l' < 'r'). PostgreSQL fires BEFORE triggers in alphabetical order of their names, so
+-- the column fixing runs before the rate limit (§3-3, reads the rate_events ledger).
+-- (After the switch to the ledger approach, bypassing the rate limit by faking created_at no longer
+-- works, but created_at can also be used for another attack, "pin a post to the top of the feed with a
+-- future date", so the column fixing is needed on its own. The name order is also kept as the design
+-- doc says)
 CREATE OR REPLACE FUNCTION public.lock_user_posts_insert()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -58,11 +60,11 @@ DECLARE
     total_overlay_len integer;
 BEGIN
     IF auth.uid() IS NULL THEN
-        RETURN NEW;   -- service_role / SQL Editor / cron = バックエンド操作 (設計書 §1)
+        RETURN NEW;   -- service_role / SQL Editor / cron = backend operations (design doc §1)
     END IF;
 
-    -- #1 + #2: moderation列・カウンタ列・created_at の自己申告/偽装を禁止。
-    -- クライアントはそもそもこれらを送らないため、正規経路には影響しない。
+    -- #1 + #2: forbid self-declaring/faking the moderation columns, counter columns and created_at.
+    -- The client never sends these, so the normal path is not affected.
     NEW.created_at         := now();
     NEW.moderation_status  := 'pending';
     NEW.moderation_verdict := NULL;
@@ -71,18 +73,18 @@ BEGIN
     NEW.comment_count      := 0;
     NEW.view_count         := 0;
 
-    -- 他人の画像を自分の投稿として掲載する経路を塞ぐ。NEW.user_id を信用してよい
-    -- 根拠 = INSERT ポリシー (005_b_user_posts.sql:95-97) が auth.uid() = user_id を
-    -- 既に強制している。
+    -- Closes the path of showing another user's image as your own post. Why NEW.user_id can be
+    -- trusted: the INSERT policy (005_b_user_posts.sql:95-97) already enforces
+    -- auth.uid() = user_id.
     IF NEW.image_path IS NOT NULL
        AND NEW.image_path NOT LIKE (NEW.user_id::text || '/%') THEN
         RAISE EXCEPTION 'image_path must be under your own folder';
     END IF;
 
-    -- §4-1: overlays の長さ上限。合計文字数の算出に jsonb_array_elements (副問い合わせ)
-    -- が要るため CHECK 制約では書けず、ここでトリガーとして検証する。
-    -- UPDATE 側は 037 protect_user_posts_content (本ファイル §2-3 で拡張) が overlays の
-    -- 変更そのものを丸ごと禁止しているため、INSERT 時点のここだけで実質的に全経路をカバーする。
+    -- §4-1: length limit for overlays. Computing the total character count needs jsonb_array_elements
+    -- (a subquery), so it cannot be written as a CHECK constraint. It is validated here as a trigger.
+    -- On the UPDATE side, 037 protect_user_posts_content (extended in §2-3 of this file) forbids any
+    -- change to overlays at all, so this check at INSERT time effectively covers every path.
     IF NEW.overlays IS NOT NULL THEN
         IF jsonb_array_length(NEW.overlays) > 30 THEN
             RAISE EXCEPTION 'overlays too long (max 30 elements)';
@@ -91,14 +93,15 @@ BEGIN
         SELECT COALESCE(sum(char_length(elem ->> 'text')), 0) INTO total_overlay_len
         FROM jsonb_array_elements(NEW.overlays) AS elem;
 
-        -- クライアントは1件120文字に制限済み (StoryTextEditorView.swift:367)。
-        -- 30要素 × 120文字 = 3,600 に余裕を見て 3,000 とする (設計書 §4-1)。
+        -- The client already limits each item to 120 characters (StoryTextEditorView.swift:367).
+        -- From 30 items × 120 characters = 3,600, with some margin, we use 3,000 (design doc §4-1).
         IF total_overlay_len > 3000 THEN
             RAISE EXCEPTION 'overlays text too long (max 3000 chars total)';
         END IF;
     END IF;
 
-    -- §4-1: tags の各要素 30 文字まで (cardinality<=3 は 005 で CHECK 済み、要素自体は無制限だった)
+    -- §4-1: each element of tags is up to 30 characters
+    -- (cardinality<=3 is already a CHECK in 005, but the elements themselves had no limit)
     IF NEW.tags IS NOT NULL THEN
         IF EXISTS (SELECT 1 FROM unnest(NEW.tags) AS t WHERE char_length(t) > 30) THEN
             RAISE EXCEPTION 'tag too long (max 30 chars per tag)';
@@ -109,10 +112,10 @@ BEGIN
 END;
 $$;
 
--- RETURNS trigger の関数は Postgres がトリガー以外からの直接呼び出しを拒否するため
--- (039_moderation_notifications_appeals.sql の notify_on_post_moderation 等と同じ),
--- REVOKE/GRANT は不要 (絶対に守ることの#3は「クライアントから直接実行できる関数」向けの
--- ルールであり、trigger 関数はその経路が構造的に存在しない)。
+-- Postgres rejects direct calls to a RETURNS trigger function from anything other than a trigger
+-- (same as notify_on_post_moderation etc. in 039_moderation_notifications_appeals.sql),
+-- so REVOKE/GRANT is not needed (must-follow rule #3 is for "functions the client can execute
+-- directly", and trigger functions structurally have no such path).
 DROP TRIGGER IF EXISTS user_posts_lock_insert ON public.user_posts;
 CREATE TRIGGER user_posts_lock_insert
     BEFORE INSERT ON public.user_posts
@@ -120,23 +123,23 @@ CREATE TRIGGER user_posts_lock_insert
     EXECUTE FUNCTION public.lock_user_posts_insert();
 
 -- ============================================================================
--- §2-2. user_comments: BEFORE INSERT 列ガード
+-- §2-2. user_comments: BEFORE INSERT column guard
 -- ============================================================================
--- create_comment RPC (014_b_comments_notifications.sql:545) の INSERT は
--- post_id/quote_id, author_user_id, parent_comment_id, text の4列のみで、
--- created_at/moderation_*/like_count のいずれも送っていない。ここで固定する列は
--- 正規経路にとって完全な no-op。
--- ⚠️ user_comments は create_comment RPC (SECURITY DEFINER, postgres所有) だけでなく
--- RLS の user_comments_insert_own ポリシー (auth.uid() = author_user_id のみ検証) 経由で
--- クライアントが直接 INSERT することも可能なため、RPC を経由しない偽装 INSERT
--- (moderation_status='approved' や like_count 水増しの自己申告) もここで塞ぐ。
+-- The INSERT in the create_comment RPC (014_b_comments_notifications.sql:545) only uses 4 columns:
+-- post_id/quote_id, author_user_id, parent_comment_id, text. It sends none of
+-- created_at, moderation_* or like_count. The columns fixed here are a
+-- complete no-op for the normal path.
+-- ⚠️ user_comments can be INSERTed not only through the create_comment RPC (SECURITY DEFINER, owned by
+-- postgres) but also directly by the client through the RLS policy user_comments_insert_own (which
+-- only checks auth.uid() = author_user_id), so faked INSERTs that skip the RPC
+-- (self-declared moderation_status='approved' or an inflated like_count) are also closed here.
 CREATE OR REPLACE FUNCTION public.lock_user_comments_insert()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
     IF auth.uid() IS NULL THEN
-        RETURN NEW;   -- service_role / SQL Editor / cron = バックエンド操作
+        RETURN NEW;   -- service_role / SQL Editor / cron = backend operations
     END IF;
 
     NEW.created_at         := now();
@@ -149,7 +152,7 @@ BEGIN
 END;
 $$;
 
--- トリガー名は user_comments_rate_limit より辞書順で前 ('l' < 'r')。posts側と同じ理由。
+-- The trigger name sorts before user_comments_rate_limit ('l' < 'r'). Same reason as for posts.
 DROP TRIGGER IF EXISTS user_comments_lock_insert ON public.user_comments;
 CREATE TRIGGER user_comments_lock_insert
     BEFORE INSERT ON public.user_comments
@@ -157,23 +160,23 @@ CREATE TRIGGER user_comments_lock_insert
     EXECUTE FUNCTION public.lock_user_comments_insert();
 
 -- ============================================================================
--- §2-3. protect_user_posts_content (037): 比較列に created_at / user_id を追加
+-- §2-3. protect_user_posts_content (037): add created_at / user_id to the compared columns
 -- ============================================================================
--- 037_moderation_visibility_fixes.sql:69-92 は本文相当8列 (text_jp/text_en/title/
--- image_path/overlays/image_count/tags/background_id) しか凍結しておらず、
--- created_at は UPDATE で書き換え可能だった (「投稿 → UPDATE で created_at を過去に
--- する」で §2-1 の INSERT ガードを迂回できてしまう)。既存の8列は一切変更せず、
--- created_at と user_id の2列だけを追加する。
+-- 037_moderation_visibility_fixes.sql:69-92 only froze the 8 body-like columns (text_jp/text_en/title/
+-- image_path/overlays/image_count/tags/background_id), and created_at could be rewritten by UPDATE
+-- ("post → move created_at to the past with UPDATE" could get around the INSERT guard in §2-1).
+-- The existing 8 columns are not changed at all. Only the 2 columns
+-- created_at and user_id are added.
 --
--- ⚠️判断: 免除条件はここでは rolbypassrls のまま変更していない (auth.uid() IS NULL
--- に統一しなかった)。理由:
---   1. この関数は UPDATE 専用のイミュータブル化ガードであり、§1 が問題にしている
---      「SECURITY DEFINER RPC 経由の INSERT が rolbypassrls で素通りする」パターン
---      とは性質が異なる (対象は UPDATE で、かつ現状これらの列を書き換える
---      SECURITY DEFINER 経路は存在しない = 037 時点から undefined behavior のリスクなし)。
---   2. 037 は本番稼働済みのトリガーであり、免除方式まで変更すると影響範囲が
---      本タスクの依頼スコープ (2列追加) を超える。最小差分を優先した。
---   → レビュー時にこの判断の妥当性を確認してほしい。
+-- ⚠️Decision: the exemption condition here stays rolbypassrls (it was not unified to auth.uid() IS NULL).
+-- Reasons:
+--   1. This function is an UPDATE-only immutability guard, which is different in nature from the
+--      pattern §1 is about ("an INSERT through a SECURITY DEFINER RPC slips through with rolbypassrls")
+--      (the target is UPDATE, and there is currently no SECURITY DEFINER path that rewrites these
+--      columns = no risk of undefined behavior since 037).
+--   2. 037 is a trigger already running in production, and also changing the exemption method would
+--      go beyond the requested scope of this task (adding 2 columns). A minimal diff was preferred.
+--   → Please check during review whether this decision is sound.
 CREATE OR REPLACE FUNCTION public.protect_user_posts_content()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -193,7 +196,7 @@ BEGIN
         OR NEW.image_count IS DISTINCT FROM OLD.image_count
         OR NEW.tags IS DISTINCT FROM OLD.tags
         OR NEW.background_id IS DISTINCT FROM OLD.background_id
-        -- 066 追加分: created_at 偽装 (#2 の UPDATE 経路) と user_id 付け替えの凍結
+        -- 066 addition: freeze created_at faking (the UPDATE path of #2) and reassigning user_id
         OR NEW.created_at IS DISTINCT FROM OLD.created_at
         OR NEW.user_id IS DISTINCT FROM OLD.user_id THEN
         RAISE EXCEPTION 'post content is immutable after creation (no edit feature exists)';
@@ -209,15 +212,16 @@ CREATE TRIGGER user_posts_protect_content
     EXECUTE FUNCTION public.protect_user_posts_content();
 
 -- ============================================================================
--- §3-1. rate_events: 追記専用の台帳テーブル (#2 削除→再投稿での枠復活を防ぐ)
+-- §3-1. rate_events: append-only ledger table (prevents #2, getting quota back by delete → re-post)
 -- ============================================================================
--- 現在の enforce_post_rate_limit (057) は user_posts の現存行を数えているため、
--- 投稿→削除→再投稿で枠が復活する。台帳は投稿が消えても残るのでこれが成立しなくなる。
+-- The current enforce_post_rate_limit (057) counts existing rows in user_posts, so
+-- post → delete → re-post restores the quota. The ledger rows remain even when the post is deleted,
+-- so this no longer works.
 --
--- 却下した代替案 (設計書 §3):
---   - ソフトデリート化: 影響範囲が巨大 (全フィードRPC/プロフィール/カウンタ/削除UX)
---   - users への累積カウンタ列: ローリング24hウィンドウを1列で表現できない
---   - pg_cron 定期purge: 拡張の有効化が要る。下記の自己purgeで足りる
+-- Rejected alternatives (design doc §3):
+--   - Soft delete: huge impact (all feed RPCs/profile/counters/delete UX)
+--   - Cumulative counter column on users: one column cannot express a rolling 24h window
+--   - Periodic purge with pg_cron: needs the extension enabled. The self-purge below is enough
 CREATE TABLE IF NOT EXISTS public.rate_events (
     id         bigserial PRIMARY KEY,
     user_id    uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
@@ -234,23 +238,23 @@ CREATE INDEX IF NOT EXISTS idx_rate_events_user_kind_created
     ON public.rate_events (user_id, kind, created_at DESC);
 
 ALTER TABLE public.rate_events ENABLE ROW LEVEL SECURITY;
--- ポリシーを1つも作らない = authenticated/anon は読み書き不可 (default deny)。
--- 書き込むのは SECURITY DEFINER のトリガー関数 (postgres所有) のみ。
+-- Creating no policies at all = authenticated/anon cannot read or write (default deny).
+-- Only SECURITY DEFINER trigger functions (owned by postgres) write to it.
 --
--- ⚠️ REVOKE ALL の対象に authenticated も含める (anon だけでは不十分)。
--- 065_close_anon_access.sql §3 の `ALTER DEFAULT PRIVILEGES ... REVOKE ALL ON TABLES
--- FROM anon` は anon 分しか対応していないため、このファイルより後に作る新規テーブルは
--- authenticated への Supabase 既定付与 (SELECT〜DELETE) がそのまま残る。
+-- ⚠️ Include authenticated in the REVOKE ALL targets too (anon alone is not enough).
+-- `ALTER DEFAULT PRIVILEGES ... REVOKE ALL ON TABLES FROM anon` in 065_close_anon_access.sql §3
+-- only covers anon, so new tables created after this file still keep the Supabase default grants
+-- to authenticated (SELECT through DELETE).
 REVOKE ALL ON TABLE public.rate_events FROM anon, authenticated;
 
 -- ============================================================================
--- §3-3. enforce_post_rate_limit / enforce_comment_rate_limit: 台帳参照に差し替え
+-- §3-3. enforce_post_rate_limit / enforce_comment_rate_limit: switch to reading the ledger
 -- ============================================================================
--- DROP FUNCTION はしない (CREATE OR REPLACE のみ)。シグネチャ不変なので既存の
--- トリガー紐付け・権限は保持されるが、046/065 に倣い DROP TRIGGER→CREATE TRIGGER も
--- 念のため再掲する。
+-- No DROP FUNCTION (CREATE OR REPLACE only). The signature is unchanged, so the existing
+-- trigger bindings and privileges are kept, but following 046/065, DROP TRIGGER → CREATE TRIGGER is
+-- also repeated here just in case.
 
--- ---- 投稿: 5件/24h (057 の現行値を維持) ----
+-- ---- Posts: 5 per 24h (keeps the current value from 057) ----
 CREATE OR REPLACE FUNCTION public.enforce_post_rate_limit()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -260,31 +264,31 @@ AS $$
 DECLARE
     recent_count int;
 BEGIN
-    -- 066: 運営のバックエンド操作 (SQL Editor 等) は免除。auth.uid() はセッションの
-    -- JWTクレームを読むため、この関数が SECURITY DEFINER でも実際の呼び出しユーザーの
-    -- IDが残る (rolbypassrls は使わない。理由は本ファイル冒頭 / 設計書 §1)。
+    -- 066: backend operations by the operator (SQL Editor etc.) are exempt. auth.uid() reads the
+    -- session's JWT claims, so even though this function is SECURITY DEFINER, the ID of the actual
+    -- calling user is kept (rolbypassrls is not used. Reason: top of this file / design doc §1).
     IF auth.uid() IS NULL THEN
         RETURN NEW;
     END IF;
 
-    -- 066: 現存行ではなく台帳 (rate_events) でカウントする。投稿を削除しても
-    -- 台帳の行は残るため「削除→再投稿」で枠が復活しない。
+    -- 066: count with the ledger (rate_events) instead of existing rows. The ledger rows remain even when
+    -- a post is deleted, so "delete → re-post" does not restore the quota.
     SELECT count(*) INTO recent_count
     FROM public.rate_events
     WHERE user_id = NEW.user_id
       AND kind = 'post'
       AND created_at > now() - interval '24 hours';
 
-    -- 057: 100 → 10 → 5 (AI判定コストの1人あたり天井、ユーザー判断 2026-07-30)
+    -- 057: 100 → 10 → 5 (per-user ceiling on AI moderation cost, user decision 2026-07-30)
     IF recent_count >= 5 THEN
         RAISE EXCEPTION 'daily post limit reached';
     END IF;
 
     INSERT INTO public.rate_events (user_id, kind) VALUES (NEW.user_id, 'post');
 
-    -- 066 §3-2: 自己purge。48時間より古い自分の行を削除する (cron不要、1回あたりの
-    -- 仕事量が有界でテーブルが無限に育たない)。kind を絞らず全種まとめて掃除する
-    -- (設計書 §3-2 のとおり)。
+    -- 066 §3-2: self-purge. Deletes your own rows older than 48 hours (no cron needed, the work per call
+    -- is bounded and the table does not grow forever). Cleans all kinds together without filtering by
+    -- kind (as in design doc §3-2).
     DELETE FROM public.rate_events
      WHERE user_id = NEW.user_id AND created_at < now() - interval '48 hours';
 
@@ -298,7 +302,7 @@ CREATE TRIGGER user_posts_rate_limit
     FOR EACH ROW
     EXECUTE FUNCTION public.enforce_post_rate_limit();
 
--- ---- コメント: 300件/24h (046 の現行値を維持) ----
+-- ---- Comments: 300 per 24h (keeps the current value from 046) ----
 CREATE OR REPLACE FUNCTION public.enforce_comment_rate_limit()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -308,17 +312,17 @@ AS $$
 DECLARE
     recent_count int;
 BEGIN
-    -- 066: 046 は「rolbypassrls 免除を入れると create_comment (SECURITY DEFINER,
-    -- postgres所有) 経由の投稿が丸ごと素通りする」という理由でロール免除を一切
-    -- 設けなかった。auth.uid() はセッションのJWTクレームを読むため SECURITY DEFINER
-    -- の内側でも実際の呼び出しユーザーのIDが残り、この罠を踏まない (設計書 §1)。
-    -- これにより 046 が運用回避策として書いていた「シード時は DISABLE TRIGGER」も
-    -- 不要になる (SQL Editor = auth.uid() IS NULL が自然に免除される)。
+    -- 066: 046 added no role exemption at all, because "adding a rolbypassrls exemption lets posts
+    -- made through create_comment (SECURITY DEFINER, owned by postgres) slip through completely".
+    -- auth.uid() reads the session's JWT claims, so the ID of the actual calling user is kept even
+    -- inside SECURITY DEFINER, and this trap is avoided (design doc §1).
+    -- This also makes the workaround 046 described, "DISABLE TRIGGER when seeding", unnecessary
+    -- (SQL Editor = auth.uid() IS NULL is exempted naturally).
     IF auth.uid() IS NULL THEN
         RETURN NEW;
     END IF;
 
-    -- user_comments の著者列は author_user_id (014 SQL。user_id ではない)
+    -- The author column of user_comments is author_user_id (014 SQL. Not user_id)
     SELECT count(*) INTO recent_count
     FROM public.rate_events
     WHERE user_id = NEW.author_user_id
@@ -345,16 +349,16 @@ CREATE TRIGGER user_comments_rate_limit
     EXECUTE FUNCTION public.enforce_comment_rate_limit();
 
 -- ============================================================================
--- §3-3. user_reports / user_appeals: レート制限トリガーを新設 (#3)
+-- §3-3. user_reports / user_appeals: add new rate limit triggers (#3)
 -- ============================================================================
--- 通報1件ごと・申し立て1件ごとに Sonnet が走るのに上限が無かった。
--- 上限値はユーザー確認事項 (設計書 §7): 通報20/24h・申し立て10/24h。
+-- Sonnet runs for every report and every appeal, but there was no limit.
+-- The limit values are items to confirm with the user (design doc §7): reports 20/24h, appeals 10/24h.
 
--- ---- 通報: 20件/24h ----
--- user_reports への INSERT は RLS ポリシー user_reports_insert_own 経由のクライアント
--- 直INSERT (006_b_moderation.sql:70-73)。SECURITY DEFINER RPC は介在しないが、
--- rate_events への書き込みには昇格権限が要るためこの関数自体は SECURITY DEFINER にする
--- (046/057 の enforce_*_rate_limit と同じ構造)。
+-- ---- Reports: 20 per 24h ----
+-- INSERTs into user_reports are direct client INSERTs through the RLS policy user_reports_insert_own
+-- (006_b_moderation.sql:70-73). No SECURITY DEFINER RPC is involved, but writing to rate_events
+-- needs elevated privileges, so this function itself is SECURITY DEFINER
+-- (same structure as enforce_*_rate_limit in 046/057).
 CREATE OR REPLACE FUNCTION public.enforce_report_rate_limit()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -374,8 +378,9 @@ BEGIN
       AND kind = 'report'
       AND created_at > now() - interval '24 hours';
 
-    -- 20/24h: 通報のたびに moderate-post が Sonnet を走らせる (index.ts:615)。
-    -- 正当な利用で1日20件を超えるのは考えにくく、集団通報による検閲攻撃の緩和にもなる。
+    -- 20/24h: every report makes moderate-post run Sonnet (index.ts:615).
+    -- Legitimate use is unlikely to go over 20 per day, and this also mitigates censorship attacks
+    -- by mass reporting.
     IF recent_count >= 20 THEN
         RAISE EXCEPTION 'daily report limit reached';
     END IF;
@@ -389,20 +394,20 @@ BEGIN
 END;
 $$;
 
--- BEFORE INSERT トリガーは既に user_reports_lock_insert (037) が存在する。
--- 名前順 ('l' < 'r') で lock_insert → rate_limit の順に発火するが、rate_limit 側は
--- NEW.reporter_id と rate_events しか見ないため実害のある順序依存はない。
+-- A BEFORE INSERT trigger, user_reports_lock_insert (037), already exists.
+-- By name order ('l' < 'r') they fire as lock_insert → rate_limit, but the rate_limit side only
+-- looks at NEW.reporter_id and rate_events, so there is no harmful order dependency.
 DROP TRIGGER IF EXISTS user_reports_rate_limit ON public.user_reports;
 CREATE TRIGGER user_reports_rate_limit
     BEFORE INSERT ON public.user_reports
     FOR EACH ROW
     EXECUTE FUNCTION public.enforce_report_rate_limit();
 
--- ---- 申し立て: 10件/24h ----
--- user_appeals への INSERT は file_appeal RPC (039、SECURITY DEFINER, postgres所有)
--- 経由のみ (直接 INSERT はポリシー未定義で拒否される)。ここでも auth.uid() IS NULL
--- 判定でなければ免除に落ちる (rolbypassrls だと file_appeal の所有者 postgres が
--- 常に bypass=true になり、レート制限が丸ごと素通りする)。
+-- ---- Appeals: 10 per 24h ----
+-- INSERTs into user_appeals only come through the file_appeal RPC (039, SECURITY DEFINER, owned by
+-- postgres) (a direct INSERT is rejected because no policy is defined). Here too, anything other than
+-- an auth.uid() IS NULL check falls into the exemption (with rolbypassrls, file_appeal's owner
+-- postgres is always bypass=true and the rate limit is bypassed completely).
 CREATE OR REPLACE FUNCTION public.enforce_appeal_rate_limit()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -422,9 +427,9 @@ BEGIN
       AND kind = 'appeal'
       AND created_at > now() - interval '24 hours';
 
-    -- 10/24h: 申し立てのたびに review-appeal が Sonnet を走らせる。1対象1件制限
-    -- (user_appeals_unique_post/comment、039) があるため実質上限は低いが、
-    -- 対象を量産すれば回せてしまうためこちらも独立に制限する。
+    -- 10/24h: every appeal makes review-appeal run Sonnet. There is a one-appeal-per-target limit
+    -- (user_appeals_unique_post/comment, 039), so the real ceiling is low, but it can still be abused by
+    -- mass-producing targets, so this is limited independently too.
     IF recent_count >= 10 THEN
         RAISE EXCEPTION 'daily appeal limit reached';
     END IF;
@@ -445,7 +450,8 @@ CREATE TRIGGER user_appeals_rate_limit
     EXECUTE FUNCTION public.enforce_appeal_rate_limit();
 
 -- ============================================================================
--- §4-1. 長さ上限 (単純な text 列は CHECK 制約で): user_appeals.reason / user_reports.detail
+-- §4-1. Length limits (plain text columns use CHECK constraints):
+-- user_appeals.reason / user_reports.detail
 -- ============================================================================
 ALTER TABLE public.user_appeals
     DROP CONSTRAINT IF EXISTS user_appeals_reason_length;
@@ -457,10 +463,10 @@ ALTER TABLE public.user_reports
 ALTER TABLE public.user_reports
     ADD CONSTRAINT user_reports_detail_length CHECK (detail IS NULL OR char_length(detail) <= 1000);
 
--- file_appeal RPC (039) にも同じ検証を足す (設計書 §4-1: 「file_appeal 側にも同じ
--- 検証を足す」)。CHECK 制約は INSERT 時に自然に効くが、RPC 側で早期に弾いた方が
--- エラーメッセージがクライアントにとって分かりやすい。ロジック本体・シグネチャ・
--- REVOKE/GRANT は 039 定義から変更しない (長さチェック1行の追加のみ)。
+-- Add the same check to the file_appeal RPC (039) too (design doc §4-1: "add the same check
+-- to file_appeal too"). The CHECK constraint applies naturally at INSERT, but rejecting early in the
+-- RPC gives the client a clearer error message. The logic, signature and
+-- REVOKE/GRANT are unchanged from the 039 definition (only one length check line is added).
 CREATE OR REPLACE FUNCTION public.file_appeal(
     p_target_post_id    uuid,
     p_target_comment_id uuid,
@@ -482,7 +488,7 @@ BEGIN
     IF p_reason IS NULL OR length(trim(p_reason)) = 0 THEN
         RAISE EXCEPTION 'reason is required';
     END IF;
-    -- 066 追加: user_appeals_reason_length CHECK と同じ上限をここでも検証する
+    -- 066 addition: check the same limit as the user_appeals_reason_length CHECK here too
     IF char_length(p_reason) > 1000 THEN
         RAISE EXCEPTION 'reason too long (max 1000 chars)';
     END IF;
@@ -521,17 +527,18 @@ COMMENT ON FUNCTION public.file_appeal(uuid, uuid, text) IS
     '本人所有かつ moderation_status が rejected/flagged の場合のみ受理。1対象1件まで。'
     '066: reason は1000文字まで (user_appeals_reason_length CHECK と二重検証)';
 
--- シグネチャは 039 から不変だが、念のため再掲 (039 の file_appeal 自体の記述と同じ方針)
+-- The signature is unchanged from 039, but it is repeated here just in case
+-- (same policy as the file_appeal definition in 039 itself)
 REVOKE EXECUTE ON FUNCTION public.file_appeal(uuid, uuid, text) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.file_appeal(uuid, uuid, text) TO authenticated;
 
 COMMIT;
 
 -- ============================================================================
--- §5-4. 検証クエリ (適用後にこれを流して結果を確認する。065 と同じ形式)
+-- §5-4. Verification queries (run these after applying and check the results. Same format as 065)
 -- ============================================================================
 
--- (A) 新規/変更したトリガーが存在し有効 (tgenabled='O') か
+-- (A) Do the new/changed triggers exist, and are they enabled (tgenabled='O')?
 SELECT tgrelid::regclass AS table_name, tgname, tgenabled
 FROM pg_trigger
 WHERE tgname IN (
@@ -541,21 +548,21 @@ WHERE tgname IN (
     'user_appeals_rate_limit'
 )
 ORDER BY table_name, tgname;
--- 期待値: 8行、すべて tgenabled = 'O' (有効)。'D' が混ざっていたら要調査。
+-- Expected: 8 rows, all tgenabled = 'O' (enabled). If any 'D' is mixed in, investigate.
 
--- (B) BEFORE トリガーの発火順 (lock_insert / rate_limit の辞書順を目視確認)
+-- (B) Firing order of BEFORE triggers (visually check the alphabetical order of lock_insert / rate_limit)
 SELECT tgrelid::regclass AS table_name, tgname
 FROM pg_trigger
 WHERE tgrelid IN ('public.user_posts'::regclass, 'public.user_comments'::regclass)
   AND NOT tgisinternal
 ORDER BY table_name, tgname;
--- 期待値: 各テーブルで *_lock_insert が *_rate_limit より前の行に来ること
+-- Expected: in each table, *_lock_insert comes in a row before *_rate_limit
 
--- (C) rate_events に anon/authenticated の権限が残っていないか
+-- (C) Are any anon/authenticated privileges left on rate_events?
 SELECT table_name, grantee,
        string_agg(DISTINCT privilege_type, ', ' ORDER BY privilege_type) AS privs
 FROM information_schema.role_table_grants
 WHERE table_schema = 'public' AND table_name = 'rate_events'
   AND grantee IN ('anon', 'authenticated')
 GROUP BY table_name, grantee;
--- 期待値: 0行 (anon/authenticated どちらも rate_events に触れないこと)
+-- Expected: 0 rows (neither anon nor authenticated can touch rate_events)

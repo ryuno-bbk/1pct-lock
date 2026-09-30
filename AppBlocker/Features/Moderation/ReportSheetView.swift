@@ -2,7 +2,7 @@
 //  ReportSheetView.swift
 //  AppBlocker
 //
-//  投稿/ユーザー/名言の通報モーダル
+//  Report modal for posts/users/quotes
 //
 
 import SwiftUI
@@ -44,9 +44,9 @@ struct ReportSheetView: View {
         case .post, .quote:
             return L.moderationReportTitle(lang)
         case .comment:
-            return lang == .japanese ? "コメントを通報" : "Report Comment"  // 文言はユーザー添削待ち
+            return lang == .japanese ? "コメントを通報" : "Report Comment"  // Copy waiting for user review
         case .user:
-            return lang == .japanese ? "ユーザーを通報" : "Report User"  // 文言はユーザー添削待ち
+            return lang == .japanese ? "ユーザーを通報" : "Report User"  // Copy waiting for user review
         }
     }
 

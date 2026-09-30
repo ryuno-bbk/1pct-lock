@@ -2,16 +2,16 @@
 //  UserNotification.swift
 //  AppBlocker
 //
-//  アプリ内通知 (like / follow / comment / reply / comment_like)
-//  fetch_notifications RPC の戻り値型
+//  In-app notifications (like / follow / comment / reply / comment_like)
+//  Return type of the fetch_notifications RPC
 //
 
 import Foundation
 
 struct UserNotification: Identifiable, Decodable, Equatable {
 
-    /// rawValue が未知の場合でも `.unknown` にフォールバックし、配列デコード全体が
-    /// 失敗しないようにする (将来サーバー側で kind が追加された場合の後方互換)。
+    /// Even if the rawValue is unknown, fall back to `.unknown` so the whole array decode
+    /// does not fail (backward compatibility for when kinds are added on the server in the future).
     enum Kind: Equatable {
         case like
         case follow
@@ -19,17 +19,17 @@ struct UserNotification: Identifiable, Decodable, Equatable {
         case reply
         case commentLike
         case newPost
-        /// 039_moderation_notifications_appeals.sql で追加。以下はシステム生成通知
-        /// (recipient_user_id = actor_user_id の自己参照方式、isSystemKind 参照)
+        /// Added in 039_moderation_notifications_appeals.sql. The ones below are system-generated
+        /// notifications (self-reference style with recipient_user_id = actor_user_id, see isSystemKind)
         case contentRejected
         case contentFlagged
         case appealApproved
         case appealRejected
-        /// 054 で追加。unsure 申し立ての運営向け通知 (受信者は moderation_config.operator_user_id
-        /// のアカウントのみ。actor = 申し立て者)
+        /// Added in 054. Notification to the operator for an unsure appeal (the recipient is only the
+        /// moderation_config.operator_user_id account. actor = the person appealing)
         case appealUnsure
-        /// 081 で追加。週次レポートができたことを知らせるシステム通知
-        /// (recipient = actor の自己参照。preview_text にその週のロック秒数が入る)
+        /// Added in 081. System notification that says the weekly report is ready
+        /// (self-reference with recipient = actor. preview_text holds the lock seconds for that week)
         case weeklyReport
         case unknown(String)
 
@@ -51,9 +51,10 @@ struct UserNotification: Identifiable, Decodable, Equatable {
             }
         }
 
-        /// システム生成通知 (モデレーション結果 / 異議申し立て結果) かどうか。
-        /// この4種は recipient=actor の自己参照方式で作られるため、表示側 (NotificationListView)
-        /// はアバター/送信者名をそのまま出さずシステムアイコン + アプリ名に差し替える
+        /// Whether it is a system-generated notification (moderation result / appeal result).
+        /// These 4 kinds are created with the recipient=actor self-reference style, so the display side
+        /// (NotificationListView) does not show the avatar/sender name as is and swaps in a system icon +
+        /// the app name
         var isSystemKind: Bool {
             switch self {
             case .contentRejected, .contentFlagged, .appealApproved, .appealRejected,
@@ -72,7 +73,7 @@ struct UserNotification: Identifiable, Decodable, Equatable {
     let actorAvatarUrl: String?
     let isProActor: Bool
     let targetPostId: UUID?
-    /// 公式名言への返信通知の場合にセットされる (post/quote は XOR、017/018 で追加)
+    /// Set for reply notifications on official quotes (post/quote are XOR, added in 017/018)
     let targetQuoteId: UUID?
     let targetCommentId: UUID?
     let previewText: String?
