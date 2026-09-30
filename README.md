@@ -4,7 +4,7 @@
 
 - App Store: https://apps.apple.com/app/id6792271074
 - Demo video: https://youtu.be/s4XdOf6nt6A
-- Devpost: https://devpost.com/software/1400588
+- Devpost: https://devpost.com/software/1-lock
 
 ## What the app does
 
