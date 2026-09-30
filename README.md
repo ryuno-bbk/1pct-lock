@@ -3,7 +3,7 @@
 1% Lock is an iOS app that blocks distracting apps with Apple's Screen Time API. When you want to scroll anyway, it shows you a feed of people who are studying or training, and every post in that feed is checked by AI right after it is posted.
 
 - App Store: https://apps.apple.com/app/id6792271074
-- Demo video: https://youtu.be/WhOrYm70Ni8
+- Demo video: https://youtu.be/s4XdOf6nt6A
 - Devpost: https://devpost.com/software/1400588
 
 ## What the app does
